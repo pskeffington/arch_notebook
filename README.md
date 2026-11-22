@@ -62,7 +62,9 @@ On Arch Linux with systemd, copy the example user units installed with the packa
 
 ```sh
 mkdir -p ~/.config/systemd/user
-cp /usr/share/arch-notebook/systemd/arch-notebook-automation.{service,timer} ~/.config/systemd/user/
+unit_dir=/usr/share/arch-notebook/systemd
+[ -d "$unit_dir" ] || unit_dir=packaging/systemd
+cp "$unit_dir/arch-notebook-automation.service" "$unit_dir/arch-notebook-automation.timer" ~/.config/systemd/user/
 systemctl --user daemon-reload
 systemctl --user enable --now arch-notebook-automation.timer
 ```
