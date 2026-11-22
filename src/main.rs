@@ -2441,6 +2441,9 @@ impl App {
             if self.export_path.trim().is_empty() {
                 return Err("export path cannot be empty".into());
             }
+            if paths_refer_to_same_file(self.export_path.trim(), &self.case_path) {
+                return Err("SQL comparison output path matches the case file".into());
+            }
             self.ensure_export_path_is_not_sql_source()?;
             let mut attribute_columns: Vec<(bool, String)> = Vec::new();
             let known_entities: HashSet<Uuid> =
@@ -6724,6 +6727,64 @@ fn export_graphml_cli(case_path: &str, output_path: &str, json_output: bool) -> 
     Ok(())
 }
 
+fn export_sql_comparison_cli(
+    case_path: &str,
+    baseline_id: Uuid,
+    current_id: Uuid,
+    output_path: &str,
+    json_output: bool,
+) -> Result<(), String> {
+    let content =
+        fs::read_to_string(case_path).map_err(|error| format!("cannot read case: {error}"))?;
+    let case = serde_json::from_str::<CaseFile>(&content)
+        .map_err(|error| format!("cannot parse case: {error}"))?;
+    let baseline_index = case
+        .snapshots
+        .iter()
+        .position(|snapshot| snapshot.id == baseline_id)
+        .ok_or_else(|| format!("baseline snapshot not found: {baseline_id}"))?;
+    let current_index = case
+        .snapshots
+        .iter()
+        .position(|snapshot| snapshot.id == current_id)
+        .ok_or_else(|| format!("current snapshot not found: {current_id}"))?;
+    let baseline = case.snapshots[baseline_index].clone();
+    let current = case.snapshots[current_index].clone();
+    if baseline_index >= current_index {
+        return Err("baseline snapshot must precede the current snapshot".into());
+    }
+    if baseline.source_key != current.source_key {
+        return Err("snapshots must belong to the same database and series".into());
+    }
+    let change_count = compare_snapshots(&baseline, &current).len();
+
+    let mut app = App::automation_context(case, case_path);
+    app.export_path = output_path.to_owned();
+    app.export_sql_comparison(&baseline, &current);
+    if let Some(error) = app.status.strip_prefix("SQL COMPARISON EXPORT FAILED · ") {
+        return Err(error.to_owned());
+    }
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "schema_version": 1,
+                "ok": true,
+                "case": case_path,
+                "output": output_path,
+                "format": delimited_text_format(output_path),
+                "baseline_snapshot_id": baseline_id,
+                "current_snapshot_id": current_id,
+                "changes": change_count,
+            }))
+            .map_err(|error| error.to_string())?
+        );
+    } else {
+        println!("{}", app.status);
+    }
+    Ok(())
+}
+
 fn lock_automation_case(path: &Path) -> Result<fs::File, String> {
     if path.as_os_str().is_empty() {
         return Err("case path cannot be empty".into());
@@ -6960,7 +7021,8 @@ fn list_automation_runs_cli(
                 "filter":{"job":job_filter,"offset":offset,"limit":limit},
                 "total":total,
                 "returned":runs.len(),
-                "next_offset":(offset + runs.len() < total).then_some(offset + runs.len()),
+                "next_offset":(offset.saturating_add(runs.len()) < total)
+                        .then_some(offset.saturating_add(runs.len())),
                 "runs":runs
             }))
             .map_err(|error| error.to_string())?
@@ -7019,7 +7081,7 @@ fn main() -> eframe::Result<()> {
         .is_some_and(|arg| arg == "--help" || arg == "-h")
     {
         println!(
-            "Arch Notebook\n\nUsage:\n  arch-notebook\n  arch-notebook --export-graphml <case.json> <output.graphml> [--json]\n  arch-notebook --list-jobs <case.json> [--json]\n  arch-notebook --list-runs <case.json> [--json] [--job <name-or-id>] [--offset <count>] [--limit <count>]\n  arch-notebook --validate-enabled-jobs <case.json> [--json]\n  arch-notebook --run-enabled-jobs <case.json> [--json]\n  arch-notebook --run-job <case.json> <job-name> [--json]\n\nJob and run listing and validation do not change the case. Batch runs save snapshots and run history to the case file. JSON output is available for scheduler integration."
+            "Arch Notebook\n\nUsage:\n  arch-notebook\n  arch-notebook --export-graphml <case.json> <output.graphml> [--json]\n  arch-notebook --export-sql-comparison <case.json> <baseline-snapshot-id> <current-snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --list-jobs <case.json> [--json]\n  arch-notebook --list-runs <case.json> [--json] [--job <name-or-id>] [--offset <count>] [--limit <count>]\n  arch-notebook --validate-enabled-jobs <case.json> [--json]\n  arch-notebook --run-enabled-jobs <case.json> [--json]\n  arch-notebook --run-job <case.json> <job-name> [--json]\n\nJob and run listing and validation do not change the case. Run history is newest first and can be filtered or paged. SQL comparisons can be exported from saved snapshots for downstream tools. Batch runs save snapshots and run history to the case file. JSON output is available for scheduler integration."
         );
         return Ok(());
     }
@@ -7039,6 +7101,33 @@ fn main() -> eframe::Result<()> {
         }
         if let Err(error) = export_graphml_cli(case_path, output_path, json_output) {
             report_cli_error("GraphML export failed", error, json_output);
+        }
+        return Ok(());
+    }
+    if args
+        .first()
+        .is_some_and(|arg| arg == "--export-sql-comparison")
+    {
+        let json_output = args.iter().any(|arg| arg == "--json");
+        let usage = "usage: arch-notebook --export-sql-comparison <case.json> <baseline-snapshot-id> <current-snapshot-id> <output.csv|tsv> [--json]";
+        let (Some(case_path), Some(baseline_id), Some(current_id), Some(output_path)) =
+            (args.get(1), args.get(2), args.get(3), args.get(4))
+        else {
+            report_cli_usage_error(usage, json_output);
+        };
+        if args.len() > 6 || args.get(5).is_some_and(|arg| arg != "--json") {
+            report_cli_usage_error(usage, json_output);
+        }
+        let baseline_id = Uuid::parse_str(baseline_id).unwrap_or_else(|_| {
+            report_cli_usage_error("invalid baseline snapshot UUID", json_output)
+        });
+        let current_id = Uuid::parse_str(current_id).unwrap_or_else(|_| {
+            report_cli_usage_error("invalid current snapshot UUID", json_output)
+        });
+        if let Err(error) =
+            export_sql_comparison_cli(case_path, baseline_id, current_id, output_path, json_output)
+        {
+            report_cli_error("SQL comparison export failed", error, json_output);
         }
         return Ok(());
     }

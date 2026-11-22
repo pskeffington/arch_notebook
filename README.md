@@ -13,6 +13,14 @@ Arch Notebook is a local Rust desktop workbench for investigating relationship d
 
 The comparison export retains a readable `change` label and adds a boolean column for each change type, so spreadsheet filters and downstream tools can select exact regression categories.
 
+Export a saved SQL comparison without opening the desktop app by passing the baseline and current snapshot UUIDs. The snapshots must be ordered in the same saved database/series. A `.tsv` or `.tab` output path selects tab-separated output; other paths use CSV. Export is atomic and refuses to overwrite a saved SQLite source database.
+
+```sh
+cargo run --offline -- --export-sql-comparison harbor-light.case.json <baseline-snapshot-id> <current-snapshot-id> comparison.csv --json
+```
+
+The JSON response reports the output format, snapshot IDs, and number of changed records. Get snapshot UUIDs from `--list-runs --json` or the case’s saved snapshot records.
+
 CSV/TSV and comparison reports are written to a temporary sibling file and atomically replace the destination only after the full export succeeds. **Import GraphML** stages nodes and relationships through the validated import path; it supports a single graph and imports recognized IDs, aliases, entity attributes, direction, evidence, notes, and chart styling. **Export GraphML** works with graph tools such as Gephi and Cytoscape and includes endpoint IDs, direction, labels, evidence, notes, confidence, source provenance, entity attributes, and chart styling. GraphML is an interchange format; CSV/TSV carries the full Arch Notebook case fields for round-trips. For scripts, run `arch-notebook --export-graphml case.json chart.graphml --json` without opening the desktop app; the JSON result reports the output path and exported entity and relationship counts.
 
 Connections with a unique, stable `connection_id` are matched across snapshots by that ID. A query result with duplicate IDs is rejected so ambiguous rows cannot distort regression comparisons. Without an ID, the app uses a natural key from source, target, relationship, types, and direction; duplicate natural keys in one result are rejected, so include a unique ID when the source contains parallel connections with otherwise identical fields. During CSV or SQL ingestion, entities are reconciled by name, a unique compatible alias, and supplied type. This keeps a merged entity connected to its imported records on refresh; ambiguous aliases remain separate for analyst review. Same-name entities of different types remain distinct while generic entities can gain a type from later imports.
@@ -61,6 +69,8 @@ cargo run --offline -- --list-runs harbor-light.case.json --json
 ```
 
 The result uses schema version 1 and lists newest runs first with status, job identity, timestamps, database/series, the captured query and thresholds, enabled state, outcome message, linked snapshot ID, capture time, connection count, and skipped-row count when a snapshot was produced. It also returns the structured limit checks and typed snapshot delta with stable connection keys and prior/current facts, matching run and preflight outcomes. Older runs without recorded configuration return `limits: null` rather than implying their default fields were saved settings. Listing run history does not modify the case.
+
+Filter by job name or UUID and page through newest-first history with `--job <name-or-id>`, `--offset <count>` (default `0`), and `--limit <count>` (positive integer). JSON responses include the active filter, total matches, returned count, and `next_offset` when another page exists. The selection is applied before snapshot deltas are computed.
 
 Preflight every enabled SQL job before scheduling a batch. Validation runs each query read-only, checks minimum and optional regression limits, and evaluates jobs in run order with a temporary snapshot chain. It does not save snapshots or change the case file:
 
