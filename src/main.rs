@@ -7786,10 +7786,32 @@ fn read_sqlite_schema(database_path: &str) -> Result<Vec<serde_json::Value>, Str
             .map_err(|error| error.to_string())?
             .collect::<rusqlite::Result<Vec<_>>>()
             .map_err(|error| error.to_string())?;
+        let foreign_key_pragma =
+            format!("PRAGMA foreign_key_list(\"{}\")", name.replace('"', "\"\""));
+        let mut statement = connection
+            .prepare(&foreign_key_pragma)
+            .map_err(|error| error.to_string())?;
+        let foreign_keys = statement
+            .query_map([], |row| {
+                Ok(serde_json::json!({
+                    "id": row.get::<_, i64>(0)?,
+                    "sequence": row.get::<_, i64>(1)?,
+                    "table": row.get::<_, String>(2)?,
+                    "from": row.get::<_, String>(3)?,
+                    "to": row.get::<_, Option<String>>(4)?,
+                    "on_update": row.get::<_, String>(5)?,
+                    "on_delete": row.get::<_, String>(6)?,
+                    "match": row.get::<_, String>(7)?,
+                }))
+            })
+            .map_err(|error| error.to_string())?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|error| error.to_string())?;
         schema.push(serde_json::json!({
             "type": object_type,
             "name": name,
             "columns": columns,
+            "foreign_keys": foreign_keys,
         }));
     }
     Ok(schema)
@@ -7892,13 +7914,10 @@ fn sqlite_query_templates(schema: &[serde_json::Value]) -> Vec<(String, String)>
     templates
 }
 
-fn sqlite_query_template(schema: &[serde_json::Value]) -> Option<(String, String)> {
-    sqlite_query_templates(schema).into_iter().next()
-}
-
 fn inspect_sqlite_schema_cli(database_path: &str, json_output: bool) -> Result<(), String> {
     let schema = read_sqlite_schema(database_path)?;
-    let query_template = sqlite_query_template(&schema);
+    let query_templates = sqlite_query_templates(&schema);
+    let query_template = query_templates.first();
     if json_output {
         println!(
             "{}",
@@ -7908,9 +7927,13 @@ fn inspect_sqlite_schema_cli(database_path: &str, json_output: bool) -> Result<(
                 "database": database_path,
                 "object_count": schema.len(),
                 "objects": schema,
-                "query_template": query_template.as_ref().map(|(table, sql)| {
+                "query_template": query_template.map(|(table, sql)| {
                     serde_json::json!({ "table": table, "sql": sql })
                 }),
+                "query_templates": query_templates
+                    .iter()
+                    .map(|(table, sql)| serde_json::json!({ "table": table, "sql": sql }))
+                    .collect::<Vec<_>>(),
             }))
             .map_err(|error| error.to_string())?
         );
@@ -7934,6 +7957,14 @@ fn inspect_sqlite_schema_cli(database_path: &str, json_output: bool) -> Result<(
                         } else {
                             ""
                         }
+                    );
+                }
+                for foreign_key in object["foreign_keys"].as_array().into_iter().flatten() {
+                    println!(
+                        "  foreign key {} → {}.{}",
+                        foreign_key["from"].as_str().unwrap_or(""),
+                        foreign_key["table"].as_str().unwrap_or(""),
+                        foreign_key["to"].as_str().unwrap_or("primary key")
                     );
                 }
             }

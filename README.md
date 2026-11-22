@@ -109,7 +109,7 @@ Inspect a SQLite source before writing an ingestion query. This command opens th
 cargo run --offline -- --inspect-sqlite source.sqlite --json
 ```
 
-The JSON response uses schema version 1 and includes `ok`, `object_count`, the table/view definitions, and `query_template` with the generated table name and SQL when source and target columns are recognized (otherwise `null`). It reports structure only; it does not read table rows or modify the source. The text output reports when the database contains no user tables or views and prints the suggested query when one can be generated.
+The JSON response uses schema version 1 and includes `ok`, `object_count`, table/view definitions, declared foreign-key mappings, and `query_templates` for every table/view with recognizable source and target columns. The existing singular `query_template` field remains as the first candidate for compatibility. It reports structure only; it does not read table rows or modify the source. The text output reports when the database contains no user tables or views, lists declared foreign keys, and prints the first suggested query when one can be generated.
 
 Preflight every enabled SQL job before scheduling a batch. Validation runs each query read-only, checks minimum and optional regression limits, and evaluates jobs in run order with a temporary snapshot chain. It does not save snapshots or change the case file:
 
