@@ -3246,6 +3246,7 @@ fn compare_snapshots(
             .cmp(&delta_order(&b.kinds))
             .then_with(|| a.connection.source.cmp(&b.connection.source))
             .then_with(|| a.connection.target.cmp(&b.connection.target))
+            .then_with(|| comparison_key(&a.connection).cmp(&comparison_key(&b.connection)))
     });
     deltas
 }
@@ -3332,22 +3333,14 @@ fn automation_regression_summary(case: &CaseFile, source_key: &str) -> String {
     let dates = count(DeltaKind::DateChanged);
     let added = count(DeltaKind::Added);
     let increased = count(DeltaKind::ConfidenceIncreased);
-    let updated = deltas
-        .iter()
-        .filter(|delta| {
-            delta.kinds.iter().any(|kind| {
-                matches!(
-                    kind,
-                    DeltaKind::Updated | DeltaKind::EvidenceChanged | DeltaKind::SourceNotesChanged
-                )
-            })
-        })
-        .count();
+    let details = count(DeltaKind::Updated);
+    let evidence = count(DeltaKind::EvidenceChanged);
+    let source_notes = count(DeltaKind::SourceNotesChanged);
     if deltas.is_empty() {
         "NO CONNECTION CHANGES".into()
     } else {
         format!(
-            "SNAPSHOT DELTA · {removed} removed · {declined} confidence declines · {dates} date changes · {updated} other updates · {added} added · {increased} confidence increases"
+            "SNAPSHOT DELTA · {removed} removed · {declined} confidence declines · {dates} date changes · {details} connection detail changes · {evidence} evidence changes · {source_notes} source note changes · {added} added · {increased} confidence increases"
         )
     }
 }
