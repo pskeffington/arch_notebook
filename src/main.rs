@@ -330,12 +330,14 @@ enum DeltaKind {
     ConfidenceDeclined,
     DateChanged,
     Updated,
+    EvidenceChanged,
+    SourceNotesChanged,
     Added,
     ConfidenceIncreased,
 }
 
 struct ConnectionDelta {
-    kind: DeltaKind,
+    kinds: Vec<DeltaKind>,
     connection: ConnectionFact,
     previous_connection: Option<ConnectionFact>,
     previous_confidence: Option<u8>,
@@ -3185,38 +3187,21 @@ fn compare_snapshots(
     for (key, previous) in &old {
         match new.get(key) {
             None => deltas.push(ConnectionDelta {
-                kind: DeltaKind::Removed,
+                kinds: vec![DeltaKind::Removed],
                 connection: (*previous).clone(),
                 previous_connection: Some((*previous).clone()),
                 previous_confidence: Some(previous.confidence),
                 previous_date: Some(previous.date.clone()),
             }),
             Some(now) => {
+                let mut kinds = Vec::new();
                 if now.confidence < previous.confidence {
-                    deltas.push(ConnectionDelta {
-                        kind: DeltaKind::ConfidenceDeclined,
-                        connection: (*now).clone(),
-                        previous_connection: Some((*previous).clone()),
-                        previous_confidence: Some(previous.confidence),
-                        previous_date: Some(previous.date.clone()),
-                    });
+                    kinds.push(DeltaKind::ConfidenceDeclined);
                 } else if now.confidence > previous.confidence {
-                    deltas.push(ConnectionDelta {
-                        kind: DeltaKind::ConfidenceIncreased,
-                        connection: (*now).clone(),
-                        previous_connection: Some((*previous).clone()),
-                        previous_confidence: Some(previous.confidence),
-                        previous_date: Some(previous.date.clone()),
-                    });
+                    kinds.push(DeltaKind::ConfidenceIncreased);
                 }
                 if now.date != previous.date {
-                    deltas.push(ConnectionDelta {
-                        kind: DeltaKind::DateChanged,
-                        connection: (*now).clone(),
-                        previous_connection: Some((*previous).clone()),
-                        previous_confidence: Some(previous.confidence),
-                        previous_date: Some(previous.date.clone()),
-                    });
+                    kinds.push(DeltaKind::DateChanged);
                 }
                 if now.source != previous.source
                     || now.source_type != previous.source_type
@@ -3224,11 +3209,18 @@ fn compare_snapshots(
                     || now.target_type != previous.target_type
                     || now.relationship != previous.relationship
                     || now.directed != previous.directed
-                    || now.source_reference != previous.source_reference
-                    || now.notes != previous.notes
                 {
+                    kinds.push(DeltaKind::Updated);
+                }
+                if now.source_reference != previous.source_reference {
+                    kinds.push(DeltaKind::EvidenceChanged);
+                }
+                if now.notes != previous.notes {
+                    kinds.push(DeltaKind::SourceNotesChanged);
+                }
+                if !kinds.is_empty() {
                     deltas.push(ConnectionDelta {
-                        kind: DeltaKind::Updated,
+                        kinds,
                         connection: (*now).clone(),
                         previous_connection: Some((*previous).clone()),
                         previous_confidence: Some(previous.confidence),
@@ -3241,7 +3233,7 @@ fn compare_snapshots(
     for (key, connection) in &new {
         if !old.contains_key(key) {
             deltas.push(ConnectionDelta {
-                kind: DeltaKind::Added,
+                kinds: vec![DeltaKind::Added],
                 connection: (*connection).clone(),
                 previous_connection: None,
                 previous_confidence: None,
@@ -3250,8 +3242,8 @@ fn compare_snapshots(
         }
     }
     deltas.sort_by(|a, b| {
-        delta_order(a.kind)
-            .cmp(&delta_order(b.kind))
+        delta_order(&a.kinds)
+            .cmp(&delta_order(&b.kinds))
             .then_with(|| a.connection.source.cmp(&b.connection.source))
             .then_with(|| a.connection.target.cmp(&b.connection.target))
     });
@@ -3277,15 +3269,20 @@ fn comparison_key(connection: &ConnectionFact) -> String {
     format!("natural:{key}")
 }
 
-fn delta_order(kind: DeltaKind) -> u8 {
-    match kind {
-        DeltaKind::Removed => 0,
-        DeltaKind::ConfidenceDeclined => 1,
-        DeltaKind::DateChanged => 2,
-        DeltaKind::Updated => 3,
-        DeltaKind::Added => 4,
-        DeltaKind::ConfidenceIncreased => 5,
-    }
+fn delta_order(kinds: &[DeltaKind]) -> u8 {
+    [
+        DeltaKind::Removed,
+        DeltaKind::ConfidenceDeclined,
+        DeltaKind::DateChanged,
+        DeltaKind::Updated,
+        DeltaKind::EvidenceChanged,
+        DeltaKind::SourceNotesChanged,
+        DeltaKind::Added,
+        DeltaKind::ConfidenceIncreased,
+    ]
+    .iter()
+    .position(|kind| kinds.contains(kind))
+    .unwrap_or(usize::MAX) as u8
 }
 
 fn automation_regression_count(case: &CaseFile, source_key: &str) -> usize {
@@ -3303,10 +3300,10 @@ fn automation_regression_count(case: &CaseFile, source_key: &str) -> usize {
     compare_snapshots(previous, current)
         .iter()
         .filter(|delta| {
-            matches!(
-                delta.kind,
-                DeltaKind::Removed | DeltaKind::ConfidenceDeclined
-            )
+            delta
+                .kinds
+                .iter()
+                .any(|kind| matches!(kind, DeltaKind::Removed | DeltaKind::ConfidenceDeclined))
         })
         .count()
 }
@@ -3324,13 +3321,28 @@ fn automation_regression_summary(case: &CaseFile, source_key: &str) -> String {
         return "BASELINE · no previous snapshot".into();
     };
     let deltas = compare_snapshots(baseline, current);
-    let count = |kind| deltas.iter().filter(|delta| delta.kind == kind).count();
+    let count = |kind| {
+        deltas
+            .iter()
+            .filter(|delta| delta.kinds.contains(&kind))
+            .count()
+    };
     let removed = count(DeltaKind::Removed);
     let declined = count(DeltaKind::ConfidenceDeclined);
     let dates = count(DeltaKind::DateChanged);
     let added = count(DeltaKind::Added);
     let increased = count(DeltaKind::ConfidenceIncreased);
-    let updated = count(DeltaKind::Updated);
+    let updated = deltas
+        .iter()
+        .filter(|delta| {
+            delta.kinds.iter().any(|kind| {
+                matches!(
+                    kind,
+                    DeltaKind::Updated | DeltaKind::EvidenceChanged | DeltaKind::SourceNotesChanged
+                )
+            })
+        })
+        .count();
     if deltas.is_empty() {
         "NO CONNECTION CHANGES".into()
     } else {
@@ -3735,19 +3747,22 @@ impl eframe::App for App {
                                     ui.label(format!("{capture_label} #{}: {} · {} · {} connections",selected_index.map(|index|index+1).unwrap_or_default(),current.captured_at,current.series,current.connections.len()));
                                     if let Some(base)=baseline {
                                         let deltas=compare_snapshots(&base,&current);
-                                        let removed=deltas.iter().filter(|delta|delta.kind==DeltaKind::Removed).count();
-                                        let declined=deltas.iter().filter(|delta|delta.kind==DeltaKind::ConfidenceDeclined).count();
-                                        let dates=deltas.iter().filter(|delta|delta.kind==DeltaKind::DateChanged).count();
-                                        let updated=deltas.iter().filter(|delta|delta.kind==DeltaKind::Updated).count();
-                                        let added=deltas.iter().filter(|delta|delta.kind==DeltaKind::Added).count();
-                                        let increased=deltas.iter().filter(|delta|delta.kind==DeltaKind::ConfidenceIncreased).count();
-                                        ui.label(egui::RichText::new(format!("Baseline {} → current {} · {removed} removed · {declined} confidence declines · {dates} date changes · {updated} record updates · {added} added · {increased} confidence increases",base.captured_at,current.captured_at)).strong().color(if removed+declined>0{egui::Color32::from_rgb(238,139,115)}else{cyan}));
+                                        let count=|kind|deltas.iter().filter(|delta|delta.kinds.contains(&kind)).count();
+                                        let removed=count(DeltaKind::Removed);
+                                        let declined=count(DeltaKind::ConfidenceDeclined);
+                                        let dates=count(DeltaKind::DateChanged);
+                                        let updated=count(DeltaKind::Updated);
+                                        let evidence=count(DeltaKind::EvidenceChanged);
+                                        let source_notes=count(DeltaKind::SourceNotesChanged);
+                                        let added=count(DeltaKind::Added);
+                                        let increased=count(DeltaKind::ConfidenceIncreased);
+                                        ui.label(egui::RichText::new(format!("Baseline {} → current {} · {removed} removed · {declined} confidence declines · {dates} date changes · {updated} connection detail changes · {evidence} evidence changes · {source_notes} source note changes · {added} added · {increased} confidence increases",base.captured_at,current.captured_at)).strong().color(if removed+declined>0{egui::Color32::from_rgb(238,139,115)}else{cyan}));
                                         egui::ScrollArea::both().show(ui,|ui|egui::Grid::new("sql_regression_table").striped(true).show(ui,|ui|{
                                             for heading in ["CHANGE","CONNECTION","CONFIDENCE","DATE","EVIDENCE","NOTES"]{ui.label(egui::RichText::new(heading).small().strong().color(cyan));}ui.end_row();
                                             for delta in deltas {
-                                                let change=match delta.kind{DeltaKind::Removed=>"REMOVED",DeltaKind::ConfidenceDeclined=>"CONFIDENCE DOWN",DeltaKind::DateChanged=>"DATE CHANGED",DeltaKind::Updated=>"RECORD UPDATED",DeltaKind::Added=>"ADDED",DeltaKind::ConfidenceIncreased=>"CONFIDENCE UP"};
+                                                let change=delta.kinds.iter().map(|kind|match kind{DeltaKind::Removed=>"REMOVED",DeltaKind::ConfidenceDeclined=>"CONFIDENCE DOWN",DeltaKind::DateChanged=>"DATE CHANGED",DeltaKind::Updated=>"CONNECTION DETAILS",DeltaKind::EvidenceChanged=>"EVIDENCE CHANGED",DeltaKind::SourceNotesChanged=>"SOURCE NOTES CHANGED",DeltaKind::Added=>"ADDED",DeltaKind::ConfidenceIncreased=>"CONFIDENCE UP"}).collect::<Vec<_>>().join(" · ");
                                                 let previous=delta.previous_connection.as_ref();
-                                                let current=(delta.kind!=DeltaKind::Removed).then_some(&delta.connection);
+                                                let current=(!delta.kinds.contains(&DeltaKind::Removed)).then_some(&delta.connection);
                                                 let describe_connection=|fact:&ConnectionFact|format!("{} [{}] — {} — {} [{}] {}",fact.source,fact.source_type,fact.relationship,fact.target,fact.target_type,if fact.directed{"→"}else{"↔"});
                                                 let previous_connection=previous.map(describe_connection).unwrap_or_else(||"—".into());
                                                 let current_connection=current.map(describe_connection).unwrap_or_else(||"—".into());
@@ -4521,7 +4536,7 @@ fn run_automation_cli(
     case_path: &str,
     job_name: Option<&str>,
     json_output: bool,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     let content =
         fs::read_to_string(case_path).map_err(|error| format!("cannot read case: {error}"))?;
     let case = serde_json::from_str::<CaseFile>(&content)
@@ -4576,16 +4591,13 @@ fn run_automation_cli(
     if json_output {
         println!("{}", serde_json::to_string_pretty(&serde_json::json!({"ok":failures==0,"saved":true,"case":case_path,"passed":outcomes.iter().filter(|outcome|outcome["status"]=="PASS").count(),"failed":failures,"outcomes":outcomes})).map_err(|error|error.to_string())?);
     }
-    if failures > 0 {
-        Err(format!(
-            "{failures} automation job(s) failed; run history saved"
-        ))
-    } else {
-        Ok(())
-    }
+    Ok(failures == 0)
 }
 
-fn validate_enabled_automation_jobs_cli(case_path: &str, json_output: bool) -> Result<(), String> {
+fn validate_enabled_automation_jobs_cli(
+    case_path: &str,
+    json_output: bool,
+) -> Result<bool, String> {
     let content =
         fs::read_to_string(case_path).map_err(|error| format!("cannot read case: {error}"))?;
     let case = serde_json::from_str::<CaseFile>(&content)
@@ -4632,13 +4644,7 @@ fn validate_enabled_automation_jobs_cli(case_path: &str, json_output: bool) -> R
     if json_output {
         println!("{}", serde_json::to_string_pretty(&serde_json::json!({"ok":failures==0,"saved":false,"case":case_path,"passed":outcomes.iter().filter(|outcome|outcome["status"]=="PASS").count(),"failed":failures,"outcomes":outcomes})).map_err(|error|error.to_string())?);
     }
-    if failures > 0 {
-        Err(format!(
-            "{failures} automation job(s) failed validation; case file was not changed"
-        ))
-    } else {
-        Ok(())
-    }
+    Ok(failures == 0)
 }
 
 fn list_automation_jobs_cli(case_path: &str, json_output: bool) -> Result<(), String> {
@@ -4676,6 +4682,32 @@ fn list_automation_jobs_cli(case_path: &str, json_output: bool) -> Result<(), St
     Ok(())
 }
 
+fn report_cli_error(action: &str, error: String, json_output: bool) -> ! {
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({"ok":false,"error":error}))
+                .unwrap_or_else(
+                    |_| "{\"ok\":false,\"error\":\"failed to serialize CLI error\"}".into()
+                )
+        );
+    }
+    eprintln!("{action}: {error}");
+    std::process::exit(1);
+}
+
+fn report_cli_usage_error(usage: &str, json_output: bool) -> ! {
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({"ok":false,"error":usage}))
+                .unwrap_or_else(|_| "{\"ok\":false,\"error\":\"invalid command arguments\"}".into())
+        );
+    }
+    eprintln!("{usage}");
+    std::process::exit(2);
+}
+
 fn main() -> eframe::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args
@@ -4688,19 +4720,21 @@ fn main() -> eframe::Result<()> {
         return Ok(());
     }
     if args.first().is_some_and(|arg| arg == "--list-jobs") {
+        let json_output = args.iter().any(|arg| arg == "--json");
         let Some(case_path) = args.get(1) else {
-            eprintln!("usage: arch-notebook --list-jobs <case.json>");
-            std::process::exit(2);
+            report_cli_usage_error(
+                "usage: arch-notebook --list-jobs <case.json> [--json]",
+                json_output,
+            );
         };
         if args.len() > 3 || args.get(2).is_some_and(|arg| arg != "--json") {
-            eprintln!("usage: arch-notebook --list-jobs <case.json> [--json]");
-            std::process::exit(2);
+            report_cli_usage_error(
+                "usage: arch-notebook --list-jobs <case.json> [--json]",
+                json_output,
+            );
         }
-        if let Err(error) =
-            list_automation_jobs_cli(case_path, args.iter().any(|arg| arg == "--json"))
-        {
-            eprintln!("job listing failed: {error}");
-            std::process::exit(1);
+        if let Err(error) = list_automation_jobs_cli(case_path, json_output) {
+            report_cli_error("job listing failed", error, json_output);
         }
         return Ok(());
     }
@@ -4710,52 +4744,72 @@ fn main() -> eframe::Result<()> {
     {
         let json_output = args.iter().any(|arg| arg == "--json");
         let Some(case_path) = args.get(1) else {
-            eprintln!("usage: arch-notebook --validate-enabled-jobs <case.json>");
-            std::process::exit(2);
+            report_cli_usage_error(
+                "usage: arch-notebook --validate-enabled-jobs <case.json> [--json]",
+                json_output,
+            );
         };
         if args.len() > 3 || args.get(2).is_some_and(|arg| arg != "--json") {
-            eprintln!("usage: arch-notebook --validate-enabled-jobs <case.json> [--json]");
-            std::process::exit(2);
+            report_cli_usage_error(
+                "usage: arch-notebook --validate-enabled-jobs <case.json> [--json]",
+                json_output,
+            );
         }
-        if let Err(error) = validate_enabled_automation_jobs_cli(case_path, json_output) {
-            eprintln!("automation validation failed: {error}");
-            std::process::exit(1);
+        match validate_enabled_automation_jobs_cli(case_path, json_output) {
+            Err(error) => report_cli_error("automation validation failed", error, json_output),
+            Ok(false) => {
+                eprintln!("automation validation failed; case file was not changed");
+                std::process::exit(1);
+            }
+            Ok(true) => {}
         }
         return Ok(());
     }
     if args.first().is_some_and(|arg| arg == "--run-enabled-jobs") {
+        let json_output = args.iter().any(|arg| arg == "--json");
         let Some(case_path) = args.get(1) else {
-            eprintln!("usage: arch-notebook --run-enabled-jobs <case.json>");
-            std::process::exit(2);
+            report_cli_usage_error(
+                "usage: arch-notebook --run-enabled-jobs <case.json> [--json]",
+                json_output,
+            );
         };
         if args.len() > 3 || args.get(2).is_some_and(|arg| arg != "--json") {
-            eprintln!("usage: arch-notebook --run-enabled-jobs <case.json> [--json]");
-            std::process::exit(2);
+            report_cli_usage_error(
+                "usage: arch-notebook --run-enabled-jobs <case.json> [--json]",
+                json_output,
+            );
         }
-        if let Err(error) =
-            run_automation_cli(case_path, None, args.iter().any(|arg| arg == "--json"))
-        {
-            eprintln!("automation failed: {error}");
-            std::process::exit(1);
+        match run_automation_cli(case_path, None, json_output) {
+            Err(error) => report_cli_error("automation failed", error, json_output),
+            Ok(false) => {
+                eprintln!("automation failed; run history saved");
+                std::process::exit(1);
+            }
+            Ok(true) => {}
         }
         return Ok(());
     }
     if args.first().is_some_and(|arg| arg == "--run-job") {
+        let json_output = args.iter().any(|arg| arg == "--json");
         let (Some(case_path), Some(job_name)) = (args.get(1), args.get(2)) else {
-            eprintln!("usage: arch-notebook --run-job <case.json> <job-name>");
-            std::process::exit(2);
+            report_cli_usage_error(
+                "usage: arch-notebook --run-job <case.json> <job-name> [--json]",
+                json_output,
+            );
         };
         if args.len() > 4 || args.get(3).is_some_and(|arg| arg != "--json") {
-            eprintln!("usage: arch-notebook --run-job <case.json> <job-name> [--json]");
-            std::process::exit(2);
+            report_cli_usage_error(
+                "usage: arch-notebook --run-job <case.json> <job-name> [--json]",
+                json_output,
+            );
         }
-        if let Err(error) = run_automation_cli(
-            case_path,
-            Some(job_name),
-            args.iter().any(|arg| arg == "--json"),
-        ) {
-            eprintln!("automation failed: {error}");
-            std::process::exit(1);
+        match run_automation_cli(case_path, Some(job_name), json_output) {
+            Err(error) => report_cli_error("automation failed", error, json_output),
+            Ok(false) => {
+                eprintln!("automation failed; run history saved");
+                std::process::exit(1);
+            }
+            Ok(true) => {}
         }
         return Ok(());
     }
