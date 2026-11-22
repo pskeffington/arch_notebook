@@ -58,8 +58,12 @@ if ! command -v systemctl >/dev/null 2>&1; then
 fi
 
 # Validate the case before creating a timer that would fail on every run.
-if ! "$binary" --list-jobs "$case_file" --enabled-only --json >/dev/null; then
+if ! job_list_json=$("$binary" --list-jobs "$case_file" --enabled-only --json); then
   echo "Arch Notebook could not read the case file: $case_file" >&2
+  exit 1
+fi
+if ! python3 -c 'import json, sys; raise SystemExit(0 if json.load(sys.stdin).get("enabled", 0) > 0 else 1)' <<<"$job_list_json"; then
+  echo "Enable at least one automation job in the case before installing its timer." >&2
   exit 1
 fi
 
