@@ -4123,6 +4123,163 @@ fn automation_limits_pass(
         && maximum_skipped_rows.is_none_or(|maximum| skipped_rows <= maximum)
 }
 
+fn previous_snapshot_index(case: &CaseFile, current_index: usize) -> Option<usize> {
+    let current = case.snapshots.get(current_index)?;
+    (0..current_index)
+        .rev()
+        .find(|index| case.snapshots[*index].source_key == current.source_key)
+}
+
+fn snapshot_delta_json(
+    current: &ConnectionSnapshot,
+    previous: Option<&ConnectionSnapshot>,
+) -> serde_json::Value {
+    let Some(previous) = previous else {
+        return serde_json::json!({
+            "baseline": true,
+            "compared_to_snapshot_id": null,
+            "counts": {
+                "removed": 0,
+                "confidence_declined": 0,
+                "date_changed": 0,
+                "connection_updated": 0,
+                "evidence_changed": 0,
+                "source_notes_changed": 0,
+                "added": 0,
+                "confidence_increased": 0,
+                "changed_records": 0
+            },
+            "changes": []
+        });
+    };
+    let deltas = compare_snapshots(previous, current);
+    let count = |kind| {
+        deltas
+            .iter()
+            .filter(|delta| delta.kinds.contains(&kind))
+            .count()
+    };
+    let changes: Vec<_> = deltas
+        .iter()
+        .map(|delta| {
+            let kinds: Vec<&str> = delta
+                .kinds
+                .iter()
+                .map(|kind| match kind {
+                    DeltaKind::Removed => "removed",
+                    DeltaKind::ConfidenceDeclined => "confidence_declined",
+                    DeltaKind::DateChanged => "date_changed",
+                    DeltaKind::Updated => "connection_updated",
+                    DeltaKind::EvidenceChanged => "evidence_changed",
+                    DeltaKind::SourceNotesChanged => "source_notes_changed",
+                    DeltaKind::Added => "added",
+                    DeltaKind::ConfidenceIncreased => "confidence_increased",
+                })
+                .collect();
+            let fact = |connection: &ConnectionFact| {
+                serde_json::json!({
+                    "connection_id": connection.connection_id,
+                    "source": connection.source,
+                    "source_type": connection.source_type,
+                    "relationship": connection.relationship,
+                    "target": connection.target,
+                    "target_type": connection.target_type,
+                    "date": connection.date,
+                    "confidence": connection.confidence,
+                    "directed": connection.directed,
+                    "source_reference": connection.source_reference,
+                    "source_notes": connection.notes
+                })
+            };
+            serde_json::json!({
+                "kinds": kinds,
+                "connection": fact(&delta.connection),
+                "previous": delta.previous_connection.as_ref().map(fact)
+            })
+        })
+        .collect();
+    serde_json::json!({
+        "baseline": false,
+        "compared_to_snapshot_id": previous.id,
+        "counts": {
+            "removed": count(DeltaKind::Removed),
+            "confidence_declined": count(DeltaKind::ConfidenceDeclined),
+            "date_changed": count(DeltaKind::DateChanged),
+            "connection_updated": count(DeltaKind::Updated),
+            "evidence_changed": count(DeltaKind::EvidenceChanged),
+            "source_notes_changed": count(DeltaKind::SourceNotesChanged),
+            "added": count(DeltaKind::Added),
+            "confidence_increased": count(DeltaKind::ConfidenceIncreased),
+            "changed_records": deltas.len()
+        },
+        "changes": changes
+    })
+}
+
+fn automation_outcome_json(
+    job: &AutomationJob,
+    success: bool,
+    message: &str,
+    snapshot: Option<&ConnectionSnapshot>,
+    previous: Option<&ConnectionSnapshot>,
+) -> serde_json::Value {
+    let delta = snapshot.map(|snapshot| snapshot_delta_json(snapshot, previous));
+    let regression_count = delta
+        .as_ref()
+        .and_then(|delta| {
+            delta
+                .pointer("/counts/removed")
+                .and_then(serde_json::Value::as_u64)
+        })
+        .unwrap_or_default() as usize
+        + delta
+            .as_ref()
+            .and_then(|delta| {
+                delta
+                    .pointer("/counts/confidence_declined")
+                    .and_then(serde_json::Value::as_u64)
+            })
+            .unwrap_or_default() as usize;
+    let connection_count = snapshot.map(|snapshot| snapshot.connections.len());
+    let skipped_rows = snapshot.map(|snapshot| snapshot.skipped_rows);
+    serde_json::json!({
+        "schema_version": 1,
+        "status": if success { "PASS" } else { "FAIL" },
+        "job": job.name,
+        "job_id": job.id,
+        "database_path": job.database_path,
+        "series": job.series,
+        "message": message,
+        "snapshot_id": snapshot.map(|snapshot| snapshot.id),
+        "captured_at": snapshot.map(|snapshot| snapshot.captured_at.as_str()),
+        "source_key": snapshot.map(|snapshot| snapshot.source_key.as_str()),
+        "connection_count": connection_count,
+        "skipped_rows": skipped_rows,
+        "minimum_connections": job.minimum_connections,
+        "maximum_regressions": job.maximum_regressions,
+        "maximum_skipped_rows": job.maximum_skipped_rows,
+        "query": job.query,
+        "limits": {
+            "minimum_connections": {
+                "required": job.minimum_connections,
+                "observed": connection_count,
+                "passed": connection_count.map(|count| count >= job.minimum_connections)
+            },
+            "maximum_regressions": {
+                "limit": job.maximum_regressions,
+                "observed": snapshot.map(|_| regression_count),
+                "passed": snapshot.map(|_| job.maximum_regressions.is_none_or(|limit| regression_count <= limit))
+            },
+            "maximum_skipped_rows": {
+                "limit": job.maximum_skipped_rows,
+                "observed": skipped_rows,
+                "passed": skipped_rows.map(|count| job.maximum_skipped_rows.is_none_or(|limit| count <= limit))
+            }
+        },
+        "delta": delta
+    })
+}
+
 fn automation_regression_summary(case: &CaseFile, source_key: &str) -> String {
     let mut snapshots = case
         .snapshots
@@ -6506,22 +6663,20 @@ fn run_automation_cli(
         let snapshot_id = run.and_then(|run| run.snapshot_id);
         let snapshot =
             snapshot_id.and_then(|id| app.case.snapshots.iter().find(|snapshot| snapshot.id == id));
-        let connection_count = snapshot.map(|snapshot| snapshot.connections.len());
-        let skipped_rows = snapshot.map(|snapshot| snapshot.skipped_rows);
+        let snapshot_index = snapshot_id.and_then(|id| {
+            app.case
+                .snapshots
+                .iter()
+                .position(|snapshot| snapshot.id == id)
+        });
+        let previous = snapshot_index
+            .and_then(|index| previous_snapshot_index(&app.case, index))
+            .and_then(|index| app.case.snapshots.get(index));
         save_case_atomically(Path::new(case_path), &app.case)?;
         if json_output {
-            outcomes.push(serde_json::json!({
-                "status": if success { "PASS" } else { "FAIL" },
-                "job": job.name,
-                "message": message,
-                "snapshot_id": snapshot_id,
-                "connection_count": connection_count,
-                "skipped_rows": skipped_rows,
-                "minimum_connections": job.minimum_connections,
-                "maximum_regressions": job.maximum_regressions,
-                "maximum_skipped_rows": job.maximum_skipped_rows,
-                "query": job.query,
-            }));
+            outcomes.push(automation_outcome_json(
+                &job, success, &message, snapshot, previous,
+            ));
         } else {
             println!(
                 "{} · {} · {}",
@@ -6532,7 +6687,7 @@ fn run_automation_cli(
         }
     }
     if json_output {
-        println!("{}", serde_json::to_string_pretty(&serde_json::json!({"ok":failures==0,"saved":true,"case":case_path,"passed":outcomes.iter().filter(|outcome|outcome["status"]=="PASS").count(),"failed":failures,"outcomes":outcomes})).map_err(|error|error.to_string())?);
+        println!("{}", serde_json::to_string_pretty(&serde_json::json!({"schema_version":1,"ok":failures==0,"saved":true,"case":case_path,"passed":outcomes.iter().filter(|outcome|outcome["status"]=="PASS").count(),"failed":failures,"outcomes":outcomes})).map_err(|error|error.to_string())?);
     }
     Ok(failures == 0)
 }
@@ -6639,8 +6794,7 @@ fn validate_enabled_automation_jobs_cli(
             );
             failures += 1;
             if json_output {
-                outcomes
-                    .push(serde_json::json!({"status":"FAIL","job":job.name,"message":message}));
+                outcomes.push(automation_outcome_json(&job, false, &message, None, None));
             } else {
                 println!("FAIL · {} · {}", job.name, message);
             }
@@ -6656,22 +6810,16 @@ fn validate_enabled_automation_jobs_cli(
         let success = app.validate_sql_query_for_batch();
         let message = app.status.clone();
         let snapshot = app.case.snapshots.get(snapshot_count_before);
+        let previous = snapshot
+            .and_then(|_| previous_snapshot_index(&app.case, snapshot_count_before))
+            .and_then(|index| app.case.snapshots.get(index));
         if !success {
             failures += 1;
         }
         if json_output {
-            outcomes.push(serde_json::json!({
-                "status": if success { "PASS" } else { "FAIL" },
-                "job": job.name,
-                "message": message,
-                "snapshot_id": snapshot.map(|snapshot| snapshot.id),
-                "connection_count": snapshot.map(|snapshot| snapshot.connections.len()),
-                "skipped_rows": snapshot.map(|snapshot| snapshot.skipped_rows),
-                "minimum_connections": job.minimum_connections,
-                "maximum_regressions": job.maximum_regressions,
-                "maximum_skipped_rows": job.maximum_skipped_rows,
-                "query": job.query,
-            }));
+            outcomes.push(automation_outcome_json(
+                &job, success, &message, snapshot, previous,
+            ));
         } else {
             println!(
                 "{} · {} · {}",
@@ -6682,7 +6830,7 @@ fn validate_enabled_automation_jobs_cli(
         }
     }
     if json_output {
-        println!("{}", serde_json::to_string_pretty(&serde_json::json!({"ok":failures==0,"saved":false,"case":case_path,"passed":outcomes.iter().filter(|outcome|outcome["status"]=="PASS").count(),"failed":failures,"outcomes":outcomes})).map_err(|error|error.to_string())?);
+        println!("{}", serde_json::to_string_pretty(&serde_json::json!({"schema_version":1,"ok":failures==0,"saved":false,"case":case_path,"passed":outcomes.iter().filter(|outcome|outcome["status"]=="PASS").count(),"failed":failures,"outcomes":outcomes})).map_err(|error|error.to_string())?);
     }
     Ok(failures == 0)
 }
