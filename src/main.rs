@@ -8217,6 +8217,86 @@ fn sqlite_inferred_endpoint(
     Some((expression, join, type_expression, identity_expression))
 }
 
+fn sqlite_foreign_key_for_column<'a>(
+    link_object: &'a serde_json::Value,
+    column: &str,
+) -> Option<&'a serde_json::Value> {
+    let mut matching = link_object["foreign_keys"]
+        .as_array()?
+        .iter()
+        .filter(|key| {
+            key["from"]
+                .as_str()
+                .is_some_and(|name| name.eq_ignore_ascii_case(column))
+        });
+    let foreign_key = matching.next()?;
+    matching.next().is_none().then_some(foreign_key)
+}
+
+fn sqlite_declared_endpoint(
+    link_object: &serde_json::Value,
+    schema: &[serde_json::Value],
+    link_column: &str,
+    join_alias: &str,
+) -> Option<(String, String, Option<String>)> {
+    let foreign_keys = link_object["foreign_keys"].as_array()?;
+    let foreign_key = sqlite_foreign_key_for_column(link_object, link_column)?;
+    let foreign_key_id = foreign_key["id"].as_i64()?;
+    if foreign_keys
+        .iter()
+        .filter(|key| key["id"].as_i64() == Some(foreign_key_id))
+        .count()
+        != 1
+    {
+        return None;
+    }
+    let target_table = foreign_key["table"].as_str()?;
+    let target_object = schema.iter().find(|object| {
+        object["name"]
+            .as_str()
+            .is_some_and(|name| name.eq_ignore_ascii_case(target_table))
+    })?;
+    let target_key = foreign_key["to"]
+        .as_str()
+        .filter(|column| !column.is_empty())
+        .or_else(|| {
+            let primary_keys: Vec<&str> = target_object["columns"]
+                .as_array()?
+                .iter()
+                .filter(|column| column["primary_key_order"].as_i64().unwrap_or_default() > 0)
+                .filter_map(|column| column["name"].as_str())
+                .collect();
+            (primary_keys.len() == 1).then(|| primary_keys[0])
+        })?;
+    let name_column = schema_column(
+        target_object,
+        &[
+            "name",
+            "entity_name",
+            "person_name",
+            "organization_name",
+            "display_name",
+            "display",
+            "full_name",
+            "label",
+            "title",
+            "value",
+        ],
+    )?;
+    let link_alias = quote_sql_identifier("link_row");
+    let entity_alias = quote_sql_identifier(join_alias);
+    let join = format!(
+        "LEFT JOIN {} AS {entity_alias} ON {entity_alias}.{} = {link_alias}.{}",
+        quote_sql_identifier(target_table),
+        quote_sql_identifier(target_key),
+        quote_sql_identifier(link_column),
+    );
+    let expression = format!("{entity_alias}.{}", quote_sql_identifier(name_column));
+    let type_expression = schema_column(target_object, &["entity_type", "type", "kind"])
+        .map(|column| format!("{entity_alias}.{}", quote_sql_identifier(column)));
+    Some((expression, join, type_expression))
+}
+
 fn sqlite_endpoint_expression(
     link_object: &serde_json::Value,
     schema: &[serde_json::Value],
@@ -8226,14 +8306,28 @@ fn sqlite_endpoint_expression(
 ) -> Option<(String, Option<String>, Option<String>, Option<String>)> {
     let link_alias = quote_sql_identifier("link_row");
     if let Some(column) = schema_column(link_object, direct_aliases) {
+        let direct_expression = format!("{link_alias}.{}", quote_sql_identifier(column));
+        if sqlite_foreign_key_for_column(link_object, column).is_some() {
+            if let Some((expression, join, type_expression)) =
+                sqlite_declared_endpoint(link_object, schema, column, join_alias)
+            {
+                return Some((
+                    expression,
+                    Some(join),
+                    type_expression,
+                    Some(direct_expression),
+                ));
+            }
+            return Some((
+                direct_expression.clone(),
+                None,
+                None,
+                Some(direct_expression),
+            ));
+        }
         let identity_expression = schema_column(link_object, id_aliases)
             .map(|id| format!("{link_alias}.{}", quote_sql_identifier(id)));
-        return Some((
-            format!("{link_alias}.{}", quote_sql_identifier(column)),
-            None,
-            None,
-            identity_expression,
-        ));
+        return Some((direct_expression, None, None, identity_expression));
     }
     let id_column = schema_column(link_object, id_aliases)?;
     let raw_expression = format!("{link_alias}.{}", quote_sql_identifier(id_column));
@@ -8245,88 +8339,20 @@ fn sqlite_endpoint_expression(
             Some(raw_expression.clone()),
         ))
     };
-    let foreign_keys = link_object["foreign_keys"].as_array();
-    if let Some(foreign_key) = foreign_keys.and_then(|keys| {
-        keys.iter().find(|key| {
-            key["from"]
-                .as_str()
-                .is_some_and(|column| column.eq_ignore_ascii_case(id_column))
-        })
-    }) {
-        let Some(target_table) = foreign_key["table"].as_str() else {
-            return raw_endpoint();
-        };
-        let Some(foreign_key_id) = foreign_key["id"].as_i64() else {
-            return raw_endpoint();
-        };
-        if foreign_keys
-            .map(|keys| {
-                keys.iter()
-                    .filter(|key| key["id"].as_i64() == Some(foreign_key_id))
-                    .count()
-            })
-            .unwrap_or_default()
-            != 1
+    if sqlite_foreign_key_for_column(link_object, id_column).is_some() {
+        if let Some((expression, join, type_expression)) =
+            sqlite_declared_endpoint(link_object, schema, id_column, join_alias)
         {
-            return raw_endpoint();
+            return Some((
+                expression,
+                Some(join),
+                type_expression,
+                Some(raw_expression.clone()),
+            ));
         }
-        let Some(target_object) = schema.iter().find(|object| {
-            object["name"]
-                .as_str()
-                .is_some_and(|name| name.eq_ignore_ascii_case(target_table))
-        }) else {
-            return raw_endpoint();
-        };
-        let target_key = foreign_key["to"]
-            .as_str()
-            .filter(|column| !column.is_empty())
-            .or_else(|| {
-                target_object["columns"]
-                    .as_array()?
-                    .iter()
-                    .find_map(|column| {
-                        (column["primary_key_order"].as_i64().unwrap_or_default() > 0)
-                            .then(|| column["name"].as_str())
-                            .flatten()
-                    })
-            });
-        let Some(target_key) = target_key else {
-            return raw_endpoint();
-        };
-        let Some(name_column) = schema_column(
-            target_object,
-            &[
-                "name",
-                "entity_name",
-                "person_name",
-                "organization_name",
-                "display_name",
-                "display",
-                "full_name",
-                "label",
-                "title",
-                "value",
-            ],
-        ) else {
-            return raw_endpoint();
-        };
-        let entity_alias = quote_sql_identifier(join_alias);
-        let join = format!(
-            "LEFT JOIN {} AS {entity_alias} ON {entity_alias}.{} = {link_alias}.{}",
-            quote_sql_identifier(target_table),
-            quote_sql_identifier(target_key),
-            quote_sql_identifier(id_column),
-        );
-        let expression = format!("{entity_alias}.{}", quote_sql_identifier(name_column));
-        let type_expression = schema_column(target_object, &["entity_type", "type", "kind"])
-            .map(|column| format!("{entity_alias}.{}", quote_sql_identifier(column)));
-        return Some((
-            expression,
-            Some(join),
-            type_expression,
-            Some(raw_expression.clone()),
-        ));
+        return raw_endpoint();
     }
+    let foreign_keys = link_object["foreign_keys"].as_array();
     if foreign_keys.is_none_or(|keys| {
         keys.iter().all(|key| {
             key["from"]
