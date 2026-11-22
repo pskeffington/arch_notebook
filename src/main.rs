@@ -1551,6 +1551,7 @@ impl eframe::App for App {
                             } else if let Some(entity)=self.case.entities.iter().find(|e|center(e).distance(pos)<75.0){self.selected=Some(entity.id);self.selected_link=None;}
                             else {let nearest=self.case.links.iter().enumerate().filter_map(|(i,l)|{let a=self.case.entities.iter().find(|e|e.id==l.from)?;let b=self.case.entities.iter().find(|e|e.id==l.to)?;Some((i,segment_distance(pos,center(a),center(b))))}).filter(|(_,d)|*d<10.0).min_by(|a,b|a.1.total_cmp(&b.1)).map(|(i,_)|i);self.selected=None;self.selected_link=nearest;}
                         } }
+                        if response.drag_started() { if let Some(pos)=response.interact_pointer_pos(){if let Some(entity)=self.case.entities.iter().find(|e|center(e).distance(pos)<75.0){self.selected=Some(entity.id);self.selected_link=None;}else{self.selected=None;}} }
                         if response.dragged() { if let Some(pos)=response.interact_pointer_pos(){if let Some(id)=self.selected{if let Some(e)=self.case.entities.iter_mut().find(|e|e.id==id){e.x=((pos.x-rect.left())/rect.width()).clamp(0.05,0.95);e.y=((pos.y-rect.top())/rect.height()).clamp(0.08,0.92);}}} }
                         if self.show_timeline {
                             let tr=egui::Rect::from_min_size(rect.left_bottom()-egui::vec2(0.0,105.0),egui::vec2(rect.width(),105.0));
