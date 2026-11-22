@@ -48,7 +48,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --yes pkg-config libegl1-mesa-dev libgl1-mesa-dev \
-            libsqlite3-dev libwayland-dev libx11-dev libxcb1-dev libxcursor-dev libxkbcommon-dev
+            libwayland-dev libx11-dev libxcb1-dev libxcursor-dev libxkbcommon-dev
       - name: Check formatting
         run: cargo fmt --all -- --check
       - name: Fetch locked dependencies
@@ -86,7 +86,7 @@ jobs:
     container: archlinux:latest
     steps:
       - name: Install Arch build environment
-        run: pacman -Syu --noconfirm --needed base-devel cargo git libglvnd libx11 libxcb libxcursor libxi libxinerama libxkbcommon libxkbcommon-x11 libxrandr libxrender pkgconf rust shadow sqlite wayland
+        run: pacman -Syu --noconfirm --needed base-devel cargo git libglvnd libx11 libxcb libxcursor libxi libxinerama libxkbcommon libxkbcommon-x11 libxrandr libxrender pkgconf rust shadow wayland
       - uses: actions/checkout@v4
       - name: Build package
         run: |

@@ -60,7 +60,7 @@ Read saved automation outcomes without opening the desktop app:
 cargo run --offline -- --list-runs harbor-light.case.json --json
 ```
 
-The result lists newest runs first with status, job identity, timestamps, database/series, outcome message, linked snapshot ID, captured connection count, and skipped-row count when a snapshot was produced. Listing run history does not modify the case.
+The result lists newest runs first with status, job identity, timestamps, database/series, the captured query and thresholds, enabled state, outcome message, linked snapshot ID, capture time, connection count, and skipped-row count when a snapshot was produced. Run and preflight JSON outcomes also include the job query and thresholds so downstream tools can interpret the result without reopening the case. Listing run history does not modify the case.
 
 Preflight every enabled SQL job before scheduling a batch. Validation runs each query read-only, checks minimum and optional regression limits, and evaluates jobs in run order with a temporary snapshot chain. It does not save snapshots or change the case file:
 
@@ -74,7 +74,7 @@ Append `--json` for a machine-readable validation summary (`ok`, `saved`, pass/f
 cargo run --offline -- --run-enabled-jobs harbor-light.case.json --json
 ```
 
-Run and validation JSON include per-job snapshot IDs, accepted connection counts, and skipped-row counts when a snapshot was produced.
+Run and validation JSON include per-job snapshot IDs, accepted connection counts, and skipped-row counts when a snapshot was produced. Concurrent CLI runs against the same case wait on a per-case advisory lock, so scheduled and manual runner invocations do not overwrite each other’s checkpoints. The lock file remains beside the case file and is reused on later runs.
 
 Run history is bounded to the latest 200 records. Each run retains the job configuration and SQL query used, including failures, so later job edits or deletion do not erase the run context; expand a row in the desktop history to inspect it. Older runs that predate this configuration capture are labeled as such rather than showing default values as if they were recorded settings. Successful runs include a comparison with the previous snapshot in the same database and series; the history records removed connections, confidence declines, date changes, additions, confidence increases, and other updates. Each snapshot has a stable ID, and automation run records link directly to it; older cases migrate those links from their saved snapshot indices when loaded. In the desktop app, use **Review snapshot #N** beside a run or select any numbered capture in **Snapshot history** to compare it with the preceding capture in that series; the capture number disambiguates runs recorded within the same clock interval. Batch summaries report passed and failed job counts. The runner continues through the selected jobs if one fails, saves each outcome, and exits nonzero when any job fails.
 
@@ -103,7 +103,7 @@ All bundled case examples are fictional. Arch Notebook does not connect to a ser
 
 ## Build and deploy
 
-The supported desktop targets are Arch Linux and macOS on Apple Silicon or Intel. Rust 1.89 or newer is required. On Linux, the application stores its database, CSV example, and default case under `$XDG_DATA_HOME/arch-notebook`, or `~/.local/share/arch-notebook` when `XDG_DATA_HOME` is unset. On macOS, it uses `~/Library/Application Support/Arch Notebook`. Existing sample files are left in place on later launches.
+The supported desktop targets are Arch Linux and macOS on Apple Silicon or Intel. Rust 1.89 or newer is required to build; SQLite is bundled so the application uses a consistent SQLite version without a separate runtime install. On Linux, the application stores its database, CSV example, and default case under `$XDG_DATA_HOME/arch-notebook`, or `~/.local/share/arch-notebook` when `XDG_DATA_HOME` is unset. On macOS, it uses `~/Library/Application Support/Arch Notebook`. Existing sample files are left in place on later launches.
 
 ### Arch Linux
 

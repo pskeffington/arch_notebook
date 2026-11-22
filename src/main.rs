@@ -5226,6 +5226,7 @@ fn run_automation_cli(
     job_name: Option<&str>,
     json_output: bool,
 ) -> Result<bool, String> {
+    let _case_lock = lock_automation_case(case_path)?;
     let content =
         fs::read_to_string(case_path).map_err(|error| format!("cannot read case: {error}"))?;
     let case = serde_json::from_str::<CaseFile>(&content)
@@ -5280,6 +5281,10 @@ fn run_automation_cli(
                 "snapshot_id": snapshot_id,
                 "connection_count": connection_count,
                 "skipped_rows": skipped_rows,
+                "minimum_connections": job.minimum_connections,
+                "maximum_regressions": job.maximum_regressions,
+                "maximum_skipped_rows": job.maximum_skipped_rows,
+                "query": job.query,
             }));
         } else {
             println!(
@@ -5294,6 +5299,39 @@ fn run_automation_cli(
         println!("{}", serde_json::to_string_pretty(&serde_json::json!({"ok":failures==0,"saved":true,"case":case_path,"passed":outcomes.iter().filter(|outcome|outcome["status"]=="PASS").count(),"failed":failures,"outcomes":outcomes})).map_err(|error|error.to_string())?);
     }
     Ok(failures == 0)
+}
+
+fn lock_automation_case(case_path: &str) -> Result<fs::File, String> {
+    let path = Path::new(case_path);
+    if path.as_os_str().is_empty() {
+        return Err("case path cannot be empty".into());
+    }
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| format!("invalid case path: {}", path.display()))?;
+    let mut lock_name = file_name.to_os_string();
+    lock_name.push(".automation.lock");
+    let mut lock_path = path.to_path_buf();
+    lock_path.set_file_name(lock_name);
+    let lock_file = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&lock_path)
+        .map_err(|error| {
+            format!(
+                "cannot open automation lock {}: {error}",
+                lock_path.display()
+            )
+        })?;
+    lock_file.lock().map_err(|error| {
+        format!(
+            "cannot acquire automation lock {}: {error}",
+            lock_path.display()
+        )
+    })?;
+    Ok(lock_file)
 }
 
 fn validate_enabled_automation_jobs_cli(
@@ -5367,6 +5405,10 @@ fn validate_enabled_automation_jobs_cli(
                 "snapshot_id": snapshot.map(|snapshot| snapshot.id),
                 "connection_count": snapshot.map(|snapshot| snapshot.connections.len()),
                 "skipped_rows": snapshot.map(|snapshot| snapshot.skipped_rows),
+                "minimum_connections": job.minimum_connections,
+                "maximum_regressions": job.maximum_regressions,
+                "maximum_skipped_rows": job.maximum_skipped_rows,
+                "query": job.query,
             }));
         } else {
             println!(
@@ -5450,10 +5492,15 @@ fn list_automation_runs_cli(case_path: &str, json_output: bool) -> Result<(), St
                 "finished_at": run.finished_at,
                 "database_path": run.database_path,
                 "series": run.series,
+                "query": run.query,
+                "minimum_connections": run.minimum_connections,
+                "maximum_regressions": run.maximum_regressions,
+                "maximum_skipped_rows": run.maximum_skipped_rows,
+                "enabled": run.enabled,
                 "snapshot_id": run.snapshot_id,
                 "connection_count": snapshot.map(|snapshot| snapshot.connections.len()),
                 "skipped_rows": snapshot.map(|snapshot| snapshot.skipped_rows),
-                "maximum_skipped_rows": run.maximum_skipped_rows,
+                "captured_at": snapshot.map(|snapshot| snapshot.captured_at.as_str()),
                 "message": run.message,
                 "configuration_recorded": run.configuration_recorded,
             })
