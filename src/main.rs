@@ -2200,7 +2200,15 @@ impl App {
     }
 
     fn export_delimited(&mut self) {
+        let temporary_path = (!self.export_path.trim().is_empty()).then(|| {
+            let mut path = self.export_path.trim().to_string();
+            path.push_str(&format!(".tmp-{}", Uuid::new_v4()));
+            PathBuf::from(path)
+        });
         let result = (|| -> Result<(), String> {
+            if self.export_path.trim().is_empty() {
+                return Err("export path cannot be empty".into());
+            }
             self.ensure_export_path_is_not_sql_source()?;
             let mut attribute_columns: Vec<(bool, String)> = Vec::new();
             let known_entities: HashSet<Uuid> =
@@ -2253,7 +2261,7 @@ impl App {
             });
             let mut writer = csv::WriterBuilder::new()
                 .delimiter(delimited_text_delimiter(&self.export_path))
-                .from_path(&self.export_path)
+                .from_path(temporary_path.as_ref().expect("non-empty export path"))
                 .map_err(|e| e.to_string())?;
             let mut headers = vec![
                 "record_type".to_string(),
@@ -2420,8 +2428,20 @@ impl App {
                     .write_record(values)
                     .map_err(|error| error.to_string())?;
             }
-            writer.flush().map_err(|e| e.to_string())
+            writer.flush().map_err(|e| e.to_string())?;
+            drop(writer);
+            fs::rename(
+                temporary_path.as_ref().expect("non-empty export path"),
+                self.export_path.trim(),
+            )
+            .map_err(|error| format!("cannot replace export file: {error}"))?;
+            Ok(())
         })();
+        if result.is_err()
+            && let Some(temporary_path) = temporary_path
+        {
+            let _ = fs::remove_file(temporary_path);
+        }
         self.status = match result {
             Ok(()) => format!(
                 "{} EXPORTED {}",

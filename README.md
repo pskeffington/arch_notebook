@@ -13,7 +13,7 @@ Arch Notebook is a local Rust desktop workbench for investigating relationship d
 
 The comparison export retains a readable `change` label and adds a boolean column for each change type, so spreadsheet filters and downstream tools can select exact regression categories.
 
-Comparison reports are written to a temporary sibling file and atomically replace the destination only after the full export succeeds.
+CSV/TSV and comparison reports are written to a temporary sibling file and atomically replace the destination only after the full export succeeds.
 
 Connections with a unique, stable `connection_id` are matched across snapshots by that ID. A query result with duplicate IDs is rejected so ambiguous rows cannot distort regression comparisons. Without an ID, the app uses a natural key from source, target, relationship, types, and direction; duplicate natural keys in one result are rejected, so include a unique ID when the source contains parallel connections with otherwise identical fields. During CSV or SQL ingestion, entities are reconciled by name, a unique compatible alias, and supplied type. This keeps a merged entity connected to its imported records on refresh; ambiguous aliases remain separate for analyst review. Same-name entities of different types remain distinct while generic entities can gain a type from later imports.
 
