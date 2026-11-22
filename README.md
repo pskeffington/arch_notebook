@@ -15,6 +15,8 @@ Connections with a unique, stable `connection_id` are matched across snapshots b
 
 SQLite databases open in read-only mode, and SQLite-classified writable statements are rejected before execution. The query cannot write to or create a database. The included `sample_connections.sql` creates fictional baseline/current records that demonstrate a removed connection and a confidence decline:
 
+CSV/TSV exports also refuse to replace a database used by a saved snapshot, automation job, or current SQL editor path.
+
 ```sh
 sqlite3 sample_connections.sqlite < sample_connections.sql
 cargo run --offline

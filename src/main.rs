@@ -2180,6 +2180,7 @@ impl App {
 
     fn export_delimited(&mut self) {
         let result = (|| -> Result<(), String> {
+            self.ensure_export_path_is_not_sql_source()?;
             let mut attribute_columns: Vec<(bool, String)> = Vec::new();
             let known_entities: HashSet<Uuid> =
                 self.case.entities.iter().map(|entity| entity.id).collect();
@@ -2419,6 +2420,7 @@ impl App {
             if self.export_path.trim().is_empty() {
                 return Err("export path cannot be empty".into());
             }
+            self.ensure_export_path_is_not_sql_source()?;
             let deltas = compare_snapshots(baseline, current);
             let mut writer = csv::WriterBuilder::new()
                 .delimiter(delimited_text_delimiter(&self.export_path))
@@ -2521,6 +2523,31 @@ impl App {
             ),
             Err(error) => format!("SQL COMPARISON EXPORT FAILED · {error}"),
         };
+    }
+
+    fn ensure_export_path_is_not_sql_source(&self) -> Result<(), String> {
+        let output_path = Path::new(self.export_path.trim());
+        let Ok(output_path) = fs::canonicalize(output_path) else {
+            return Ok(());
+        };
+        let path_matches =
+            |path: &str| fs::canonicalize(path).is_ok_and(|source_path| source_path == output_path);
+        let is_sql_source = self
+            .case
+            .snapshots
+            .iter()
+            .any(|snapshot| path_matches(&snapshot.database_path))
+            || self.case.automation_jobs.iter().any(|job| {
+                resolve_sqlite_database_path(&job.database_path, &self.case_path)
+                    .is_ok_and(|source_path| source_path == output_path)
+            })
+            || resolve_sqlite_database_path(&self.sql_path, &self.case_path)
+                .is_ok_and(|source_path| source_path == output_path);
+        if is_sql_source {
+            Err("export path matches an SQLite source database".into())
+        } else {
+            Ok(())
+        }
     }
 
     fn auto_layout(&mut self) {
@@ -4175,9 +4202,25 @@ impl eframe::App for App {
                         for i in 0..14 { let y=rect.top()+i as f32*48.0; p.line_segment([egui::pos2(rect.left(),y),egui::pos2(rect.right(),y)],(1.0,egui::Color32::from_rgb(24,38,49))); }
                         let center=|e:&Entity|{let base=egui::pos2(rect.left()+e.x*rect.width(),rect.top()+e.y*rect.height());rect.center()+(base-rect.center())*self.chart_zoom+self.chart_pan};
                         let link_lanes = link_lane_offsets(&self.case.links);
+                        let entity_indices: HashMap<Uuid, usize> = self
+                            .case
+                            .entities
+                            .iter()
+                            .enumerate()
+                            .map(|(index, entity)| (entity.id, index))
+                            .collect();
+                        let path_edges: HashSet<(Uuid, Uuid)> = self
+                            .path_result
+                            .windows(2)
+                            .map(|pair| (pair[0], pair[1]))
+                            .collect();
                         for (link_index, link) in self.case.links.iter().enumerate() {
-                            if let (Some(a),Some(b))=(self.case.entities.iter().find(|e|e.id==link.from),self.case.entities.iter().find(|e|e.id==link.to)) {
-                                let ca=center(a);let cb=center(b);let in_path=self.path_result.windows(2).any(|pair|(link.from==pair[0]&&link.to==pair[1])||(!link.directed&&link.from==pair[1]&&link.to==pair[0]));let col=if self.selected_link==Some(link_index){cyan}else if in_path{egui::Color32::from_rgb(236,174,83)}else{egui::Color32::from_rgb(72,104,120)};
+                            if let (Some(&a_index), Some(&b_index)) =
+                                (entity_indices.get(&link.from), entity_indices.get(&link.to))
+                            {
+                                let a = &self.case.entities[a_index];
+                                let b = &self.case.entities[b_index];
+                                let ca=center(a);let cb=center(b);let in_path=path_edges.contains(&(link.from,link.to))||(!link.directed&&path_edges.contains(&(link.to,link.from)));let col=if self.selected_link==Some(link_index){cyan}else if in_path{egui::Color32::from_rgb(236,174,83)}else{egui::Color32::from_rgb(72,104,120)};
                                 let points = connection_curve_points(
                                     ca,
                                     cb,
@@ -4217,7 +4260,7 @@ impl eframe::App for App {
                                 let timeline_rect=egui::Rect::from_min_size(rect.left_bottom()-egui::vec2(0.0,105.0),egui::vec2(rect.width(),105.0));
                                 let nearest=timeline_event_positions(&self.case.links,timeline_rect).into_iter().map(|(index,point)|(index,point.distance(pos))).min_by(|a,b|a.1.total_cmp(&b.1)).filter(|(_,distance)|*distance<20.0).map(|(index,_)|index);
                                 self.selected=None;self.selected_link=nearest;
-                            } else {let lanes=link_lane_offsets(&self.case.links);let nearest=self.case.links.iter().enumerate().filter_map(|(i,l)|{let a=self.case.entities.iter().find(|e|e.id==l.from)?;let b=self.case.entities.iter().find(|e|e.id==l.to)?;let points=connection_curve_points(center(a),center(b),lanes[i]*self.chart_zoom);Some((i,polyline_distance(pos,&points)))}).filter(|(_,d)|*d<10.0*self.chart_zoom).min_by(|a,b|a.1.total_cmp(&b.1)).filter(|(_,distance)|*distance<22.0*self.chart_zoom).map(|(i,_)|i);let entity=self.case.entities.iter().find(|e|center(e).distance(pos)<75.0*self.chart_zoom).map(|entity|entity.id);if let Some(index)=nearest{self.selected=None;self.selected_link=Some(index);}else if let Some(entity)=entity{self.selected=Some(entity);self.selected_link=None;}else{self.selected=None;self.selected_link=None;}}
+                            } else {let lanes=link_lane_offsets(&self.case.links);let nearest=self.case.links.iter().enumerate().filter_map(|(i,l)|{let a=self.case.entities.get(*entity_indices.get(&l.from)?)?;let b=self.case.entities.get(*entity_indices.get(&l.to)?)?;let points=connection_curve_points(center(a),center(b),lanes[i]*self.chart_zoom);Some((i,polyline_distance(pos,&points)))}).filter(|(_,d)|*d<10.0*self.chart_zoom).min_by(|a,b|a.1.total_cmp(&b.1)).filter(|(_,distance)|*distance<22.0*self.chart_zoom).map(|(i,_)|i);let entity=self.case.entities.iter().find(|e|center(e).distance(pos)<75.0*self.chart_zoom).map(|entity|entity.id);if let Some(index)=nearest{self.selected=None;self.selected_link=Some(index);}else if let Some(entity)=entity{self.selected=Some(entity);self.selected_link=None;}else{self.selected=None;self.selected_link=None;}}
                         } }
                         if response.drag_started() { if let Some(pos)=response.interact_pointer_pos(){if let Some(entity)=self.case.entities.iter().find(|e|center(e).distance(pos)<75.0*self.chart_zoom){self.selected=Some(entity.id);self.selected_link=None;}else{self.selected=None;self.chart_pan_origin=self.chart_pan;}} }
                         if response.dragged() { if let Some(pos)=response.interact_pointer_pos(){if let Some(id)=self.selected{if let Some(e)=self.case.entities.iter_mut().find(|e|e.id==id){let local=(pos-rect.center()-self.chart_pan)/self.chart_zoom+rect.size()*0.5;e.x=(local.x/rect.width()).clamp(0.05,0.95);e.y=(local.y/rect.height()).clamp(0.08,0.92);}}else{self.chart_pan=self.chart_pan_origin+response.drag_delta();}} }
