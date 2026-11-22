@@ -4457,6 +4457,19 @@ impl eframe::App for App {
                                 ui.add_space(8.0);ui.label(egui::RichText::new("JOBS").small().strong().color(cyan));
                                 let mut action: Option<(String,Uuid)> = None;
                                 for job in &mut self.case.automation_jobs {
+                                    let latest_run = self
+                                        .case
+                                        .automation_runs
+                                        .iter()
+                                        .rev()
+                                        .find(|run| run.job_id == job.id)
+                                        .map(|run| {
+                                            (
+                                                run.success,
+                                                run.finished_at.clone(),
+                                                run.message.clone(),
+                                            )
+                                        });
                                     ui.horizontal(|ui| {
                                         ui.checkbox(&mut job.enabled, "");
                                         ui.label(format!("{} · {} · {} · min {} · max regressions {} · max skipped rows {}",job.name,job.series,job.database_path,job.minimum_connections,job.maximum_regressions.map(|value|value.to_string()).unwrap_or_else(||"unlimited".into()),job.maximum_skipped_rows.map(|value|value.to_string()).unwrap_or_else(||"unlimited".into())));
@@ -4465,6 +4478,15 @@ impl eframe::App for App {
                                         if ui.small_button("Run and save").clicked(){action=Some(("run".into(),job.id));}
                                         if ui.small_button("Delete").clicked(){action=Some(("delete".into(),job.id));}
                                     });
+                                    if let Some((success, finished_at, message)) = latest_run {
+                                        let result = if success { "PASS" } else { "FAIL" };
+                                        ui.colored_label(
+                                            if success { egui::Color32::from_rgb(102, 190, 146) } else { egui::Color32::from_rgb(222, 112, 104) },
+                                            egui::RichText::new(format!("LAST RUN · {result} · {finished_at}")).small(),
+                                        ).on_hover_text(message);
+                                    } else {
+                                        ui.label(egui::RichText::new("LAST RUN · NEVER RUN").small().color(muted));
+                                    }
                                     egui::CollapsingHeader::new("SQL query and capture configuration")
                                         .id_salt(("automation_job_query", job.id))
                                         .show(ui, |ui| {
