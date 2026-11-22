@@ -127,7 +127,7 @@ Validation leaves the case unchanged. Rerun saves a new run and snapshot, leaves
 
 To resume the same batch after an interruption, add `--skip-recent-success` to `--run-enabled-jobs`. A job is skipped only when its newest recorded run for the exact current database path, series, SQL query, parameters, and limits succeeded. A changed configuration, missing historical configuration, or latest failure runs again. Skips are reported separately in JSON (`skipped_jobs`) with their effective SQL configuration, prior run ID, and duration; they do not add snapshots, run history, or rewrite the case when every selected job is skipped. Omit this flag for regular scheduled captures so each invocation reads fresh source data.
 
-Run history is bounded to the latest 200 records. Each run retains the job configuration and SQL query used, including failures, so later job edits or deletion do not erase the run context; expand a row in the desktop history to inspect it. Older runs that predate this configuration capture are labeled as such rather than showing default values as if they were recorded settings. Successful runs include a comparison with the previous snapshot in the same database and series; the history records removed connections, confidence declines, date changes, additions, confidence increases, and other updates. Each snapshot has a stable ID, and automation run records link directly to it; older cases migrate those links from their saved snapshot indices when loaded. In the desktop app, use **Review snapshot #N** beside a run or select any numbered capture in **Snapshot history** to compare it with the preceding capture in that series; the capture number disambiguates runs recorded within the same clock interval. Batch summaries report passed and failed job counts. The runner continues through the selected jobs if one fails, saves each outcome, and exits nonzero when any job fails.
+Run history is bounded to the latest 200 records. Each run retains the job configuration and SQL query used, including failures, so later job edits or deletion do not erase the run context; expand a row in the desktop history to inspect it. Select **Replay saved configuration** to run that exact saved SQL, parameters, and thresholds against the current SQLite source; replay appends a new run and snapshot without changing the job definition. Older runs that predate this configuration capture are labeled as such rather than showing default values as if they were recorded settings. Successful runs include a comparison with the previous snapshot in the same database and series; the history records removed connections, confidence declines, date changes, additions, confidence increases, and other updates. Each snapshot has a stable ID, and automation run records link directly to it; older cases migrate those links from their saved snapshot indices when loaded. In the desktop app, use **Review snapshot #N** beside a run or select any numbered capture in **Snapshot history** to compare it with the preceding capture in that series; the capture number disambiguates runs recorded within the same clock interval. Batch summaries report passed and failed job counts. The runner continues through the selected jobs if one fails, saves each outcome, and exits nonzero when any job fails.
 
 On Arch Linux with systemd, copy the example user units installed with the package and edit the case path in the service if needed. From a source checkout, use the corresponding files under `packaging/systemd/` instead:
 
@@ -173,6 +173,23 @@ makepkg -si
 ```
 
 The package includes the desktop menu entry and declares its shared-library dependencies. `makepkg` downloads the locked Cargo dependencies and builds the release binary for the host architecture.
+
+### Generic Linux desktop archive
+
+For a Linux distribution without an Arch package, download the matching `arch-notebook-linux-x86_64.tar.gz` or `arch-notebook-linux-aarch64.tar.gz` workflow/release artifact, then install it for the current user without `sudo`:
+
+```sh
+case "$(uname -m)" in
+  x86_64) archive_arch=x86_64 ;;
+  aarch64|arm64) archive_arch=aarch64 ;;
+  *) echo "Unsupported Linux architecture: $(uname -m)" >&2; exit 1 ;;
+esac
+archive_dir=arch-notebook-linux-$archive_arch
+tar -xzf "$archive_dir.tar.gz"
+scripts/install-linux-user.sh "$archive_dir"
+```
+
+The installer puts the executable in `~/.local/bin` and the desktop launcher under `${XDG_DATA_HOME:-~/.local/share}/applications`. Add `~/.local/bin` to `PATH` to launch it from a terminal. To remove this user installation, delete `~/.local/bin/arch-notebook` and `${XDG_DATA_HOME:-$HOME/.local/share}/applications/arch-notebook.desktop`; case files and SQL databases are kept separately.
 
 ### macOS
 

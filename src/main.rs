@@ -2425,6 +2425,32 @@ impl App {
         self.execute_automation_job(job)
     }
 
+    fn replay_saved_automation_run(&mut self, run_id: Uuid) {
+        let Some(prior_run) = self
+            .case
+            .automation_runs
+            .iter()
+            .find(|run| run.id == run_id)
+            .cloned()
+        else {
+            self.status = "SAVED AUTOMATION RUN NOT FOUND".into();
+            return;
+        };
+        let job = match automation_job_from_run(&prior_run) {
+            Ok(job) => job,
+            Err(error) => {
+                self.status = format!("AUTOMATION REPLAY FAILED · {error}");
+                return;
+            }
+        };
+        let (passed, _) = self.execute_automation_job(&job);
+        self.save_automation_results(&format!(
+            "AUTOMATION REPLAY {} · {}",
+            if passed { "PASSED" } else { "FAILED" },
+            prior_run.job_name
+        ));
+    }
+
     fn execute_automation_job(&mut self, job: &AutomationJob) -> (bool, String) {
         let elapsed = Instant::now();
         let started_at = epoch_timestamp();
@@ -5076,6 +5102,7 @@ impl eframe::App for App {
                                 if let Some((verb,id))=action {match verb.as_str(){"validate"=>{self.validate_automation_job(id);},"edit"=>self.edit_automation_job(id),"run"=>{let job_name=self.case.automation_jobs.iter().find(|job|job.id==id).map(|job|job.name.clone()).unwrap_or_else(||"(missing job)".into());let passed=self.run_automation_job(id);let summary=format!("JOB RUN {} · {job_name}",if passed{"PASSED"}else{"FAILED"});self.save_automation_results(&summary);},"delete"=>{if self.editing_automation_job==Some(id){self.cancel_automation_job_edit();}self.case.automation_jobs.retain(|job|job.id!=id);self.status="AUTOMATION JOB DELETED".into();},_=>{}}}
                                 ui.add_space(8.0);ui.label(egui::RichText::new("RUN HISTORY · newest first").small().strong().color(cyan));
                                 let mut review_snapshot = None;
+                                let mut replay_run = None;
                                 egui::ScrollArea::vertical().max_height(210.0).show(ui, |ui| {
                                     for run in self.case.automation_runs.iter().rev() {
                                         let result = if run.success { "PASS" } else { "FAIL" };
@@ -5126,6 +5153,11 @@ impl eframe::App for App {
                                                         .interactive(false),
                                                 );
                                             }
+                                            if run.configuration_recorded
+                                                && ui.small_button("Replay saved configuration").clicked()
+                                            {
+                                                replay_run = Some(run.id);
+                                            }
                                             let snapshot_index = run
                                                 .snapshot_id
                                                 .and_then(|id| {
@@ -5142,6 +5174,9 @@ impl eframe::App for App {
                                         });
                                     }
                                 });
+                                if let Some(run_id) = replay_run {
+                                    self.replay_saved_automation_run(run_id);
+                                }
                                 if let Some(index)=review_snapshot {self.sql_snapshot_source=Some(self.case.snapshots[index].source_key.clone());self.sql_snapshot_index=Some(index);self.data_mode=DataMode::SqlRegressions;}
                                 return;
                             }
