@@ -125,6 +125,8 @@ struct AutomationJob {
     #[serde(default)]
     minimum_connections: usize,
     #[serde(default)]
+    maximum_connections: Option<usize>,
+    #[serde(default)]
     maximum_regressions: Option<usize>,
     #[serde(default)]
     maximum_skipped_rows: Option<usize>,
@@ -146,6 +148,8 @@ struct AutomationRun {
     parameters: Vec<(String, String)>,
     #[serde(default)]
     minimum_connections: usize,
+    #[serde(default)]
+    maximum_connections: Option<usize>,
     #[serde(default)]
     maximum_regressions: Option<usize>,
     #[serde(default)]
@@ -210,6 +214,8 @@ struct App {
     chart_focus: Option<Uuid>,
     chart_focus_link: Option<usize>,
     chart_fit_path: Option<Vec<Uuid>>,
+    chart_focus_group: Option<HashSet<Uuid>>,
+    network_groups: Option<std::sync::Arc<Vec<Vec<Uuid>>>>,
     new_link_from: Option<Uuid>,
     new_link_to: Option<Uuid>,
     import_path: String,
@@ -257,6 +263,7 @@ struct App {
     sql_source_focus: Option<String>,
     automation_job_name: String,
     automation_minimum_connections: usize,
+    automation_maximum_connections: Option<usize>,
     automation_maximum_regressions: Option<usize>,
     automation_maximum_skipped_rows: Option<usize>,
     editing_automation_job: Option<Uuid>,
@@ -267,6 +274,7 @@ struct App {
         String,
         String,
         usize,
+        Option<usize>,
         Option<usize>,
         Option<usize>,
     )>,
@@ -494,6 +502,8 @@ impl Default for App {
             chart_focus: None,
             chart_focus_link: None,
             chart_fit_path: None,
+            chart_focus_group: None,
+            network_groups: None,
             new_link_from: None,
             new_link_to: None,
             import_path: data_dir.join("sample_relationships.csv").to_string_lossy().into_owned(),
@@ -544,6 +554,7 @@ impl Default for App {
             sql_source_focus: None,
             automation_job_name: String::new(),
             automation_minimum_connections: 0,
+            automation_maximum_connections: None,
             automation_maximum_regressions: None,
             automation_maximum_skipped_rows: None,
             editing_automation_job: None,
@@ -738,6 +749,11 @@ fn demo_case() -> CaseFile {
 }
 
 impl App {
+    fn invalidate_network_groups(&mut self) {
+        self.network_groups = None;
+        self.chart_focus_group = None;
+    }
+
     fn automation_context(case: CaseFile, case_path: &str) -> Self {
         let saved_case_json = serde_json::to_string(&case).ok();
         Self {
@@ -752,6 +768,8 @@ impl App {
             chart_focus: None,
             chart_focus_link: None,
             chart_fit_path: None,
+            chart_focus_group: None,
+            network_groups: None,
             new_link_from: None,
             new_link_to: None,
             import_path: String::new(),
@@ -799,6 +817,7 @@ impl App {
             sql_source_focus: None,
             automation_job_name: String::new(),
             automation_minimum_connections: 0,
+            automation_maximum_connections: None,
             automation_maximum_regressions: None,
             automation_maximum_skipped_rows: None,
             editing_automation_job: None,
@@ -887,6 +906,7 @@ impl App {
             Ok((mut c, disk_case_json)) => {
                 normalize_snapshot_database_paths(&mut c, &requested_path);
                 self.case = c;
+                self.network_groups = None;
                 self.case_path = requested_path.clone();
                 self.case_path_input = requested_path;
                 self.disk_case_json = Some(disk_case_json);
@@ -907,6 +927,7 @@ impl App {
                 self.chart_focus = None;
                 self.chart_focus_link = None;
                 self.chart_fit_path = None;
+                self.chart_focus_group = None;
                 self.selected = None;
                 self.selected_link = None;
                 self.path_result.clear();
@@ -1807,6 +1828,7 @@ impl App {
             Ok((created, updated, skipped, entities, links)) => {
                 self.case.entities = entities;
                 self.case.links = links;
+                self.invalidate_network_groups();
                 self.path_result.clear();
                 self.duplicate_candidates.clear();
                 self.merge_candidate = None;
@@ -2149,6 +2171,7 @@ impl App {
                     .and_then(|selected| refreshed_link_index(&links, selected));
                 self.case.entities = entities;
                 self.case.links = links;
+                self.invalidate_network_groups();
                 self.case.snapshots.push(snapshot);
                 self.sql_snapshot_index = Some(self.case.snapshots.len() - 1);
                 self.path_result.clear();
@@ -2290,6 +2313,7 @@ impl App {
                 job.query = self.sql_query.trim().into();
                 job.parameters = parameters;
                 job.minimum_connections = self.automation_minimum_connections;
+                job.maximum_connections = self.automation_maximum_connections;
                 job.maximum_regressions = self.automation_maximum_regressions;
                 job.maximum_skipped_rows = self.automation_maximum_skipped_rows;
                 self.editing_automation_job = None;
@@ -2309,6 +2333,7 @@ impl App {
             parameters,
             enabled: true,
             minimum_connections: self.automation_minimum_connections,
+            maximum_connections: self.automation_maximum_connections,
             maximum_regressions: self.automation_maximum_regressions,
             maximum_skipped_rows: self.automation_maximum_skipped_rows,
         });
@@ -2390,6 +2415,13 @@ impl App {
                 }
                 None => String::new(),
             };
+            let maximum_connection_threshold = match self.automation_maximum_connections {
+                Some(maximum) if count > maximum => {
+                    format!(" · CONNECTION LIMIT EXCEEDED ({count}; MAXIMUM {maximum})")
+                }
+                Some(maximum) => format!(" · CONNECTION LIMIT MET ({count}; MAXIMUM {maximum})"),
+                None => String::new(),
+            };
             let threshold = if count < self.automation_minimum_connections {
                 format!(
                     " · BELOW MINIMUM ({} REQUIRED)",
@@ -2416,6 +2448,7 @@ impl App {
                 regression_count,
                 skipped_rows,
                 self.automation_minimum_connections,
+                self.automation_maximum_connections,
                 self.automation_maximum_regressions,
                 self.automation_maximum_skipped_rows,
             );
@@ -2425,7 +2458,7 @@ impl App {
                 "SQL QUERY LIMITS FAILED"
             };
             format!(
-                "{validation_result} · {count} CONNECTIONS{skipped}{skipped_row_threshold}{threshold}{regression_threshold} · CASE UNCHANGED"
+                "{validation_result} · {count} CONNECTIONS{maximum_connection_threshold}{skipped}{skipped_row_threshold}{threshold}{regression_threshold} · CASE UNCHANGED"
             )
         } else {
             self.status
@@ -2535,6 +2568,7 @@ impl App {
                 self.sql_query.clone(),
                 self.sql_parameter_text.clone(),
                 self.automation_minimum_connections,
+                self.automation_maximum_connections,
                 self.automation_maximum_regressions,
                 self.automation_maximum_skipped_rows,
             ));
@@ -2544,6 +2578,7 @@ impl App {
             self.sql_query = job.query;
             self.sql_parameter_text = format_sql_parameters(&job.parameters);
             self.automation_minimum_connections = job.minimum_connections;
+            self.automation_maximum_connections = job.maximum_connections;
             self.automation_maximum_regressions = job.maximum_regressions;
             self.automation_maximum_skipped_rows = job.maximum_skipped_rows;
             self.editing_automation_job = Some(id);
@@ -2560,6 +2595,7 @@ impl App {
             query,
             parameter_text,
             minimum,
+            maximum_connections,
             maximum_regressions,
             maximum_skipped_rows,
         )) = self.automation_editor_before_edit.take()
@@ -2570,6 +2606,7 @@ impl App {
             self.sql_query = query;
             self.sql_parameter_text = parameter_text;
             self.automation_minimum_connections = minimum;
+            self.automation_maximum_connections = maximum_connections;
             self.automation_maximum_regressions = maximum_regressions;
             self.automation_maximum_skipped_rows = maximum_skipped_rows;
         }
@@ -2621,6 +2658,7 @@ impl App {
             self.sql_query.clone(),
             self.sql_parameter_text.clone(),
             self.automation_minimum_connections,
+            self.automation_maximum_connections,
             self.automation_maximum_regressions,
             self.automation_maximum_skipped_rows,
             self.editing_automation_job,
@@ -2630,6 +2668,7 @@ impl App {
         self.sql_query = job.query;
         self.sql_parameter_text = format_sql_parameters(&job.parameters);
         self.automation_minimum_connections = job.minimum_connections;
+        self.automation_maximum_connections = job.maximum_connections;
         self.automation_maximum_regressions = job.maximum_regressions;
         self.automation_maximum_skipped_rows = job.maximum_skipped_rows;
         self.editing_automation_job = Some(id);
@@ -2640,6 +2679,7 @@ impl App {
             self.sql_query,
             self.sql_parameter_text,
             self.automation_minimum_connections,
+            self.automation_maximum_connections,
             self.automation_maximum_regressions,
             self.automation_maximum_skipped_rows,
             self.editing_automation_job,
@@ -2738,6 +2778,14 @@ impl App {
                     self.status, count, job.minimum_connections
                 );
             }
+            if let Some(maximum) = job.maximum_connections {
+                let limit_status = if count > maximum {
+                    format!("CONNECTION LIMIT EXCEEDED ({count}; MAXIMUM {maximum})")
+                } else {
+                    format!("CONNECTION LIMIT MET ({count}; MAXIMUM {maximum})")
+                };
+                self.status = format!("{} · {limit_status}", self.status);
+            }
             if let Some(maximum) = job.maximum_regressions
                 && regression_count > maximum
             {
@@ -2769,6 +2817,7 @@ impl App {
                 regression_count,
                 skipped_rows,
                 job.minimum_connections,
+                job.maximum_connections,
                 job.maximum_regressions,
                 job.maximum_skipped_rows,
             );
@@ -2806,6 +2855,7 @@ impl App {
             query: job.query.clone(),
             parameters: job.parameters.clone(),
             minimum_connections: job.minimum_connections,
+            maximum_connections: job.maximum_connections,
             maximum_regressions: job.maximum_regressions,
             maximum_skipped_rows: job.maximum_skipped_rows,
             enabled: job.enabled,
@@ -3516,6 +3566,7 @@ impl App {
     }
 
     fn auto_layout(&mut self) {
+        self.chart_focus_group = None;
         let n = self.case.entities.len();
         if n == 0 {
             return;
@@ -3666,6 +3717,7 @@ impl App {
         self.chart_focus = None;
         self.chart_focus_link = None;
         self.chart_fit_path = None;
+        self.chart_focus_group = None;
         let layout_label = match self.layout_mode {
             LayoutMode::Connectivity => "LAYOUT ARRANGED BY CONNECTIVITY",
             LayoutMode::Hierarchy => "LAYOUT ARRANGED BY CONNECTION DEPTH",
@@ -3683,12 +3735,14 @@ impl App {
         if let Some(id) = self.selected.take() {
             self.case.entities.retain(|e| e.id != id);
             self.case.links.retain(|l| l.from != id && l.to != id);
+            self.invalidate_network_groups();
             self.selected_link = None;
             self.path_result.clear();
             self.status = "ENTITY AND ITS RELATIONSHIPS REMOVED".into();
         } else if let Some(i) = self.selected_link.take() {
             if i < self.case.links.len() {
                 self.case.links.remove(i);
+                self.invalidate_network_groups();
                 self.status = "RELATIONSHIP REMOVED".into();
             } else {
                 self.status = "RELATIONSHIP NO LONGER EXISTS".into();
@@ -3711,6 +3765,8 @@ impl App {
             automation_runs: Vec::new(),
             import_specifications: Vec::new(),
         };
+        self.network_groups = None;
+        self.chart_focus_group = None;
         self.sql_snapshot_source = None;
         self.sql_snapshot_index = None;
         self.sql_source_focus = None;
@@ -3726,6 +3782,7 @@ impl App {
         self.chart_focus = None;
         self.chart_focus_link = None;
         self.chart_fit_path = None;
+        self.chart_focus_group = None;
         self.case_path = app_data_dir()
             .join("untitled.case.json")
             .to_string_lossy()
@@ -3743,6 +3800,7 @@ impl App {
     }
 
     fn analyze_path(&mut self) {
+        self.chart_focus_group = None;
         let Some(start) = self.path_start else {
             self.status = "CHOOSE A START ENTITY".into();
             return;
@@ -3770,6 +3828,7 @@ impl App {
     }
 
     fn merge_candidate_into_first(&mut self) {
+        self.invalidate_network_groups();
         let Some((keep_id, remove_id)) = self.merge_candidate else {
             return;
         };
@@ -3894,6 +3953,7 @@ impl App {
         self.selected = Some(keep_id);
         self.selected_link = None;
         self.chart_focus = Some(keep_id);
+        self.chart_focus_group = None;
         self.merge_candidate = None;
         self.duplicate_candidates.clear();
         self.status = format!(
@@ -4429,6 +4489,64 @@ fn connected_entity_counts(case: &CaseFile) -> HashMap<Uuid, usize> {
         .collect()
 }
 
+fn connected_components(case: &CaseFile) -> Vec<Vec<Uuid>> {
+    let names: HashMap<Uuid, String> = case
+        .entities
+        .iter()
+        .map(|entity| (entity.id, entity.name.to_lowercase()))
+        .collect();
+    let mut adjacency: HashMap<Uuid, Vec<Uuid>> = case
+        .entities
+        .iter()
+        .map(|entity| (entity.id, Vec::new()))
+        .collect();
+    for link in &case.links {
+        if link.from == link.to
+            || !adjacency.contains_key(&link.from)
+            || !adjacency.contains_key(&link.to)
+        {
+            continue;
+        }
+        adjacency.entry(link.from).or_default().push(link.to);
+        adjacency.entry(link.to).or_default().push(link.from);
+    }
+    for neighbors in adjacency.values_mut() {
+        neighbors.sort_by(|a, b| names.get(a).cmp(&names.get(b)).then_with(|| a.cmp(b)));
+        neighbors.dedup();
+    }
+
+    let mut seeds: Vec<Uuid> = case.entities.iter().map(|entity| entity.id).collect();
+    seeds.sort_by(|a, b| names.get(a).cmp(&names.get(b)).then_with(|| a.cmp(b)));
+    let mut visited = HashSet::new();
+    let mut groups = Vec::new();
+    for seed in seeds {
+        if !visited.insert(seed) {
+            continue;
+        }
+        let mut queue = VecDeque::from([seed]);
+        let mut group = Vec::new();
+        while let Some(entity) = queue.pop_front() {
+            group.push(entity);
+            if let Some(neighbors) = adjacency.get(&entity) {
+                for neighbor in neighbors {
+                    if visited.insert(*neighbor) {
+                        queue.push_back(*neighbor);
+                    }
+                }
+            }
+        }
+        group.sort_by(|a, b| names.get(a).cmp(&names.get(b)).then_with(|| a.cmp(b)));
+        groups.push(group);
+    }
+    groups.sort_by(|a, b| {
+        b.len()
+            .cmp(&a.len())
+            .then_with(|| names.get(&a[0]).cmp(&names.get(&b[0])))
+            .then_with(|| a[0].cmp(&b[0]))
+    });
+    groups
+}
+
 fn refreshed_link_index(links: &[Link], selected: &Link) -> Option<usize> {
     if !selected.connection_id.is_empty() {
         return links.iter().position(|link| {
@@ -4907,10 +5025,12 @@ fn automation_limits_pass(
     regressions: usize,
     skipped_rows: usize,
     minimum_connections: usize,
+    maximum_connections: Option<usize>,
     maximum_regressions: Option<usize>,
     maximum_skipped_rows: Option<usize>,
 ) -> bool {
     connections >= minimum_connections
+        && maximum_connections.is_none_or(|maximum| connections <= maximum)
         && maximum_regressions.is_none_or(|maximum| regressions <= maximum)
         && maximum_skipped_rows.is_none_or(|maximum| skipped_rows <= maximum)
 }
@@ -5057,6 +5177,7 @@ fn automation_outcome_json(
         "connection_count": connection_count,
         "skipped_rows": skipped_rows,
         "minimum_connections": job.minimum_connections,
+        "maximum_connections": job.maximum_connections,
         "maximum_regressions": job.maximum_regressions,
         "maximum_skipped_rows": job.maximum_skipped_rows,
         "query": job.query,
@@ -5066,6 +5187,11 @@ fn automation_outcome_json(
                 "required": job.minimum_connections,
                 "observed": connection_count,
                 "passed": connection_count.map(|count| count >= job.minimum_connections)
+            },
+            "maximum_connections": {
+                "limit": job.maximum_connections,
+                "observed": connection_count,
+                "passed": connection_count.map(|count| job.maximum_connections.is_none_or(|limit| count <= limit))
             },
             "maximum_regressions": {
                 "limit": job.maximum_regressions,
@@ -5201,10 +5327,12 @@ impl eframe::App for App {
                 self.chart_focus = None;
                 self.chart_focus_link = None;
                 self.chart_fit_path = None;
+                self.chart_focus_group = None;
             }
         }
 
         let connected_counts = connected_entity_counts(&self.case);
+        let network_groups = self.network_groups.clone();
         let bg = egui::Color32::from_rgb(12, 19, 27);
         let panel = egui::Color32::from_rgb(18, 28, 39);
         let muted = egui::Color32::from_rgb(125, 148, 166);
@@ -5237,6 +5365,7 @@ impl eframe::App for App {
                     if ui.button("＋ Entity").clicked() {
                         let item=Entity { id:Uuid::new_v4(),name:"New entity".into(),kind:"PERSON".into(),detail:"Add an analyst note".into(),attributes:Vec::new(),aliases:Vec::new(),external_ids:Vec::new(),merged_records:Vec::new(),x:0.5,y:0.5,position_locked:false,color:[55,128,162] };
                         self.selected=Some(item.id); self.selected_link=None; self.case.entities.push(item);self.duplicate_candidates.clear();
+                        self.invalidate_network_groups();
                     }
                     let link_entities: Vec<(Uuid, String)> = self
                         .case
@@ -5311,6 +5440,7 @@ impl eframe::App for App {
                                     source_reference: String::new(),
                                     ingest_source: None,
                                 });
+                                self.invalidate_network_groups();
                                 self.selected = None;
                                 self.selected_link = Some(self.case.links.len() - 1);
                                 self.duplicate_candidates.clear();
@@ -5342,9 +5472,9 @@ impl eframe::App for App {
                             ui.selectable_value(&mut self.layout_mode, LayoutMode::Grid, "Grid");
                         });
                     if ui.button("Arrange chart").clicked(){self.auto_layout();}
-                    if self.page==WorkspacePage::Chart {if ui.add_enabled(!self.case.entities.is_empty(),egui::Button::new("Fit all")).clicked(){self.chart_fit_path=Some(self.case.entities.iter().map(|entity|entity.id).collect());self.chart_focus=None;self.chart_focus_link=None;}if ui.small_button("−").clicked(){self.chart_zoom=(self.chart_zoom/1.2).clamp(0.25,3.0);}ui.label(format!("{:.0}%",self.chart_zoom*100.0));if ui.small_button("＋").clicked(){self.chart_zoom=(self.chart_zoom*1.2).clamp(0.25,3.0);}if ui.button("Reset view").clicked(){self.chart_zoom=1.0;self.chart_pan=egui::Vec2::ZERO;self.chart_focus=None;self.chart_focus_link=None;self.chart_fit_path=None;}}
+                    if self.page==WorkspacePage::Chart {if ui.add_enabled(!self.case.entities.is_empty(),egui::Button::new("Fit all")).clicked(){self.chart_fit_path=Some(self.case.entities.iter().map(|entity|entity.id).collect());self.chart_focus=None;self.chart_focus_link=None;self.chart_focus_group=None;}if ui.small_button("−").clicked(){self.chart_zoom=(self.chart_zoom/1.2).clamp(0.25,3.0);}ui.label(format!("{:.0}%",self.chart_zoom*100.0));if ui.small_button("＋").clicked(){self.chart_zoom=(self.chart_zoom*1.2).clamp(0.25,3.0);}if ui.button("Reset view").clicked(){self.chart_zoom=1.0;self.chart_pan=egui::Vec2::ZERO;self.chart_focus=None;self.chart_focus_link=None;self.chart_fit_path=None;self.chart_focus_group=None;}}
                     if self.page==WorkspacePage::Chart && self.sql_source_focus.is_some() {ui.label(egui::RichText::new("SOURCE HIGHLIGHT").small().color(cyan));if ui.small_button("Clear source").clicked(){self.sql_source_focus=None;}}
-                    if self.page==WorkspacePage::Data && (self.selected.is_some() || self.selected_link.is_some()) && ui.button("View on chart").clicked(){self.chart_focus=self.selected;self.chart_focus_link=self.selected_link;self.page=WorkspacePage::Chart;self.show_timeline=false;}
+                    if self.page==WorkspacePage::Data && (self.selected.is_some() || self.selected_link.is_some()) && ui.button("View on chart").clicked(){self.chart_focus=self.selected;self.chart_focus_link=self.selected_link;self.chart_focus_group=None;self.page=WorkspacePage::Chart;self.show_timeline=false;}
                     if self.selected.is_some() || self.selected_link.is_some() {if ui.button("Delete selected").clicked(){self.delete_selected();}}
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| { ui.label(egui::RichText::new(&self.status).small().color(muted)); });
                 }).response;
@@ -5394,6 +5524,16 @@ impl eframe::App for App {
                                 ui.label(egui::RichText::new("Jobs are saved in this case file. Run them here or from a script with the command-line runner.").small().color(muted));
                                 ui.horizontal(|ui|{ui.label("Job name");ui.add(egui::TextEdit::singleline(&mut self.automation_job_name).desired_width(220.0));ui.label("Database");ui.add(egui::TextEdit::singleline(&mut self.sql_path).hint_text("Relative to case file").desired_width(220.0));});
                                 ui.horizontal(|ui|{ui.label("Snapshot series");ui.add(egui::TextEdit::singleline(&mut self.sql_series).desired_width(220.0));ui.label("Minimum connections");ui.add(egui::DragValue::new(&mut self.automation_minimum_connections).range(0..=1_000_000));});
+                                ui.horizontal(|ui| {
+                                    let mut limit_connections = self.automation_maximum_connections.is_some();
+                                    if ui.checkbox(&mut limit_connections, "Limit connections").changed() {
+                                        self.automation_maximum_connections = limit_connections.then_some(0);
+                                    }
+                                    if let Some(maximum) = self.automation_maximum_connections.as_mut() {
+                                        ui.label("Maximum captured connections");
+                                        ui.add(egui::DragValue::new(maximum).range(0..=1_000_000));
+                                    }
+                                });
                                 ui.horizontal(|ui| {
                                     let mut limit_skipped_rows =
                                         self.automation_maximum_skipped_rows.is_some();
@@ -5498,7 +5638,7 @@ impl eframe::App for App {
                                         });
                                     ui.horizontal(|ui| {
                                         ui.checkbox(&mut job.enabled, "");
-                                        ui.label(format!("{} · {} · {} · min {} · max regressions {} · max skipped rows {}",job.name,job.series,job.database_path,job.minimum_connections,job.maximum_regressions.map(|value|value.to_string()).unwrap_or_else(||"unlimited".into()),job.maximum_skipped_rows.map(|value|value.to_string()).unwrap_or_else(||"unlimited".into())));
+                                        ui.label(format!("{} · {} · {} · min {} · max connections {} · max regressions {} · max skipped rows {}",job.name,job.series,job.database_path,job.minimum_connections,job.maximum_connections.map(|value|value.to_string()).unwrap_or_else(||"unlimited".into()),job.maximum_regressions.map(|value|value.to_string()).unwrap_or_else(||"unlimited".into()),job.maximum_skipped_rows.map(|value|value.to_string()).unwrap_or_else(||"unlimited".into())));
                                         if ui.small_button("Validate").clicked(){action=Some(("validate".into(),job.id));}
                                         if ui.small_button("Edit").clicked(){action=Some(("edit".into(),job.id));}
                                         if ui.small_button("Run and save").clicked(){action=Some(("run".into(),job.id));}
@@ -5564,8 +5704,9 @@ impl eframe::App for App {
                                             ui.label(&run.message);
                                             if run.configuration_recorded {
                                                 ui.label(format!(
-                                                    "Minimum {} connections · maximum regressions {} · maximum skipped rows {} · job {}",
+                                                    "Minimum {} connections · maximum connections {} · maximum regressions {} · maximum skipped rows {} · job {}",
                                                     run.minimum_connections,
+                                                    run.maximum_connections.map(|value|value.to_string()).unwrap_or_else(||"unlimited".into()),
                                                     run.maximum_regressions.map(|value|value.to_string()).unwrap_or_else(||"unlimited".into()),
                                                     run.maximum_skipped_rows.map(|value|value.to_string()).unwrap_or_else(||"unlimited".into()),
                                                     if run.enabled { "enabled" } else { "disabled" }
@@ -5720,6 +5861,7 @@ impl eframe::App for App {
                                     ui.horizontal(|ui| {
                                         if ui.small_button("Highlight source on chart").clicked() {
                                             self.sql_source_focus = Some(current.source_key.clone());
+                                            self.chart_focus_group = None;
                                             let mut source_entities: Vec<Uuid> = self
                                                 .case
                                                 .links
@@ -5997,13 +6139,14 @@ impl eframe::App for App {
                             .flat_map(|link| [link.from, link.to])
                             .collect();
                         let has_source_focus = self.sql_source_focus.is_some();
+                        let has_group_focus = self.chart_focus_group.is_some();
                         for (link_index, link) in self.case.links.iter().enumerate() {
                             if let (Some(&a_index), Some(&b_index)) =
                                 (entity_indices.get(&link.from), entity_indices.get(&link.to))
                             {
                                 let a = &self.case.entities[a_index];
                                 let b = &self.case.entities[b_index];
-                                let ca=center(a);let cb=center(b);let in_path=path_edges.contains(&(link.from,link.to))||(!link.directed&&path_edges.contains(&(link.to,link.from)));let in_source=self.sql_source_focus.as_deref()==link.ingest_source.as_deref();let col=if self.selected_link==Some(link_index){cyan}else if in_path{egui::Color32::from_rgb(236,174,83)}else if in_source{egui::Color32::from_rgb(91,190,178)}else if has_source_focus{egui::Color32::from_rgb(35,52,63)}else{egui::Color32::from_rgb(72,104,120)};
+                                let ca=center(a);let cb=center(b);let in_path=path_edges.contains(&(link.from,link.to))||(!link.directed&&path_edges.contains(&(link.to,link.from)));let in_source=self.sql_source_focus.as_deref()==link.ingest_source.as_deref();let in_group=self.chart_focus_group.as_ref().is_some_and(|group|group.contains(&link.from)&&group.contains(&link.to));let col=if self.selected_link==Some(link_index){cyan}else if in_path{egui::Color32::from_rgb(236,174,83)}else if in_source{egui::Color32::from_rgb(91,190,178)}else if in_group{egui::Color32::from_rgb(161,132,218)}else if has_source_focus||has_group_focus{egui::Color32::from_rgb(35,52,63)}else{egui::Color32::from_rgb(72,104,120)};
                                 let points = connection_curve_points(
                                     ca,
                                     cb,
@@ -6026,14 +6169,14 @@ impl eframe::App for App {
                                 }
                                 let mid=points[points.len()/2]; let label_rect=egui::Rect::from_center_size(mid,egui::vec2(110.0,18.0)*self.chart_zoom);
                                 p.rect_filled(label_rect,3.0,if self.selected_link==Some(link_index){egui::Color32::from_rgb(34,61,70)}else{egui::Color32::from_rgb(19,31,41)});
-                                p.text(mid,egui::Align2::CENTER_CENTER,&link.label,egui::FontId::proportional(9.0*self.chart_zoom),if in_source{cyan}else if has_source_focus{egui::Color32::from_rgb(65,78,87)}else{muted});
+                                p.text(mid,egui::Align2::CENTER_CENTER,&link.label,egui::FontId::proportional(9.0*self.chart_zoom),if in_source{cyan}else if in_group{egui::Color32::from_rgb(190,169,227)}else if has_source_focus||has_group_focus{egui::Color32::from_rgb(65,78,87)}else{muted});
                             }
                         }
                         for e in &self.case.entities {
                             let c=center(e); let fill=egui::Color32::from_rgb(e.color[0],e.color[1],e.color[2]);
                             let r=egui::Rect::from_center_size(c,egui::vec2(142.0,56.0)*self.chart_zoom);
                             let picked=self.selected==Some(e.id);
-                            let on_path=path_entities.contains(&e.id);let in_source=focused_source_entities.contains(&e.id);let dimmed=has_source_focus&&!in_source;p.rect_filled(r,7.0,if on_path{egui::Color32::from_rgb(55,48,38)}else if in_source{egui::Color32::from_rgb(34,53,60)}else if dimmed{egui::Color32::from_rgb(17,27,35)}else{egui::Color32::from_rgb(25,39,51)});p.rect_stroke(r,7.0,egui::Stroke::new(if picked{2.0_f32}else{1.0_f32},if picked{cyan}else if on_path{egui::Color32::from_rgb(236,174,83)}else if in_source{egui::Color32::from_rgb(91,190,178)}else if dimmed{egui::Color32::from_rgb(35,48,56)}else{fill}),egui::StrokeKind::Inside);
+                            let on_path=path_entities.contains(&e.id);let in_source=focused_source_entities.contains(&e.id);let in_group=self.chart_focus_group.as_ref().is_some_and(|group|group.contains(&e.id));let dimmed=(has_source_focus&&!in_source)||(has_group_focus&&!in_group);p.rect_filled(r,7.0,if on_path{egui::Color32::from_rgb(55,48,38)}else if in_group{egui::Color32::from_rgb(48,38,61)}else if in_source{egui::Color32::from_rgb(34,53,60)}else if dimmed{egui::Color32::from_rgb(17,27,35)}else{egui::Color32::from_rgb(25,39,51)});p.rect_stroke(r,7.0,egui::Stroke::new(if picked{2.0_f32}else{1.0_f32},if picked{cyan}else if on_path{egui::Color32::from_rgb(236,174,83)}else if in_group{egui::Color32::from_rgb(161,132,218)}else if in_source{egui::Color32::from_rgb(91,190,178)}else if dimmed{egui::Color32::from_rgb(35,48,56)}else{fill}),egui::StrokeKind::Inside);
                             p.circle_filled(c+egui::vec2(-58.0,0.0)*self.chart_zoom,6.0*self.chart_zoom,if dimmed{egui::Color32::from_rgb(53,66,73)}else{fill});
                             p.text(c+egui::vec2(-44.0,-8.0)*self.chart_zoom,egui::Align2::LEFT_CENTER,&e.name,egui::FontId::proportional(12.0*self.chart_zoom),if dimmed{egui::Color32::from_rgb(81,95,103)}else{egui::Color32::WHITE});
                             p.text(c+egui::vec2(-44.0,11.0)*self.chart_zoom,egui::Align2::LEFT_CENTER,&e.kind,egui::FontId::proportional(8.0*self.chart_zoom),if dimmed{egui::Color32::from_rgb(68,82,90)}else{muted});
@@ -6060,12 +6203,62 @@ impl eframe::App for App {
                         ui.label(egui::RichText::new("ANALYSIS").size(10.0).strong().color(muted));ui.add_space(10.0);
                         let mut degrees:Vec<_>=self.case.entities.iter().map(|e|(e,connected_counts.get(&e.id).copied().unwrap_or_default())).collect();degrees.sort_by_key(|(_,n)|std::cmp::Reverse(*n));
                         ui.label(egui::RichText::new("MOST CONNECTED").size(9.0).strong().color(cyan));
-                        for (rank,(e,n)) in degrees.iter().take(5).enumerate(){ui.horizontal(|ui|{let label=format!("{:02}  {} · {}",rank+1,e.name,e.kind);if ui.selectable_label(self.selected==Some(e.id),label).clicked(){self.selected=Some(e.id);self.selected_link=None;self.chart_focus=Some(e.id);self.page=WorkspacePage::Chart;self.show_timeline=false;}ui.with_layout(egui::Layout::right_to_left(egui::Align::Center),|ui|{ui.label(n.to_string());});});}
+                        for (rank,(e,n)) in degrees.iter().take(5).enumerate(){ui.horizontal(|ui|{let label=format!("{:02}  {} · {}",rank+1,e.name,e.kind);if ui.selectable_label(self.selected==Some(e.id),label).clicked(){self.selected=Some(e.id);self.selected_link=None;self.chart_focus=Some(e.id);self.chart_focus_group=None;self.page=WorkspacePage::Chart;self.show_timeline=false;}ui.with_layout(egui::Layout::right_to_left(egui::Align::Center),|ui|{ui.label(n.to_string());});});}
+                        ui.add_space(16.0);
+                        ui.label(egui::RichText::new("NETWORK GROUPS").size(9.0).strong().color(cyan));
+                        if network_groups.is_none() {
+                            ui.label(egui::RichText::new("Find weakly connected groups across all links.").small().color(muted));
+                            if ui.button("Find groups").clicked() {
+                                self.network_groups = Some(std::sync::Arc::new(connected_components(&self.case)));
+                            }
+                        }
+                        let linked_groups: Vec<&Vec<Uuid>> = network_groups
+                            .as_deref()
+                            .map(|groups| {
+                                groups
+                                    .iter()
+                                    .filter(|group| group.len() > 1)
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        if network_groups.is_some() {
+                            ui.horizontal(|ui| {
+                                ui.label(egui::RichText::new(format!("{} connected groups · link direction ignored", linked_groups.len())).small().color(muted));
+                                if ui.small_button("Refresh").clicked() {
+                                    self.network_groups = Some(std::sync::Arc::new(connected_components(&self.case)));
+                                }
+                            });
+                        }
+                        for (index, group) in linked_groups.iter().take(4).enumerate() {
+                            let group_ids = (**group).clone();
+                            let names = group
+                                .iter()
+                                .take(3)
+                                .filter_map(|id| self.case.entities.iter().find(|entity| entity.id == *id).map(|entity| entity.name.as_str()))
+                                .collect::<Vec<_>>()
+                                .join(" · ");
+                            ui.horizontal(|ui| {
+                                ui.label(format!("{:02} · {} entities", index + 1, group.len()));
+                                if ui.small_button("Show").clicked() {
+                                    self.chart_fit_path = Some(group_ids.clone());
+                                    self.chart_focus_group = Some(group_ids.iter().copied().collect());
+                                    self.chart_focus = None;
+                                    self.chart_focus_link = None;
+                                    self.path_result.clear();
+                                    self.selected = group_ids.first().copied();
+                                    self.selected_link = None;
+                                    self.sql_source_focus = None;
+                                    self.page = WorkspacePage::Chart;
+                                    self.show_timeline = false;
+                                }
+                            });
+                            ui.label(egui::RichText::new(if group.len() > 3 { format!("{names} · +{}", group.len() - 3) } else { names }).small().color(muted));
+                        }
                         ui.add_space(16.0);ui.label(egui::RichText::new("SHORTEST PATH").size(9.0).strong().color(cyan));
                         egui::ComboBox::from_id_salt("path_start").selected_text(self.path_start.and_then(|id|self.case.entities.iter().find(|e|e.id==id).map(|e|format!("{} · {}",e.name,e.kind))).unwrap_or_else(||"Start entity".into())).show_ui(ui,|ui|{for e in &self.case.entities{ui.selectable_value(&mut self.path_start,Some(e.id),format!("{} · {}",e.name,e.kind));}});
                         egui::ComboBox::from_id_salt("path_end").selected_text(self.path_end.and_then(|id|self.case.entities.iter().find(|e|e.id==id).map(|e|format!("{} · {}",e.name,e.kind))).unwrap_or_else(||"End entity".into())).show_ui(ui,|ui|{for e in &self.case.entities{ui.selectable_value(&mut self.path_end,Some(e.id),format!("{} · {}",e.name,e.kind));}});
                         if ui.button("Analyze path").clicked(){self.analyze_path();}
-                        if !self.path_result.is_empty(){let labels:Vec<_>=self.path_result.iter().filter_map(|id|self.case.entities.iter().find(|e|e.id==*id).map(|e|format!("{} · {}",e.name,e.kind))).collect();ui.label(egui::RichText::new(labels.join(" → ")).small().color(egui::Color32::from_rgb(236,174,83)));ui.horizontal(|ui|{if ui.small_button("Show path on chart").clicked(){self.chart_fit_path=Some(self.path_result.clone());self.chart_focus=None;self.chart_focus_link=None;self.page=WorkspacePage::Chart;self.show_timeline=false;self.selected=self.path_result.first().copied();self.selected_link=None;}if ui.small_button("Clear path").clicked(){self.path_result.clear();self.chart_fit_path=None;}});}
+                        if !self.path_result.is_empty(){let labels:Vec<_>=self.path_result.iter().filter_map(|id|self.case.entities.iter().find(|e|e.id==*id).map(|e|format!("{} · {}",e.name,e.kind))).collect();ui.label(egui::RichText::new(labels.join(" → ")).small().color(egui::Color32::from_rgb(236,174,83)));ui.horizontal(|ui|{if ui.small_button("Show path on chart").clicked(){self.chart_fit_path=Some(self.path_result.clone());self.chart_focus=None;self.chart_focus_link=None;self.chart_focus_group=None;self.page=WorkspacePage::Chart;self.show_timeline=false;self.selected=self.path_result.first().copied();self.selected_link=None;}if ui.small_button("Clear path").clicked(){self.path_result.clear();self.chart_fit_path=None;}});}
                         ui.add_space(16.0);ui.label(egui::RichText::new("POSSIBLE DUPLICATES").size(9.0).strong().color(cyan));
                         if ui.button("Find likely matches").clicked(){self.find_duplicates();}
                         for (a,b) in self.duplicate_candidates.clone().iter().take(5){let an=self.case.entities.iter().find(|e|e.id==*a).map(|e|format!("{} · {}",e.name,e.kind)).unwrap_or_else(||"(missing)".into());let bn=self.case.entities.iter().find(|e|e.id==*b).map(|e|format!("{} · {}",e.name,e.kind)).unwrap_or_else(||"(missing)".into());if ui.selectable_label(self.merge_candidate==Some((*a,*b)),format!("{an}  ↔  {bn}")).clicked(){self.merge_candidate=Some((*a,*b));}}
@@ -7776,6 +7969,7 @@ fn run_automation_cli(
                 && run.query == job.query
                 && run.parameters == job.parameters
                 && run.minimum_connections == job.minimum_connections
+                && run.maximum_connections == job.maximum_connections
                 && run.maximum_regressions == job.maximum_regressions
                 && run.maximum_skipped_rows == job.maximum_skipped_rows
         });
@@ -7792,6 +7986,7 @@ fn run_automation_cli(
                 "query": job.query,
                 "parameters": job.parameters,
                 "minimum_connections": job.minimum_connections,
+                "maximum_connections": job.maximum_connections,
                 "maximum_regressions": job.maximum_regressions,
                 "maximum_skipped_rows": job.maximum_skipped_rows,
                 "run_id": run.id,
@@ -7925,6 +8120,7 @@ fn automation_job_from_run(prior_run: &AutomationRun) -> Result<AutomationJob, S
         parameters: prior_run.parameters.clone(),
         enabled: prior_run.enabled,
         minimum_connections: prior_run.minimum_connections,
+        maximum_connections: prior_run.maximum_connections,
         maximum_regressions: prior_run.maximum_regressions,
         maximum_skipped_rows: prior_run.maximum_skipped_rows,
     })
@@ -8872,6 +9068,7 @@ fn validate_enabled_automation_jobs_cli(
         app.sql_query = job.query.clone();
         app.sql_parameter_text = format_sql_parameters(&job.parameters);
         app.automation_minimum_connections = job.minimum_connections;
+        app.automation_maximum_connections = job.maximum_connections;
         app.automation_maximum_regressions = job.maximum_regressions;
         app.automation_maximum_skipped_rows = job.maximum_skipped_rows;
         let snapshot_count_before = app.case.snapshots.len();
@@ -8948,6 +9145,7 @@ fn list_automation_jobs_cli(
                 "query": job.query,
                 "parameters": job.parameters,
                 "minimum_connections": job.minimum_connections,
+                "maximum_connections": job.maximum_connections,
                 "maximum_regressions": job.maximum_regressions,
                 "maximum_skipped_rows": job.maximum_skipped_rows,
                 "latest_run": latest_run,
@@ -9036,6 +9234,7 @@ fn list_automation_runs_cli(
                 parameters: run.parameters.clone(),
                 enabled: run.enabled,
                 minimum_connections: run.minimum_connections,
+                maximum_connections: run.maximum_connections,
                 maximum_regressions: run.maximum_regressions,
                 maximum_skipped_rows: run.maximum_skipped_rows,
             };
@@ -9058,6 +9257,7 @@ fn list_automation_runs_cli(
                 outcome["limits"] = serde_json::Value::Null;
                 outcome["parameters"] = serde_json::Value::Null;
                 outcome["minimum_connections"] = serde_json::Value::Null;
+                outcome["maximum_connections"] = serde_json::Value::Null;
                 outcome["maximum_regressions"] = serde_json::Value::Null;
                 outcome["maximum_skipped_rows"] = serde_json::Value::Null;
             }
