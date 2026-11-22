@@ -5039,6 +5039,20 @@ fn snapshot_case_link_index(
     source_key: &str,
     fact: &ConnectionFact,
 ) -> Option<usize> {
+    if !fact.connection_id.is_empty() {
+        let matches: Vec<usize> = case
+            .links
+            .iter()
+            .enumerate()
+            .filter(|(_, link)| {
+                link.ingest_source.as_deref() == Some(source_key)
+                    && link.connection_id == fact.connection_id
+            })
+            .map(|(index, _)| index)
+            .collect();
+        return (matches.len() == 1).then(|| matches[0]);
+    }
+
     let find_endpoint = |name: &str, kind: &str, external_id: &str| {
         let matches: Vec<Uuid> = case
             .entities
@@ -5070,15 +5084,11 @@ fn snapshot_case_link_index(
         .enumerate()
         .filter(|(_, link)| {
             link.ingest_source.as_deref() == Some(source_key)
-                && if !fact.connection_id.is_empty() {
-                    link.connection_id == fact.connection_id
-                } else {
-                    link.connection_id.is_empty()
-                        && link.label.eq_ignore_ascii_case(&fact.relationship)
-                        && link.directed == fact.directed
-                        && ((link.from == source && link.to == target)
-                            || (!fact.directed && link.from == target && link.to == source))
-                }
+                && link.connection_id.is_empty()
+                && link.label.eq_ignore_ascii_case(&fact.relationship)
+                && link.directed == fact.directed
+                && ((link.from == source && link.to == target)
+                    || (!fact.directed && link.from == target && link.to == source))
         })
         .map(|(index, _)| index)
         .collect();
