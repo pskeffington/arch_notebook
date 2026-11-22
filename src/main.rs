@@ -2062,6 +2062,7 @@ impl App {
             return;
         };
         self.sql_query = query;
+        self.sql_parameter_text.clear();
         self.sql_validation_preview = None;
         self.status = format!("SQL QUERY BUILT FROM {object_name}");
     }
