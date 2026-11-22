@@ -9,7 +9,7 @@ use std::{
     env, fs,
     io::Write,
     path::{Path, PathBuf},
-    time::Duration,
+    time::{Duration, Instant},
 };
 use uuid::Uuid;
 
@@ -147,6 +147,8 @@ struct AutomationRun {
     configuration_recorded: bool,
     started_at: String,
     finished_at: String,
+    #[serde(default)]
+    duration_ms: Option<u64>,
     success: bool,
     message: String,
     #[serde(default)]
@@ -215,6 +217,7 @@ struct App {
     link_sort: LinkSort,
     link_table_view: LinkTableView,
     data_query: String,
+    data_source_filter: Option<String>,
     connections_for_selected: bool,
     path_start: Option<Uuid>,
     path_end: Option<Uuid>,
@@ -235,6 +238,9 @@ struct App {
     automation_job_filter: String,
     sql_snapshot_source: Option<String>,
     sql_snapshot_index: Option<usize>,
+    sql_delta_filter: SnapshotDeltaFilter,
+    sql_delta_search: String,
+    sql_source_focus: Option<String>,
     automation_job_name: String,
     automation_minimum_connections: usize,
     automation_maximum_regressions: Option<usize>,
@@ -397,10 +403,21 @@ enum DeltaKind {
     ConfidenceDeclined,
     DateChanged,
     Updated,
+    DirectionChanged,
     EvidenceChanged,
     SourceNotesChanged,
     Added,
     ConfidenceIncreased,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SnapshotDeltaFilter {
+    All,
+    Regressions,
+    Direction,
+    Evidence,
+    SourceNotes,
+    Other,
 }
 
 struct ConnectionDelta {
@@ -482,6 +499,7 @@ impl Default for App {
             link_sort: LinkSort::Date,
             link_table_view: LinkTableView::Connections,
             data_query: String::new(),
+            data_source_filter: None,
             connections_for_selected: false,
             path_start: None,
             path_end: None,
@@ -502,6 +520,9 @@ impl Default for App {
             automation_job_filter: String::new(),
             sql_snapshot_source: None,
             sql_snapshot_index: None,
+            sql_delta_filter: SnapshotDeltaFilter::All,
+            sql_delta_search: String::new(),
+            sql_source_focus: None,
             automation_job_name: String::new(),
             automation_minimum_connections: 0,
             automation_maximum_regressions: None,
@@ -542,11 +563,11 @@ fn initialize_user_data(data_dir: &Path) -> std::io::Result<()> {
     let samples: [(&str, &[u8]); 2] = [
         (
             "sample_connections.sqlite",
-            include_bytes!("../sample_connections.sqlite"),
+            include_bytes!("../archive/research.databases/sample_connections.sqlite"),
         ),
         (
             "sample_relationships.csv",
-            include_bytes!("../sample_relationships.csv"),
+            include_bytes!("../archive/research.databases/sample_relationships.csv"),
         ),
     ];
     for (name, bytes) in samples {
@@ -729,6 +750,7 @@ impl App {
             link_sort: LinkSort::Date,
             link_table_view: LinkTableView::Connections,
             data_query: String::new(),
+            data_source_filter: None,
             connections_for_selected: false,
             path_start: None,
             path_end: None,
@@ -749,6 +771,9 @@ impl App {
             automation_job_filter: String::new(),
             sql_snapshot_source: None,
             sql_snapshot_index: None,
+            sql_delta_filter: SnapshotDeltaFilter::All,
+            sql_delta_search: String::new(),
+            sql_source_focus: None,
             automation_job_name: String::new(),
             automation_minimum_connections: 0,
             automation_maximum_regressions: None,
@@ -845,6 +870,8 @@ impl App {
                 self.saved_case_json = self.current_case_json();
                 self.sql_snapshot_source = None;
                 self.sql_snapshot_index = None;
+                self.sql_source_focus = None;
+                self.data_source_filter = None;
                 self.editing_automation_job = None;
                 self.automation_editor_before_edit = None;
                 self.automation_job_name.clear();
@@ -2399,6 +2426,7 @@ impl App {
     }
 
     fn execute_automation_job(&mut self, job: &AutomationJob) -> (bool, String) {
+        let elapsed = Instant::now();
         let started_at = epoch_timestamp();
         if let Some(existing) = self.case.automation_jobs.iter().find(|existing| {
             existing.id != job.id
@@ -2414,7 +2442,14 @@ impl App {
                 "JOB RUN FAILED · database and series are already assigned to {}",
                 existing.name
             );
-            self.record_automation_run(job, started_at, false, message.clone(), None);
+            self.record_automation_run(
+                job,
+                started_at,
+                elapsed.elapsed().as_millis() as u64,
+                false,
+                message.clone(),
+                None,
+            );
             return (false, message);
         }
         let snapshot_count_before = self.case.snapshots.len();
@@ -2484,7 +2519,14 @@ impl App {
             );
         }
         let message = self.status.clone();
-        self.record_automation_run(job, started_at, success, message.clone(), snapshot_index);
+        self.record_automation_run(
+            job,
+            started_at,
+            elapsed.elapsed().as_millis() as u64,
+            success,
+            message.clone(),
+            snapshot_index,
+        );
         (success, message)
     }
 
@@ -2492,6 +2534,7 @@ impl App {
         &mut self,
         job: &AutomationJob,
         started_at: String,
+        duration_ms: u64,
         success: bool,
         message: String,
         snapshot_index: Option<usize>,
@@ -2514,6 +2557,7 @@ impl App {
             configuration_recorded: true,
             started_at,
             finished_at: epoch_timestamp(),
+            duration_ms: Some(duration_ms),
             success,
             message,
             snapshot_index,
@@ -3025,11 +3069,13 @@ impl App {
                     "confidence_declined",
                     "date_changed",
                     "connection_details_changed",
+                    "direction_changed",
                     "evidence_changed",
                     "source_notes_changed",
                     "added",
                     "confidence_increased",
                     "connection_id",
+                    "connection_key",
                     "source_before",
                     "source_type_before",
                     "relationship_before",
@@ -3072,6 +3118,7 @@ impl App {
                         DeltaKind::ConfidenceDeclined => "CONFIDENCE DOWN",
                         DeltaKind::DateChanged => "DATE CHANGED",
                         DeltaKind::Updated => "CONNECTION DETAILS",
+                        DeltaKind::DirectionChanged => "DIRECTION CHANGED",
                         DeltaKind::EvidenceChanged => "EVIDENCE CHANGED",
                         DeltaKind::SourceNotesChanged => "SOURCE NOTES CHANGED",
                         DeltaKind::Added => "ADDED",
@@ -3086,6 +3133,7 @@ impl App {
                         DeltaKind::ConfidenceDeclined,
                         DeltaKind::DateChanged,
                         DeltaKind::Updated,
+                        DeltaKind::DirectionChanged,
                         DeltaKind::EvidenceChanged,
                         DeltaKind::SourceNotesChanged,
                         DeltaKind::Added,
@@ -3095,6 +3143,7 @@ impl App {
                     .map(|kind| delta.kinds.contains(kind).to_string()),
                 );
                 record.push(delta.connection.connection_id.clone());
+                record.push(comparison_key(&delta.connection));
                 let append_fact = |record: &mut Vec<String>, fact: Option<&ConnectionFact>| {
                     record.extend([
                         fact.map(|value| value.source.clone()).unwrap_or_default(),
@@ -3382,6 +3431,8 @@ impl App {
         };
         self.sql_snapshot_source = None;
         self.sql_snapshot_index = None;
+        self.sql_source_focus = None;
+        self.data_source_filter = None;
         self.editing_automation_job = None;
         self.automation_editor_before_edit = None;
         self.selected_import_spec = None;
@@ -4239,6 +4290,9 @@ fn compare_snapshots(
                 {
                     kinds.push(DeltaKind::Updated);
                 }
+                if now.directed != previous.directed {
+                    kinds.push(DeltaKind::DirectionChanged);
+                }
                 if now.source_reference != previous.source_reference {
                     kinds.push(DeltaKind::EvidenceChanged);
                 }
@@ -4276,6 +4330,58 @@ fn compare_snapshots(
             .then_with(|| comparison_key(&a.connection).cmp(&comparison_key(&b.connection)))
     });
     deltas
+}
+
+fn connection_delta_matches_filter(
+    delta: &ConnectionDelta,
+    filter: SnapshotDeltaFilter,
+    search: &str,
+) -> bool {
+    let has = |kind| delta.kinds.contains(&kind);
+    let matches_category = match filter {
+        SnapshotDeltaFilter::All => true,
+        SnapshotDeltaFilter::Regressions => {
+            has(DeltaKind::Removed) || has(DeltaKind::ConfidenceDeclined)
+        }
+        SnapshotDeltaFilter::Direction => has(DeltaKind::DirectionChanged),
+        SnapshotDeltaFilter::Evidence => has(DeltaKind::EvidenceChanged),
+        SnapshotDeltaFilter::SourceNotes => has(DeltaKind::SourceNotesChanged),
+        SnapshotDeltaFilter::Other => {
+            !has(DeltaKind::Removed)
+                && !has(DeltaKind::ConfidenceDeclined)
+                && !has(DeltaKind::DirectionChanged)
+                && !has(DeltaKind::EvidenceChanged)
+                && !has(DeltaKind::SourceNotesChanged)
+        }
+    };
+    if !matches_category {
+        return false;
+    }
+    let search = search.trim().to_lowercase();
+    if search.is_empty() {
+        return true;
+    }
+    std::iter::once(&delta.connection)
+        .chain(delta.previous_connection.iter())
+        .any(|fact| {
+            format!(
+                "{} {} {} {} {} {} {} {} {} {} {} {}",
+                comparison_key(fact),
+                fact.connection_id,
+                fact.source,
+                fact.source_type,
+                fact.relationship,
+                fact.target,
+                fact.target_type,
+                fact.date,
+                fact.confidence,
+                fact.directed,
+                fact.source_reference,
+                fact.notes
+            )
+            .to_lowercase()
+            .contains(&search)
+        })
 }
 
 fn comparison_key(connection: &ConnectionFact) -> String {
@@ -4369,6 +4475,7 @@ fn snapshot_delta_json(
                 "confidence_declined": 0,
                 "date_changed": 0,
                 "connection_updated": 0,
+                "direction_changed": 0,
                 "evidence_changed": 0,
                 "source_notes_changed": 0,
                 "added": 0,
@@ -4396,6 +4503,7 @@ fn snapshot_delta_json(
                     DeltaKind::ConfidenceDeclined => "confidence_declined",
                     DeltaKind::DateChanged => "date_changed",
                     DeltaKind::Updated => "connection_updated",
+                    DeltaKind::DirectionChanged => "direction_changed",
                     DeltaKind::EvidenceChanged => "evidence_changed",
                     DeltaKind::SourceNotesChanged => "source_notes_changed",
                     DeltaKind::Added => "added",
@@ -4404,7 +4512,7 @@ fn snapshot_delta_json(
                 .collect();
             let fact = |connection: &ConnectionFact| {
                 serde_json::json!({
-                    "key": connection.key,
+                    "key": comparison_key(connection),
                     "connection_id": connection.connection_id,
                     "source": connection.source,
                     "source_type": connection.source_type,
@@ -4433,6 +4541,7 @@ fn snapshot_delta_json(
             "confidence_declined": count(DeltaKind::ConfidenceDeclined),
             "date_changed": count(DeltaKind::DateChanged),
             "connection_updated": count(DeltaKind::Updated),
+            "direction_changed": count(DeltaKind::DirectionChanged),
             "evidence_changed": count(DeltaKind::EvidenceChanged),
             "source_notes_changed": count(DeltaKind::SourceNotesChanged),
             "added": count(DeltaKind::Added),
@@ -4447,6 +4556,7 @@ fn automation_outcome_json(
     job: &AutomationJob,
     success: bool,
     message: &str,
+    run_id: Option<Uuid>,
     snapshot: Option<&ConnectionSnapshot>,
     previous: Option<&ConnectionSnapshot>,
 ) -> serde_json::Value {
@@ -4474,6 +4584,8 @@ fn automation_outcome_json(
         "status": if success { "PASS" } else { "FAIL" },
         "job": job.name,
         "job_id": job.id,
+        "run_id": run_id,
+        "duration_ms": serde_json::Value::Null,
         "database_path": job.database_path,
         "series": job.series,
         "message": message,
@@ -4533,13 +4645,14 @@ fn automation_regression_summary(case: &CaseFile, source_key: &str) -> String {
     let added = count(DeltaKind::Added);
     let increased = count(DeltaKind::ConfidenceIncreased);
     let details = count(DeltaKind::Updated);
+    let direction = count(DeltaKind::DirectionChanged);
     let evidence = count(DeltaKind::EvidenceChanged);
     let source_notes = count(DeltaKind::SourceNotesChanged);
     if deltas.is_empty() {
         "NO CONNECTION CHANGES".into()
     } else {
         format!(
-            "SNAPSHOT DELTA · {removed} removed · {declined} confidence declines · {dates} date changes · {details} connection detail changes · {evidence} evidence changes · {source_notes} source note changes · {added} added · {increased} confidence increases"
+            "SNAPSHOT DELTA · {removed} removed · {declined} confidence declines · {dates} date changes · {details} connection detail changes · {direction} direction changes · {evidence} evidence changes · {source_notes} source note changes · {added} added · {increased} confidence increases"
         )
     }
 }
@@ -4768,6 +4881,7 @@ impl eframe::App for App {
                         });
                     if ui.button("Arrange chart").clicked(){self.auto_layout();}
                     if self.page==WorkspacePage::Chart {if ui.add_enabled(!self.case.entities.is_empty(),egui::Button::new("Fit all")).clicked(){self.chart_fit_path=Some(self.case.entities.iter().map(|entity|entity.id).collect());self.chart_focus=None;self.chart_focus_link=None;}if ui.small_button("−").clicked(){self.chart_zoom=(self.chart_zoom/1.2).clamp(0.25,3.0);}ui.label(format!("{:.0}%",self.chart_zoom*100.0));if ui.small_button("＋").clicked(){self.chart_zoom=(self.chart_zoom*1.2).clamp(0.25,3.0);}if ui.button("Reset view").clicked(){self.chart_zoom=1.0;self.chart_pan=egui::Vec2::ZERO;self.chart_focus=None;self.chart_focus_link=None;self.chart_fit_path=None;}}
+                    if self.page==WorkspacePage::Chart && self.sql_source_focus.is_some() {ui.label(egui::RichText::new("SOURCE HIGHLIGHT").small().color(cyan));if ui.small_button("Clear source").clicked(){self.sql_source_focus=None;}}
                     if self.page==WorkspacePage::Data && (self.selected.is_some() || self.selected_link.is_some()) && ui.button("View on chart").clicked(){self.chart_focus=self.selected;self.chart_focus_link=self.selected_link;self.page=WorkspacePage::Chart;self.show_timeline=false;}
                     if self.selected.is_some() || self.selected_link.is_some() {if ui.button("Delete selected").clicked(){self.delete_selected();}}
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| { ui.label(egui::RichText::new(&self.status).small().color(muted)); });
@@ -4911,6 +5025,7 @@ impl eframe::App for App {
                                                 run.success,
                                                 run.finished_at.clone(),
                                                 run.message.clone(),
+                                                run.duration_ms,
                                             )
                                         });
                                     ui.horizontal(|ui| {
@@ -4921,11 +5036,16 @@ impl eframe::App for App {
                                         if ui.small_button("Run and save").clicked(){action=Some(("run".into(),job.id));}
                                         if ui.small_button("Delete").clicked(){action=Some(("delete".into(),job.id));}
                                     });
-                                    if let Some((success, finished_at, message)) = latest_run {
+                                    if let Some((success, finished_at, message, duration_ms)) = latest_run {
                                         let result = if success { "PASS" } else { "FAIL" };
                                         ui.colored_label(
                                             if success { egui::Color32::from_rgb(102, 190, 146) } else { egui::Color32::from_rgb(222, 112, 104) },
-                                            egui::RichText::new(format!("LAST RUN · {result} · {finished_at}")).small(),
+                                            egui::RichText::new(format!(
+                                                "LAST RUN · {result} · {finished_at} · {} ms",
+                                                duration_ms
+                                                    .map(|value| value.to_string())
+                                                    .unwrap_or_else(|| "unknown duration".into())
+                                            )).small(),
                                         ).on_hover_text(message);
                                     } else {
                                         ui.label(egui::RichText::new("LAST RUN · NEVER RUN").small().color(muted));
@@ -4966,6 +5086,9 @@ impl eframe::App for App {
                                         .id_salt(("automation_run", run.id))
                                         .show(ui, |ui| {
                                             ui.label(format!("Finished {}", run.finished_at));
+                                            if let Some(duration_ms) = run.duration_ms {
+                                                ui.label(format!("Query and validation time: {duration_ms} ms"));
+                                            }
                                             ui.label(&run.message);
                                             if run.configuration_recorded {
                                                 ui.label(format!(
@@ -5023,19 +5146,34 @@ impl eframe::App for App {
                                 return;
                             }
                             if self.data_mode==DataMode::SqlRegressions {
-                                let mut sources: Vec<(String, String)> = Vec::new();
+                                let mut sources: Vec<(String, String, usize, usize)> = Vec::new();
                                 for snapshot in self.case.snapshots.iter().rev() {
-                                    if sources.iter().all(|(key, _)| key != &snapshot.source_key) {
+                                    if sources.iter().all(|(key, _, _, _)| key != &snapshot.source_key) {
+                                        let source_links: Vec<&Link> = self
+                                            .case
+                                            .links
+                                            .iter()
+                                            .filter(|link| {
+                                                link.ingest_source.as_deref()
+                                                    == Some(snapshot.source_key.as_str())
+                                            })
+                                            .collect();
+                                        let source_entities: HashSet<Uuid> = source_links
+                                            .iter()
+                                            .flat_map(|link| [link.from, link.to])
+                                            .collect();
                                         sources.push((
                                             snapshot.source_key.clone(),
                                             format!("{} · {}", snapshot.series, snapshot.database_path),
+                                            source_links.len(),
+                                            source_entities.len(),
                                         ));
                                     }
                                 }
                                 if self.sql_snapshot_source.as_ref().is_none_or(|selected| {
-                                    sources.iter().all(|(key, _)| key != selected)
+                                    sources.iter().all(|(key, _, _, _)| key != selected)
                                 }) {
-                                    self.sql_snapshot_source = sources.first().map(|(key, _)| key.clone());
+                                    self.sql_snapshot_source = sources.first().map(|(key, _, _, _)| key.clone());
                                 }
                                 if !sources.is_empty() {
                                     ui.horizontal(|ui| {
@@ -5044,16 +5182,17 @@ impl eframe::App for App {
                                             .selected_text(
                                                 self.sql_snapshot_source
                                                     .as_ref()
-                                                    .and_then(|selected| sources.iter().find(|(key, _)| key == selected))
-                                                    .map(|(_, label)| label.as_str())
+                                                    .and_then(|selected| sources.iter().find(|(key, _, _, _)| key == selected))
+                                                    .map(|(_, label, links, entities)| format!("{label} · {links} links · {entities} entities"))
+                                                    .as_deref()
                                                     .unwrap_or("Choose a series"),
                                             )
                                             .show_ui(ui, |ui| {
-                                                for (key, label) in &sources {
+                                                for (key, label, links, entities) in &sources {
                                                     ui.selectable_value(
                                                         &mut self.sql_snapshot_source,
                                                         Some(key.clone()),
-                                                        label,
+                                                        format!("{label} · {links} links · {entities} entities"),
                                                     );
                                                 }
                                             });
@@ -5092,6 +5231,45 @@ impl eframe::App for App {
                                         format!(" · {} rows skipped", current.skipped_rows)
                                     };
                                     ui.label(format!("{capture_label} #{}: {} · {} · {} connections{skipped}",selected_index.map(|index|index+1).unwrap_or_default(),current.captured_at,current.series,current.connections.len()));
+                                    ui.horizontal(|ui| {
+                                        if ui.small_button("Highlight source on chart").clicked() {
+                                            self.sql_source_focus = Some(current.source_key.clone());
+                                            let mut source_entities: Vec<Uuid> = self
+                                                .case
+                                                .links
+                                                .iter()
+                                                .filter(|link| {
+                                                    link.ingest_source.as_deref()
+                                                        == Some(current.source_key.as_str())
+                                                })
+                                                .flat_map(|link| [link.from, link.to])
+                                                .collect::<HashSet<_>>()
+                                                .into_iter()
+                                                .collect();
+                                            source_entities.sort_unstable();
+                                            if !source_entities.is_empty() {
+                                                self.chart_fit_path = Some(source_entities);
+                                            }
+                                            self.page = WorkspacePage::Chart;
+                                            self.show_timeline = false;
+                                            self.selected = None;
+                                            self.selected_link = None;
+                                            self.chart_focus = None;
+                                            self.chart_focus_link = None;
+                                        }
+                                        if self.sql_source_focus.as_deref() == Some(current.source_key.as_str()) {
+                                            ui.label(egui::RichText::new("Source highlight is active").small().color(cyan));
+                                        }
+                                        if ui.small_button("View source records").clicked() {
+                                            self.data_query.clear();
+                                            self.data_source_filter = Some(current.source_key.clone());
+                                            self.data_mode = DataMode::Relationships;
+                                            self.page = WorkspacePage::Data;
+                                            self.connections_for_selected = false;
+                                            self.selected = None;
+                                            self.selected_link = None;
+                                        }
+                                    });
                                     egui::CollapsingHeader::new("Captured SQL configuration")
                                         .id_salt(("snapshot_sql_configuration", current.id))
                                         .show(ui, |ui| {
@@ -5120,18 +5298,45 @@ impl eframe::App for App {
                                         let declined=count(DeltaKind::ConfidenceDeclined);
                                         let dates=count(DeltaKind::DateChanged);
                                         let updated=count(DeltaKind::Updated);
+                                        let direction=count(DeltaKind::DirectionChanged);
                                         let evidence=count(DeltaKind::EvidenceChanged);
                                         let source_notes=count(DeltaKind::SourceNotesChanged);
                                         let added=count(DeltaKind::Added);
                                         let increased=count(DeltaKind::ConfidenceIncreased);
-                                        ui.label(egui::RichText::new(format!("Baseline {} → current {} · {removed} removed · {declined} confidence declines · {dates} date changes · {updated} connection detail changes · {evidence} evidence changes · {source_notes} source note changes · {added} added · {increased} confidence increases",base.captured_at,current.captured_at)).strong().color(if removed+declined>0{egui::Color32::from_rgb(238,139,115)}else{cyan}));
+                                        ui.label(egui::RichText::new(format!("Baseline {} → current {} · {removed} removed · {declined} confidence declines · {dates} date changes · {updated} connection detail changes · {direction} direction changes · {evidence} evidence changes · {source_notes} source note changes · {added} added · {increased} confidence increases",base.captured_at,current.captured_at)).strong().color(if removed+declined>0{egui::Color32::from_rgb(238,139,115)}else{cyan}));
+                                        ui.horizontal(|ui| {
+                                            egui::ComboBox::from_id_salt("sql_delta_filter")
+                                                .selected_text(match self.sql_delta_filter {
+                                                    SnapshotDeltaFilter::All => "All changes",
+                                                    SnapshotDeltaFilter::Regressions => "Regressions",
+                                                    SnapshotDeltaFilter::Direction => "Direction",
+                                                    SnapshotDeltaFilter::Evidence => "Evidence",
+                                                    SnapshotDeltaFilter::SourceNotes => "Source notes",
+                                                    SnapshotDeltaFilter::Other => "Other changes",
+                                                })
+                                                .show_ui(ui, |ui| {
+                                                    ui.selectable_value(&mut self.sql_delta_filter, SnapshotDeltaFilter::All, "All changes");
+                                                    ui.selectable_value(&mut self.sql_delta_filter, SnapshotDeltaFilter::Regressions, "Regressions");
+                                                    ui.selectable_value(&mut self.sql_delta_filter, SnapshotDeltaFilter::Direction, "Direction");
+                                                    ui.selectable_value(&mut self.sql_delta_filter, SnapshotDeltaFilter::Evidence, "Evidence");
+                                                    ui.selectable_value(&mut self.sql_delta_filter, SnapshotDeltaFilter::SourceNotes, "Source notes");
+                                                    ui.selectable_value(&mut self.sql_delta_filter, SnapshotDeltaFilter::Other, "Other changes");
+                                                });
+                                            ui.add(egui::TextEdit::singleline(&mut self.sql_delta_search)
+                                                .hint_text("Search IDs, entities, evidence, or notes")
+                                                .desired_width(300.0));
+                                        });
+                                        let visible_deltas: Vec<&ConnectionDelta> = deltas.iter()
+                                            .filter(|delta| connection_delta_matches_filter(delta, self.sql_delta_filter, &self.sql_delta_search))
+                                            .collect();
+                                        ui.label(egui::RichText::new(format!("Showing {} of {} changes · export includes all changes", visible_deltas.len(), deltas.len())).small().color(muted));
                                         if ui.button("Export comparison CSV/TSV").clicked() {
                                             self.export_sql_comparison(&base, &current);
                                         }
                                         egui::ScrollArea::both().show(ui,|ui|egui::Grid::new("sql_regression_table").striped(true).show(ui,|ui|{
                                             for heading in ["CHANGE","CONNECTION","CONFIDENCE","DATE","EVIDENCE","NOTES"]{ui.label(egui::RichText::new(heading).small().strong().color(cyan));}ui.end_row();
-                                            for delta in deltas {
-                                                let change=delta.kinds.iter().map(|kind|match kind{DeltaKind::Removed=>"REMOVED",DeltaKind::ConfidenceDeclined=>"CONFIDENCE DOWN",DeltaKind::DateChanged=>"DATE CHANGED",DeltaKind::Updated=>"CONNECTION DETAILS",DeltaKind::EvidenceChanged=>"EVIDENCE CHANGED",DeltaKind::SourceNotesChanged=>"SOURCE NOTES CHANGED",DeltaKind::Added=>"ADDED",DeltaKind::ConfidenceIncreased=>"CONFIDENCE UP"}).collect::<Vec<_>>().join(" · ");
+                                            for delta in visible_deltas {
+                                                let change=delta.kinds.iter().map(|kind|match kind{DeltaKind::Removed=>"REMOVED",DeltaKind::ConfidenceDeclined=>"CONFIDENCE DOWN",DeltaKind::DateChanged=>"DATE CHANGED",DeltaKind::Updated=>"CONNECTION DETAILS",DeltaKind::DirectionChanged=>"DIRECTION CHANGED",DeltaKind::EvidenceChanged=>"EVIDENCE CHANGED",DeltaKind::SourceNotesChanged=>"SOURCE NOTES CHANGED",DeltaKind::Added=>"ADDED",DeltaKind::ConfidenceIncreased=>"CONFIDENCE UP"}).collect::<Vec<_>>().join(" · ");
                                                 let previous=delta.previous_connection.as_ref();
                                                 let current=(!delta.kinds.contains(&DeltaKind::Removed)).then_some(&delta.connection);
                                                 let describe_connection=|fact:&ConnectionFact|format!("{} [{}] — {} — {} [{}] {}",fact.source,fact.source_type,fact.relationship,fact.target,fact.target_type,if fact.directed{"→"}else{"↔"});
@@ -5144,7 +5349,7 @@ impl eframe::App for App {
                                                 ui.label(change);
                                                 ui.label(format!("{previous_connection} → {current_connection}"));
                                                 ui.label(format!("{} → {}",delta.previous_confidence.map(|value|value.to_string()).unwrap_or_else(||"—".into()),current.map(|fact|fact.confidence.to_string()).unwrap_or_else(||"—".into())));
-                                                ui.label(format!("{} → {}",delta.previous_date.unwrap_or_else(||"—".into()),current.map(|fact|fact.date.as_str()).filter(|value|!value.is_empty()).unwrap_or("—")));
+                                                ui.label(format!("{} → {}",delta.previous_date.as_deref().unwrap_or("—"),current.map(|fact|fact.date.as_str()).filter(|value|!value.is_empty()).unwrap_or("—")));
                                                 ui.label(format!("{previous_evidence} → {current_evidence}"));
                                                 ui.label(format!("{previous_notes} → {current_notes}"));
                                                 ui.end_row();
@@ -5157,6 +5362,26 @@ impl eframe::App for App {
                                 return;
                             }
                             ui.horizontal(|ui|{ui.add(egui::TextEdit::singleline(&mut self.data_query).hint_text(if self.data_mode==DataMode::Entities{"Filter entities…"}else{"Filter connections…"}).desired_width(240.0));if self.data_mode==DataMode::Relationships{let selected_entity=self.selected.is_some_and(|id|self.case.entities.iter().any(|entity|entity.id==id));ui.add_enabled(selected_entity,egui::Checkbox::new(&mut self.connections_for_selected,"Selected entity connections"));egui::ComboBox::from_id_salt("link_sort").selected_text(match self.link_sort {LinkSort::RecordId=>"Sort: record ID",LinkSort::Source=>"Sort: source",LinkSort::Date=>"Sort: date",LinkSort::Relationship=>"Sort: relationship",LinkSort::Target=>"Sort: target",LinkSort::Confidence=>"Sort: confidence",LinkSort::SourceReference=>"Sort: source reference"}).show_ui(ui,|ui|{ui.selectable_value(&mut self.link_sort,LinkSort::RecordId,"Record ID");ui.selectable_value(&mut self.link_sort,LinkSort::Source,"Source");ui.selectable_value(&mut self.link_sort,LinkSort::Relationship,"Relationship");ui.selectable_value(&mut self.link_sort,LinkSort::Target,"Target");ui.selectable_value(&mut self.link_sort,LinkSort::Date,"Date");ui.selectable_value(&mut self.link_sort,LinkSort::Confidence,"Confidence");ui.selectable_value(&mut self.link_sort,LinkSort::SourceReference,"Source reference");});}});
+                            if self.data_mode == DataMode::Relationships
+                                && let Some(source_filter) = self.data_source_filter.clone()
+                            {
+                                let label = self
+                                    .case
+                                    .snapshots
+                                    .iter()
+                                    .rev()
+                                    .find(|snapshot| snapshot.source_key == source_filter)
+                                    .map(|snapshot| {
+                                        format!("{} · {}", snapshot.series, snapshot.database_path)
+                                    })
+                                    .unwrap_or_else(|| source_filter.clone());
+                                ui.horizontal(|ui| {
+                                    ui.label(egui::RichText::new(format!("SQL source filter · {label}")).small().color(cyan));
+                                    if ui.small_button("Clear source filter").clicked() {
+                                        self.data_source_filter = None;
+                                    }
+                                });
+                            }
                             if self.data_mode==DataMode::Entities {
                                 egui::ScrollArea::both().show(ui,|ui|egui::Grid::new("entities_table").striped(true).show(ui,|ui|{
                                     for h in ["ENTITY","TYPE","NOTES","CONNECTIONS","ALIASES","MERGED RECORDS","ATTRIBUTES"]{ui.label(egui::RichText::new(h).small().strong().color(cyan));}ui.end_row();
@@ -5171,7 +5396,7 @@ impl eframe::App for App {
                             let filter=self.data_query.trim().to_lowercase();
                             let entity_names:HashMap<Uuid,(String,String)>=self.case.entities.iter().map(|entity|(entity.id,(entity.name.clone(),entity.kind.clone()))).collect();
                             let mut indices:Vec<usize>=(0..self.case.links.len()).collect();
-                            indices.retain(|i|{let link=&self.case.links[*i];if scoped_to.is_some_and(|id|link.from!=id&&link.to!=id){return false;}let endpoint=|id|entity_names.get(&id).map(|(name,kind)|format!("{name} {kind}")).unwrap_or_else(||"(missing)".into());let source=endpoint(link.from);let target=endpoint(link.to);let direction=if link.directed{"directed →"}else{"undirected ↔"};let confidence=link.confidence.to_string();format!("{} {} {} {} {} {} {} {} {} {} {}",link.connection_id,source,link.label,target,link.date,confidence,direction,link.source_reference,link.source_notes,link.notes,link.ingest_source.as_deref().unwrap_or("manual")).to_lowercase().contains(&filter)});
+                            indices.retain(|i|{let link=&self.case.links[*i];if scoped_to.is_some_and(|id|link.from!=id&&link.to!=id){return false;}if self.data_source_filter.as_deref().is_some_and(|source|link.ingest_source.as_deref()!=Some(source)){return false;}let endpoint=|id|entity_names.get(&id).map(|(name,kind)|format!("{name} {kind}")).unwrap_or_else(||"(missing)".into());let source=endpoint(link.from);let target=endpoint(link.to);let direction=if link.directed{"directed →"}else{"undirected ↔"};let confidence=link.confidence.to_string();format!("{} {} {} {} {} {} {} {} {} {} {}",link.connection_id,source,link.label,target,link.date,confidence,direction,link.source_reference,link.source_notes,link.notes,link.ingest_source.as_deref().unwrap_or("manual")).to_lowercase().contains(&filter)});
                             indices.sort_by(|a,b|{let a=&self.case.links[*a];let b=&self.case.links[*b];let from=|link:&Link|entity_names.get(&link.from).map(|(name,_)|name.to_lowercase()).unwrap_or_default();let to=|link:&Link|entity_names.get(&link.to).map(|(name,_)|name.to_lowercase()).unwrap_or_default();match self.link_sort {LinkSort::RecordId=>a.connection_id.to_lowercase().cmp(&b.connection_id.to_lowercase()),LinkSort::Source=>from(a).cmp(&from(b)),LinkSort::Date=>a.date.cmp(&b.date),LinkSort::Relationship=>a.label.to_lowercase().cmp(&b.label.to_lowercase()),LinkSort::Target=>to(a).cmp(&to(b)),LinkSort::Confidence=>b.confidence.cmp(&a.confidence),LinkSort::SourceReference=>a.source_reference.to_lowercase().cmp(&b.source_reference.to_lowercase())}.then_with(||a.connection_id.cmp(&b.connection_id)).then_with(||a.from.cmp(&b.from)).then_with(||a.to.cmp(&b.to))});
                             ui.horizontal(|ui|{ui.label(format!("{} link records",indices.len()));if let Some(id)=scoped_to{if let Some(entity)=self.case.entities.iter().find(|entity|entity.id==id){ui.label(format!("Connected to {} · {}",entity.name,entity.kind));}}ui.label("Select a row to inspect; use View on chart to locate its endpoints.");});
                             ui.horizontal(|ui|{ui.selectable_value(&mut self.link_table_view,LinkTableView::Connections,"Connections");ui.selectable_value(&mut self.link_table_view,LinkTableView::LinkRecords,"Link records");});
@@ -5276,13 +5501,23 @@ impl eframe::App for App {
                             .map(|pair| (pair[0], pair[1]))
                             .collect();
                         let path_entities: HashSet<Uuid> = self.path_result.iter().copied().collect();
+                        let focused_source_entities: HashSet<Uuid> = self
+                            .case
+                            .links
+                            .iter()
+                            .filter(|link| {
+                                self.sql_source_focus.as_deref() == link.ingest_source.as_deref()
+                            })
+                            .flat_map(|link| [link.from, link.to])
+                            .collect();
+                        let has_source_focus = self.sql_source_focus.is_some();
                         for (link_index, link) in self.case.links.iter().enumerate() {
                             if let (Some(&a_index), Some(&b_index)) =
                                 (entity_indices.get(&link.from), entity_indices.get(&link.to))
                             {
                                 let a = &self.case.entities[a_index];
                                 let b = &self.case.entities[b_index];
-                                let ca=center(a);let cb=center(b);let in_path=path_edges.contains(&(link.from,link.to))||(!link.directed&&path_edges.contains(&(link.to,link.from)));let col=if self.selected_link==Some(link_index){cyan}else if in_path{egui::Color32::from_rgb(236,174,83)}else{egui::Color32::from_rgb(72,104,120)};
+                                let ca=center(a);let cb=center(b);let in_path=path_edges.contains(&(link.from,link.to))||(!link.directed&&path_edges.contains(&(link.to,link.from)));let in_source=self.sql_source_focus.as_deref()==link.ingest_source.as_deref();let col=if self.selected_link==Some(link_index){cyan}else if in_path{egui::Color32::from_rgb(236,174,83)}else if in_source{egui::Color32::from_rgb(91,190,178)}else if has_source_focus{egui::Color32::from_rgb(35,52,63)}else{egui::Color32::from_rgb(72,104,120)};
                                 let points = connection_curve_points(
                                     ca,
                                     cb,
@@ -5305,17 +5540,17 @@ impl eframe::App for App {
                                 }
                                 let mid=points[points.len()/2]; let label_rect=egui::Rect::from_center_size(mid,egui::vec2(110.0,18.0)*self.chart_zoom);
                                 p.rect_filled(label_rect,3.0,if self.selected_link==Some(link_index){egui::Color32::from_rgb(34,61,70)}else{egui::Color32::from_rgb(19,31,41)});
-                                p.text(mid,egui::Align2::CENTER_CENTER,&link.label,egui::FontId::proportional(9.0*self.chart_zoom),muted);
+                                p.text(mid,egui::Align2::CENTER_CENTER,&link.label,egui::FontId::proportional(9.0*self.chart_zoom),if in_source{cyan}else if has_source_focus{egui::Color32::from_rgb(65,78,87)}else{muted});
                             }
                         }
                         for e in &self.case.entities {
                             let c=center(e); let fill=egui::Color32::from_rgb(e.color[0],e.color[1],e.color[2]);
                             let r=egui::Rect::from_center_size(c,egui::vec2(142.0,56.0)*self.chart_zoom);
                             let picked=self.selected==Some(e.id);
-                            let on_path=path_entities.contains(&e.id);p.rect_filled(r,7.0,if on_path{egui::Color32::from_rgb(55,48,38)}else{egui::Color32::from_rgb(25,39,51)});p.rect_stroke(r,7.0,egui::Stroke::new(if picked{2.0_f32}else{1.0_f32},if picked{cyan}else if on_path{egui::Color32::from_rgb(236,174,83)}else{fill}),egui::StrokeKind::Inside);
-                            p.circle_filled(c+egui::vec2(-58.0,0.0)*self.chart_zoom,6.0*self.chart_zoom,fill);
-                            p.text(c+egui::vec2(-44.0,-8.0)*self.chart_zoom,egui::Align2::LEFT_CENTER,&e.name,egui::FontId::proportional(12.0*self.chart_zoom),egui::Color32::WHITE);
-                            p.text(c+egui::vec2(-44.0,11.0)*self.chart_zoom,egui::Align2::LEFT_CENTER,&e.kind,egui::FontId::proportional(8.0*self.chart_zoom),muted);
+                            let on_path=path_entities.contains(&e.id);let in_source=focused_source_entities.contains(&e.id);let dimmed=has_source_focus&&!in_source;p.rect_filled(r,7.0,if on_path{egui::Color32::from_rgb(55,48,38)}else if in_source{egui::Color32::from_rgb(34,53,60)}else if dimmed{egui::Color32::from_rgb(17,27,35)}else{egui::Color32::from_rgb(25,39,51)});p.rect_stroke(r,7.0,egui::Stroke::new(if picked{2.0_f32}else{1.0_f32},if picked{cyan}else if on_path{egui::Color32::from_rgb(236,174,83)}else if in_source{egui::Color32::from_rgb(91,190,178)}else if dimmed{egui::Color32::from_rgb(35,48,56)}else{fill}),egui::StrokeKind::Inside);
+                            p.circle_filled(c+egui::vec2(-58.0,0.0)*self.chart_zoom,6.0*self.chart_zoom,if dimmed{egui::Color32::from_rgb(53,66,73)}else{fill});
+                            p.text(c+egui::vec2(-44.0,-8.0)*self.chart_zoom,egui::Align2::LEFT_CENTER,&e.name,egui::FontId::proportional(12.0*self.chart_zoom),if dimmed{egui::Color32::from_rgb(81,95,103)}else{egui::Color32::WHITE});
+                            p.text(c+egui::vec2(-44.0,11.0)*self.chart_zoom,egui::Align2::LEFT_CENTER,&e.kind,egui::FontId::proportional(8.0*self.chart_zoom),if dimmed{egui::Color32::from_rgb(68,82,90)}else{muted});
                         }
                         if response.clicked() { if let Some(pos)=response.interact_pointer_pos(){
                             if self.show_timeline && pos.y >= rect.bottom()-105.0 {
@@ -6945,6 +7180,8 @@ fn run_automation_cli(
     case_path: &str,
     job_name: Option<&str>,
     selected_jobs: Option<&[String]>,
+    parameter_overrides: &[(String, String)],
+    scoped_parameter_overrides: &[(String, String, String)],
     skip_recent_success: bool,
     json_output: bool,
 ) -> Result<bool, String> {
@@ -6953,7 +7190,7 @@ fn run_automation_cli(
         fs::read_to_string(case_path).map_err(|error| format!("cannot read case: {error}"))?;
     let case = serde_json::from_str::<CaseFile>(&content)
         .map_err(|error| format!("cannot parse case: {error}"))?;
-    let jobs: Vec<AutomationJob> = if let Some(name) = job_name {
+    let mut jobs: Vec<AutomationJob> = if let Some(name) = job_name {
         let matches: Vec<AutomationJob> = case
             .automation_jobs
             .iter()
@@ -6983,35 +7220,50 @@ fn run_automation_cli(
     if jobs.is_empty() {
         return Err("case contains no enabled automation jobs".into());
     }
+    apply_sql_parameter_overrides(&mut jobs, parameter_overrides, scoped_parameter_overrides)?;
     let mut app = App::automation_context(case, case_path);
     normalize_snapshot_database_paths(&mut app.case, &app.case_path);
     let mut failures = 0;
     let mut skipped = Vec::new();
     let mut outcomes = Vec::new();
-    for job in jobs {
-        let latest_matching_run = skip_recent_success
+    for job in jobs.iter_mut() {
+        let latest_job_run = skip_recent_success
             .then(|| {
-                app.case.automation_runs.iter().rev().find(|run| {
-                    run.job_id == job.id
-                        && run.configuration_recorded
-                        && run.database_path == job.database_path
-                        && run.series == job.series
-                        && run.query == job.query
-                        && run.parameters == job.parameters
-                        && run.minimum_connections == job.minimum_connections
-                        && run.maximum_regressions == job.maximum_regressions
-                        && run.maximum_skipped_rows == job.maximum_skipped_rows
-                })
+                app.case
+                    .automation_runs
+                    .iter()
+                    .rev()
+                    .find(|run| run.job_id == job.id)
             })
             .flatten();
-        if let Some(run) = latest_matching_run.filter(|run| run.success) {
+        let latest_run_matches_current_job = latest_job_run.is_some_and(|run| {
+            run.configuration_recorded
+                && run.database_path == job.database_path
+                && run.series == job.series
+                && run.query == job.query
+                && run.parameters == job.parameters
+                && run.minimum_connections == job.minimum_connections
+                && run.maximum_regressions == job.maximum_regressions
+                && run.maximum_skipped_rows == job.maximum_skipped_rows
+        });
+        if let Some(run) =
+            latest_job_run.filter(|run| latest_run_matches_current_job && run.success)
+        {
             skipped.push(serde_json::json!({
                 "job_id": job.id,
                 "job": job.name,
                 "status": "SKIPPED",
                 "reason": "latest run for this configuration succeeded",
+                "database_path": job.database_path,
+                "series": job.series,
+                "query": job.query,
+                "parameters": job.parameters,
+                "minimum_connections": job.minimum_connections,
+                "maximum_regressions": job.maximum_regressions,
+                "maximum_skipped_rows": job.maximum_skipped_rows,
                 "run_id": run.id,
                 "finished_at": run.finished_at,
+                "duration_ms": run.duration_ms,
                 "snapshot_id": run.snapshot_id,
             }));
             if !json_output {
@@ -7027,6 +7279,8 @@ fn run_automation_cli(
             failures += 1;
         }
         let run = app.case.automation_runs.last();
+        let run_id = run.map(|run| run.id);
+        let duration_ms = run.and_then(|run| run.duration_ms);
         let snapshot_id = run.and_then(|run| run.snapshot_id);
         let snapshot =
             snapshot_id.and_then(|id| app.case.snapshots.iter().find(|snapshot| snapshot.id == id));
@@ -7042,8 +7296,11 @@ fn run_automation_cli(
         save_case_atomically(Path::new(case_path), &app.case)?;
         if json_output {
             outcomes.push(automation_outcome_json(
-                &job, success, &message, snapshot, previous,
+                &job, success, &message, run_id, snapshot, previous,
             ));
+            if let Some(outcome) = outcomes.last_mut() {
+                outcome["duration_ms"] = serde_json::json!(duration_ms);
+            }
         } else {
             println!(
                 "{} · {} · {}",
@@ -7063,6 +7320,151 @@ fn run_automation_cli(
         println!("{}", serde_json::to_string_pretty(&serde_json::json!({"schema_version":1,"ok":failures==0,"saved":!outcomes.is_empty(),"case":case_path,"passed":outcomes.iter().filter(|outcome|outcome["status"]=="PASS").count(),"failed":failures,"skipped":skipped.len(),"outcomes":outcomes,"skipped_jobs":skipped})).map_err(|error|error.to_string())?);
     }
     Ok(failures == 0)
+}
+
+fn apply_sql_parameter_overrides(
+    jobs: &mut [AutomationJob],
+    parameter_overrides: &[(String, String)],
+    scoped_parameter_overrides: &[(String, String, String)],
+) -> Result<(), String> {
+    for job in jobs.iter_mut() {
+        for (name, value) in parameter_overrides {
+            if let Some((_, configured_value)) = job
+                .parameters
+                .iter_mut()
+                .find(|(configured_name, _)| configured_name == name)
+            {
+                *configured_value = value.clone();
+            } else {
+                job.parameters.push((name.clone(), value.clone()));
+            }
+        }
+    }
+    let mut assigned = HashSet::new();
+    for (selector, name, value) in scoped_parameter_overrides {
+        let matches: Vec<&mut AutomationJob> = jobs
+            .iter_mut()
+            .filter(|job| {
+                job.name.eq_ignore_ascii_case(selector)
+                    || job.id.to_string().eq_ignore_ascii_case(selector)
+            })
+            .collect();
+        if matches.len() > 1 {
+            return Err(format!("job selector is ambiguous: {selector}"));
+        }
+        let Some(job) = matches.into_iter().next() else {
+            return Err(format!(
+                "job-specific parameter selector is not in the selected batch: {selector}"
+            ));
+        };
+        if !assigned.insert((job.id, name.clone())) {
+            return Err(format!(
+                "parameter {name} is overridden more than once for job {}",
+                job.name
+            ));
+        }
+        if let Some((_, configured_value)) = job
+            .parameters
+            .iter_mut()
+            .find(|(configured_name, _)| configured_name == name)
+        {
+            *configured_value = value.clone();
+        } else {
+            job.parameters.push((name.clone(), value.clone()));
+        }
+    }
+    Ok(())
+}
+
+fn rerun_saved_automation_configuration_cli(
+    case_path: &str,
+    run_id: Uuid,
+    json_output: bool,
+) -> Result<bool, String> {
+    let _case_lock = lock_automation_case(Path::new(case_path))?;
+    let content =
+        fs::read_to_string(case_path).map_err(|error| format!("cannot read case: {error}"))?;
+    let case = serde_json::from_str::<CaseFile>(&content)
+        .map_err(|error| format!("cannot parse case: {error}"))?;
+    let prior_run = case
+        .automation_runs
+        .iter()
+        .find(|run| run.id == run_id)
+        .ok_or_else(|| format!("automation run not found: {run_id}"))?;
+    if !prior_run.configuration_recorded {
+        return Err(format!(
+            "automation run {run_id} does not contain a saved configuration"
+        ));
+    }
+    let job = AutomationJob {
+        id: prior_run.job_id,
+        name: prior_run.job_name.clone(),
+        database_path: prior_run.database_path.clone(),
+        series: prior_run.series.clone(),
+        query: prior_run.query.clone(),
+        parameters: prior_run.parameters.clone(),
+        enabled: prior_run.enabled,
+        minimum_connections: prior_run.minimum_connections,
+        maximum_regressions: prior_run.maximum_regressions,
+        maximum_skipped_rows: prior_run.maximum_skipped_rows,
+    };
+    let mut app = App::automation_context(case, case_path);
+    normalize_snapshot_database_paths(&mut app.case, &app.case_path);
+    let (success, message) = app.run_automation_job_cli(&job);
+    let new_run = app
+        .case
+        .automation_runs
+        .last()
+        .ok_or_else(|| "automation rerun did not produce run history".to_owned())?;
+    let new_run_id = new_run.id;
+    let duration_ms = new_run.duration_ms;
+    let snapshot_id = new_run.snapshot_id;
+    let snapshot = snapshot_id
+        .and_then(|id| app.case.snapshots.iter().find(|snapshot| snapshot.id == id));
+    let snapshot_index = snapshot_id.and_then(|id| {
+        app.case
+            .snapshots
+            .iter()
+            .position(|snapshot| snapshot.id == id)
+    });
+    let previous = snapshot_index
+        .and_then(|index| previous_snapshot_index(&app.case, index))
+        .and_then(|index| app.case.snapshots.get(index));
+    save_case_atomically(Path::new(case_path), &app.case)?;
+    if json_output {
+        let mut outcome = automation_outcome_json(
+            &job,
+            success,
+            &message,
+            Some(new_run_id),
+            snapshot,
+            previous,
+        );
+        outcome["duration_ms"] = serde_json::json!(duration_ms);
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "schema_version": 1,
+                "ok": success,
+                "saved": true,
+                "case": case_path,
+                "rerun_of": run_id,
+                "passed": usize::from(success),
+                "failed": usize::from(!success),
+                "outcomes": [outcome],
+            }))
+            .map_err(|error| error.to_string())?
+        );
+    } else {
+        println!(
+            "{} · rerun of {} · {} · {}",
+            if success { "PASS" } else { "FAIL" },
+            run_id,
+            job.name,
+            message
+        );
+    }
+    Ok(success)
 }
 
 fn select_enabled_automation_jobs(
@@ -7247,13 +7649,15 @@ fn lock_automation_case(path: &Path) -> Result<fs::File, String> {
 fn validate_enabled_automation_jobs_cli(
     case_path: &str,
     selected_jobs: Option<&[String]>,
+    parameter_overrides: &[(String, String)],
+    scoped_parameter_overrides: &[(String, String, String)],
     json_output: bool,
 ) -> Result<bool, String> {
     let content =
         fs::read_to_string(case_path).map_err(|error| format!("cannot read case: {error}"))?;
     let case = serde_json::from_str::<CaseFile>(&content)
         .map_err(|error| format!("cannot parse case: {error}"))?;
-    let jobs = if let Some(selected_jobs) = selected_jobs {
+    let mut jobs = if let Some(selected_jobs) = selected_jobs {
         select_enabled_automation_jobs(&case, selected_jobs)?
     } else {
         case.automation_jobs
@@ -7265,6 +7669,7 @@ fn validate_enabled_automation_jobs_cli(
     if jobs.is_empty() {
         return Err("case contains no enabled automation jobs".into());
     }
+    apply_sql_parameter_overrides(&mut jobs, parameter_overrides, scoped_parameter_overrides)?;
 
     let mut app = App::automation_context(case, case_path);
     normalize_snapshot_database_paths(&mut app.case, &app.case_path);
@@ -7287,7 +7692,9 @@ fn validate_enabled_automation_jobs_cli(
             );
             failures += 1;
             if json_output {
-                outcomes.push(automation_outcome_json(&job, false, &message, None, None));
+                outcomes.push(automation_outcome_json(
+                    &job, false, &message, None, None, None,
+                ));
             } else {
                 println!("FAIL · {} · {}", job.name, message);
             }
@@ -7312,7 +7719,7 @@ fn validate_enabled_automation_jobs_cli(
         }
         if json_output {
             outcomes.push(automation_outcome_json(
-                &job, success, &message, snapshot, previous,
+                &job, success, &message, None, snapshot, previous,
             ));
         } else {
             println!(
@@ -7360,6 +7767,7 @@ fn list_automation_jobs_cli(
                         "status": if run.success { "PASS" } else { "FAIL" },
                         "started_at": run.started_at,
                         "finished_at": run.finished_at,
+                        "duration_ms": run.duration_ms,
                         "message": run.message,
                         "snapshot_id": run.snapshot_id,
                     })
@@ -7464,11 +7872,18 @@ fn list_automation_runs_cli(
                 maximum_regressions: run.maximum_regressions,
                 maximum_skipped_rows: run.maximum_skipped_rows,
             };
-            let mut outcome =
-                automation_outcome_json(&job, run.success, &run.message, snapshot, previous);
+            let mut outcome = automation_outcome_json(
+                &job,
+                run.success,
+                &run.message,
+                Some(run.id),
+                snapshot,
+                previous,
+            );
             outcome["id"] = serde_json::json!(run.id);
             outcome["started_at"] = serde_json::json!(run.started_at);
             outcome["finished_at"] = serde_json::json!(run.finished_at);
+            outcome["duration_ms"] = serde_json::json!(run.duration_ms);
             outcome["enabled"] = serde_json::json!(run.enabled);
             outcome["configuration_recorded"] = serde_json::json!(run.configuration_recorded);
             if !run.configuration_recorded {
@@ -7543,10 +7958,24 @@ fn report_cli_usage_error(usage: &str, json_output: bool) -> ! {
     std::process::exit(2);
 }
 
-fn parse_batch_selection_args(args: &[String], usage: &str) -> (bool, Option<Vec<String>>) {
+fn parse_batch_selection_args(
+    args: &[String],
+    usage: &str,
+    allow_skip_recent_success: bool,
+) -> (
+    bool,
+    Option<Vec<String>>,
+    Vec<(String, String)>,
+    Vec<(String, String, String)>,
+    bool,
+) {
     let json_output = args.iter().any(|arg| arg == "--json");
     let mut selectors = Vec::new();
+    let mut parameter_options = Vec::new();
+    let mut scoped_parameter_options = Vec::new();
     let mut seen_json = false;
+    let mut skip_recent_success = false;
+    let mut seen_skip_recent_success = false;
     let mut index = 2;
     while index < args.len() {
         match args[index].as_str() {
@@ -7564,11 +7993,60 @@ fn parse_batch_selection_args(args: &[String], usage: &str) -> (bool, Option<Vec
                 };
                 selectors.push(value.clone());
             }
+            "--param" => {
+                index += 1;
+                let Some(value) = args
+                    .get(index)
+                    .filter(|value| !value.trim().is_empty() && !value.starts_with("--"))
+                else {
+                    report_cli_usage_error("--param requires name=value", json_output);
+                };
+                parameter_options.push(value.clone());
+            }
+            "--job-param" => {
+                index += 1;
+                let Some(job_selector) = args
+                    .get(index)
+                    .filter(|value| !value.trim().is_empty() && !value.starts_with("--"))
+                else {
+                    report_cli_usage_error("--job-param requires a job name or UUID", json_output);
+                };
+                index += 1;
+                let Some(value) = args
+                    .get(index)
+                    .filter(|value| !value.trim().is_empty() && !value.starts_with("--"))
+                else {
+                    report_cli_usage_error("--job-param requires name=value", json_output);
+                };
+                scoped_parameter_options.push((job_selector.clone(), value.clone()));
+            }
+            "--skip-recent-success" if allow_skip_recent_success && !seen_skip_recent_success => {
+                skip_recent_success = true;
+                seen_skip_recent_success = true;
+            }
             _ => report_cli_usage_error(usage, json_output),
         }
         index += 1;
     }
-    (json_output, (!selectors.is_empty()).then_some(selectors))
+    let parameters = parse_sql_parameters(&parameter_options.join("\n"))
+        .unwrap_or_else(|error| report_cli_usage_error(&error, json_output));
+    let mut scoped_parameters = Vec::new();
+    for (selector, option) in scoped_parameter_options {
+        let parsed = parse_sql_parameters(&option)
+            .unwrap_or_else(|error| report_cli_usage_error(&error, json_output));
+        if parsed.len() != 1 {
+            report_cli_usage_error("--job-param requires one name=value pair", json_output);
+        }
+        let (name, value) = parsed.into_iter().next().expect("one parsed parameter");
+        scoped_parameters.push((selector, name, value));
+    }
+    (
+        json_output,
+        (!selectors.is_empty()).then_some(selectors),
+        parameters,
+        scoped_parameters,
+        skip_recent_success,
+    )
 }
 
 fn main() -> eframe::Result<()> {
@@ -7578,7 +8056,7 @@ fn main() -> eframe::Result<()> {
         .is_some_and(|arg| arg == "--help" || arg == "-h")
     {
         println!(
-            "Arch Notebook\n\nUsage:\n  arch-notebook\n  arch-notebook --export-graphml <case.json> <output.graphml> [--json]\n  arch-notebook --export-sql-comparison <case.json> <baseline-snapshot-id> <current-snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --list-jobs <case.json> [--enabled-only] [--json]\n  arch-notebook --list-runs <case.json> [--json] [--job <name-or-id>] [--offset <count>] [--limit <count>]\n  arch-notebook --validate-enabled-jobs <case.json> [--json] [--job <name-or-id> ...]\n  arch-notebook --run-enabled-jobs <case.json> [--json] [--skip-recent-success] [--job <name-or-id> ...]\n  arch-notebook --run-job <case.json> <job-name-or-id> [--json]\n\nJob and run listing and validation do not change the case. Run history is newest first and can be filtered or paged. SQL comparisons can be exported from saved snapshots for downstream tools. Batch runs save snapshots and run history to the case file. JSON output is available for scheduler integration."
+            "Arch Notebook\n\nUsage:\n  arch-notebook\n  arch-notebook --export-graphml <case.json> <output.graphml> [--json]\n  arch-notebook --export-sql-comparison <case.json> <baseline-snapshot-id> <current-snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --list-jobs <case.json> [--enabled-only] [--json]\n  arch-notebook --list-runs <case.json> [--json] [--job <name-or-id>] [--offset <count>] [--limit <count>]\n  arch-notebook --validate-enabled-jobs <case.json> [--json] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --run-enabled-jobs <case.json> [--json] [--skip-recent-success] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --run-job <case.json> <job-name-or-id> [--param name=value ...] [--json]\n\nJob and run listing and validation do not change the case. Run history is newest first and can be filtered or paged. SQL comparisons can be exported from saved snapshots for downstream tools. Batch runs save snapshots and run history to the case file. JSON output is available for scheduler integration."
         );
         return Ok(());
     }
@@ -7733,13 +8211,19 @@ fn main() -> eframe::Result<()> {
         .first()
         .is_some_and(|arg| arg == "--validate-enabled-jobs")
     {
-        let usage = "usage: arch-notebook --validate-enabled-jobs <case.json> [--json] [--job <name-or-id> ...]";
+        let usage = "usage: arch-notebook --validate-enabled-jobs <case.json> [--json] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]";
         let Some(case_path) = args.get(1) else {
             report_cli_usage_error(usage, args.iter().any(|arg| arg == "--json"));
         };
-        let (json_output, selected_jobs) = parse_batch_selection_args(&args, usage);
-        match validate_enabled_automation_jobs_cli(case_path, selected_jobs.as_deref(), json_output)
-        {
+        let (json_output, selected_jobs, parameter_overrides, scoped_parameter_overrides, _) =
+            parse_batch_selection_args(&args, usage, false);
+        match validate_enabled_automation_jobs_cli(
+            case_path,
+            selected_jobs.as_deref(),
+            &parameter_overrides,
+            &scoped_parameter_overrides,
+            json_output,
+        ) {
             Err(error) => report_cli_error("automation validation failed", error, json_output),
             Ok(false) => {
                 eprintln!("automation validation failed; case file was not changed");
@@ -7750,45 +8234,23 @@ fn main() -> eframe::Result<()> {
         return Ok(());
     }
     if args.first().is_some_and(|arg| arg == "--run-enabled-jobs") {
-        let usage = "usage: arch-notebook --run-enabled-jobs <case.json> [--json] [--skip-recent-success] [--job <name-or-id> ...]";
+        let usage = "usage: arch-notebook --run-enabled-jobs <case.json> [--json] [--skip-recent-success] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]";
         let Some(case_path) = args.get(1) else {
             report_cli_usage_error(usage, args.iter().any(|arg| arg == "--json"));
         };
-        let json_output = args.iter().any(|arg| arg == "--json");
-        let mut skip_recent_success = false;
-        let mut selectors = Vec::new();
-        let mut seen_json = false;
-        let mut seen_skip = false;
-        let mut index = 2;
-        while index < args.len() {
-            match args[index].as_str() {
-                "--json" if !seen_json => seen_json = true,
-                "--skip-recent-success" if !seen_skip => {
-                    skip_recent_success = true;
-                    seen_skip = true;
-                }
-                "--job" => {
-                    index += 1;
-                    let Some(value) = args
-                        .get(index)
-                        .filter(|value| !value.trim().is_empty() && !value.starts_with("--"))
-                    else {
-                        report_cli_usage_error(
-                            "--job requires an enabled job name or UUID",
-                            json_output,
-                        );
-                    };
-                    selectors.push(value.clone());
-                }
-                _ => report_cli_usage_error(usage, json_output),
-            }
-            index += 1;
-        }
-        let selected_jobs = (!selectors.is_empty()).then_some(selectors);
+        let (
+            json_output,
+            selected_jobs,
+            parameter_overrides,
+            scoped_parameter_overrides,
+            skip_recent_success,
+        ) = parse_batch_selection_args(&args, usage, true);
         match run_automation_cli(
             case_path,
             None,
             selected_jobs.as_deref(),
+            &parameter_overrides,
+            &scoped_parameter_overrides,
             skip_recent_success,
             json_output,
         ) {
@@ -7803,19 +8265,41 @@ fn main() -> eframe::Result<()> {
     }
     if args.first().is_some_and(|arg| arg == "--run-job") {
         let json_output = args.iter().any(|arg| arg == "--json");
+        let usage = "usage: arch-notebook --run-job <case.json> <job-name-or-id> [--param name=value ...] [--json]";
         let (Some(case_path), Some(job_name)) = (args.get(1), args.get(2)) else {
-            report_cli_usage_error(
-                "usage: arch-notebook --run-job <case.json> <job-name-or-id> [--json]",
-                json_output,
-            );
+            report_cli_usage_error(usage, json_output);
         };
-        if args.len() > 4 || args.get(3).is_some_and(|arg| arg != "--json") {
-            report_cli_usage_error(
-                "usage: arch-notebook --run-job <case.json> <job-name-or-id> [--json]",
-                json_output,
-            );
+        let mut parameter_options = Vec::new();
+        let mut seen_json = false;
+        let mut index = 3;
+        while index < args.len() {
+            match args[index].as_str() {
+                "--json" if !seen_json => seen_json = true,
+                "--param" => {
+                    index += 1;
+                    let Some(value) = args
+                        .get(index)
+                        .filter(|value| !value.trim().is_empty() && !value.starts_with("--"))
+                    else {
+                        report_cli_usage_error("--param requires name=value", json_output);
+                    };
+                    parameter_options.push(value.clone());
+                }
+                _ => report_cli_usage_error(usage, json_output),
+            }
+            index += 1;
         }
-        match run_automation_cli(case_path, Some(job_name), None, false, json_output) {
+        let parameter_overrides = parse_sql_parameters(&parameter_options.join("\n"))
+            .unwrap_or_else(|error| report_cli_usage_error(&error, json_output));
+        match run_automation_cli(
+            case_path,
+            Some(job_name),
+            None,
+            &parameter_overrides,
+            &[],
+            false,
+            json_output,
+        ) {
             Err(error) => report_cli_error("automation failed", error, json_output),
             Ok(false) => {
                 eprintln!("automation failed; run history saved");
