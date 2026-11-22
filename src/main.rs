@@ -3,7 +3,8 @@ use rusqlite::{Connection, OpenFlags, types::ValueRef};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, VecDeque},
-    fs,
+    env, fs,
+    path::{Path, PathBuf},
 };
 use uuid::Uuid;
 
@@ -74,6 +75,26 @@ struct ConnectionSnapshot {
 }
 
 #[derive(Clone, Serialize, Deserialize)]
+struct AutomationJob {
+    id: Uuid,
+    name: String,
+    database_path: String,
+    series: String,
+    query: String,
+    enabled: bool,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct AutomationRun {
+    job_id: Uuid,
+    job_name: String,
+    started_at: String,
+    finished_at: String,
+    success: bool,
+    message: String,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
 struct CaseFile {
     title: String,
     #[serde(default)]
@@ -82,6 +103,10 @@ struct CaseFile {
     links: Vec<Link>,
     #[serde(default)]
     snapshots: Vec<ConnectionSnapshot>,
+    #[serde(default)]
+    automation_jobs: Vec<AutomationJob>,
+    #[serde(default)]
+    automation_runs: Vec<AutomationRun>,
 }
 
 struct App {
@@ -107,6 +132,8 @@ struct App {
     sql_path: String,
     sql_series: String,
     sql_query: String,
+    automation_job_name: String,
+    editing_automation_job: Option<Uuid>,
 }
 
 #[derive(PartialEq)]
@@ -120,6 +147,7 @@ enum DataMode {
     Entities,
     Relationships,
     SqlRegressions,
+    Automation,
 }
 
 #[derive(PartialEq, Clone, Copy)]
@@ -155,14 +183,19 @@ struct ConnectionDelta {
 
 impl Default for App {
     fn default() -> Self {
+        let data_dir = app_data_dir();
+        let status = match initialize_user_data(&data_dir) {
+            Ok(()) => "CASE READY".into(),
+            Err(error) => format!("USER DATA SETUP FAILED · {error}"),
+        };
         Self {
             case: demo_case(),
             selected: None,
             query: String::new(),
-            status: "CASE READY".into(),
+            status,
             show_timeline: false,
-            import_path: "sample_relationships.csv".into(),
-            export_path: "chart-export.csv".into(),
+            import_path: data_dir.join("sample_relationships.csv").to_string_lossy().into_owned(),
+            export_path: data_dir.join("chart-export.csv").to_string_lossy().into_owned(),
             selected_link: None,
             page: WorkspacePage::Chart,
             entity_sort: EntitySort::Name,
@@ -171,15 +204,63 @@ impl Default for App {
             path_start: None,
             path_end: None,
             path_result: Vec::new(),
-            case_path: "harbor-light.case.json".into(),
+            case_path: data_dir.join("harbor-light.case.json").to_string_lossy().into_owned(),
             data_mode: DataMode::Relationships,
             merge_candidate: None,
             duplicate_candidates: Vec::new(),
-            sql_path: "sample_connections.sqlite".into(),
+            sql_path: data_dir.join("sample_connections.sqlite").to_string_lossy().into_owned(),
             sql_series: "Harbor Light connection review".into(),
             sql_query: "SELECT connection_id, source, source_type, target, target_type, relationship, event_date AS date, confidence, directed, source_reference, notes FROM connection_observations WHERE snapshot_id = 'baseline' ORDER BY connection_id;".into(),
+            automation_job_name: String::new(),
+            editing_automation_job: None,
         }
     }
+}
+
+// Keep first-run files out of the working directory so installed app launches behave consistently.
+fn app_data_dir() -> PathBuf {
+    if cfg!(target_os = "macos") {
+        return env::var_os("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("Library/Application Support/Arch Notebook");
+    }
+    if cfg!(target_os = "windows") {
+        return env::var_os("APPDATA")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("Arch Notebook");
+    }
+    if let Some(xdg_data_home) = env::var_os("XDG_DATA_HOME").map(PathBuf::from) {
+        if xdg_data_home.is_absolute() {
+            return xdg_data_home.join("arch-notebook");
+        }
+    }
+    env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".local/share/arch-notebook")
+}
+
+fn initialize_user_data(data_dir: &Path) -> std::io::Result<()> {
+    fs::create_dir_all(data_dir)?;
+    let samples: [(&str, &[u8]); 2] = [
+        (
+            "sample_connections.sqlite",
+            include_bytes!("../sample_connections.sqlite"),
+        ),
+        (
+            "sample_relationships.csv",
+            include_bytes!("../sample_relationships.csv"),
+        ),
+    ];
+    for (name, bytes) in samples {
+        let path = data_dir.join(name);
+        if !path.exists() {
+            fs::write(path, bytes)?;
+        }
+    }
+    Ok(())
 }
 
 fn demo_case() -> CaseFile {
@@ -301,6 +382,8 @@ fn demo_case() -> CaseFile {
         entities,
         links,
         snapshots: Vec::new(),
+        automation_jobs: Vec::new(),
+        automation_runs: Vec::new(),
     }
 }
 
@@ -648,6 +731,118 @@ impl App {
         }
     }
 
+    fn save_automation_job(&mut self) {
+        let name = self.automation_job_name.trim().to_string();
+        if name.is_empty()
+            || self.sql_path.trim().is_empty()
+            || self.sql_series.trim().is_empty()
+            || self.sql_query.trim().is_empty()
+        {
+            self.status = "JOB NOT SAVED · name, database, series, and query are required".into();
+            return;
+        }
+        if self.case.automation_jobs.iter().any(|job| {
+            job.name.eq_ignore_ascii_case(&name) && Some(job.id) != self.editing_automation_job
+        }) {
+            self.status = "JOB NOT SAVED · job names must be unique within the case".into();
+            return;
+        }
+        if let Some(id) = self.editing_automation_job {
+            if let Some(job) = self
+                .case
+                .automation_jobs
+                .iter_mut()
+                .find(|job| job.id == id)
+            {
+                job.name = name.clone();
+                job.database_path = self.sql_path.trim().into();
+                job.series = self.sql_series.trim().into();
+                job.query = self.sql_query.trim().into();
+                self.status = format!("AUTOMATION JOB UPDATED · {name}");
+                return;
+            }
+        }
+        self.case.automation_jobs.push(AutomationJob {
+            id: Uuid::new_v4(),
+            name: name.clone(),
+            database_path: self.sql_path.trim().into(),
+            series: self.sql_series.trim().into(),
+            query: self.sql_query.trim().into(),
+            enabled: true,
+        });
+        self.editing_automation_job = None;
+        self.status = format!("AUTOMATION JOB ADDED · {name}");
+    }
+
+    fn edit_automation_job(&mut self, id: Uuid) {
+        if let Some(job) = self
+            .case
+            .automation_jobs
+            .iter()
+            .find(|job| job.id == id)
+            .cloned()
+        {
+            self.automation_job_name = job.name;
+            self.sql_path = job.database_path;
+            self.sql_series = job.series;
+            self.sql_query = job.query;
+            self.editing_automation_job = Some(id);
+            self.status = "EDITING AUTOMATION JOB".into();
+        }
+    }
+
+    fn run_automation_job(&mut self, id: Uuid) {
+        let Some(job) = self
+            .case
+            .automation_jobs
+            .iter()
+            .find(|job| job.id == id)
+            .cloned()
+        else {
+            self.status = "JOB RUN FAILED · job not found".into();
+            return;
+        };
+        let started_at = epoch_timestamp();
+        self.sql_path = job.database_path.clone();
+        self.sql_series = job.series.clone();
+        self.sql_query = job.query.clone();
+        self.ingest_sqlite_snapshot();
+        let message = self.status.clone();
+        let success = message.starts_with("SQL SNAPSHOT INGESTED");
+        self.case.automation_runs.push(AutomationRun {
+            job_id: job.id,
+            job_name: job.name,
+            started_at,
+            finished_at: epoch_timestamp(),
+            success,
+            message: message.clone(),
+        });
+        if self.case.automation_runs.len() > 200 {
+            self.case
+                .automation_runs
+                .drain(..self.case.automation_runs.len() - 200);
+        }
+    }
+
+    fn run_enabled_automation_jobs(&mut self) {
+        let jobs: Vec<Uuid> = self
+            .case
+            .automation_jobs
+            .iter()
+            .filter(|job| job.enabled)
+            .map(|job| job.id)
+            .collect();
+        if jobs.is_empty() {
+            self.status = "NO ENABLED AUTOMATION JOBS".into();
+            return;
+        }
+        let count = jobs.len();
+        for id in jobs {
+            self.run_automation_job(id);
+        }
+        self.status = format!("AUTOMATION RUN COMPLETE · {count} JOBS · SEE RUN HISTORY");
+    }
+
     fn export_csv(&mut self) {
         let result = (|| -> Result<(), String> {
             let mut writer =
@@ -746,8 +941,13 @@ impl App {
             entities: Vec::new(),
             links: Vec::new(),
             snapshots: Vec::new(),
+            automation_jobs: Vec::new(),
+            automation_runs: Vec::new(),
         };
-        self.case_path = "untitled.case.json".into();
+        self.case_path = app_data_dir()
+            .join("untitled.case.json")
+            .to_string_lossy()
+            .into_owned();
         self.selected = None;
         self.selected_link = None;
         self.path_start = None;
@@ -979,6 +1179,32 @@ fn sql_value(row: &rusqlite::Row<'_>, index: Option<usize>) -> rusqlite::Result<
     })
 }
 
+fn epoch_timestamp() -> String {
+    let seconds = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or_default();
+    let days = (seconds / 86_400) as i64;
+    let day_seconds = seconds % 86_400;
+    let shifted = days + 719_468;
+    let era = shifted / 146_097;
+    let day_of_era = shifted - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let mut year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_prime = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_prime + 2) / 5 + 1;
+    let month = month_prime + if month_prime < 10 { 3 } else { -9 };
+    year += i64::from(month <= 2);
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
+        day_seconds / 3_600,
+        day_seconds / 60 % 60,
+        day_seconds % 60
+    )
+}
+
 fn compare_snapshots(
     baseline: &ConnectionSnapshot,
     current: &ConnectionSnapshot,
@@ -1207,9 +1433,32 @@ impl eframe::App for App {
                     ui.allocate_ui_with_layout(egui::vec2(canvas_w,avail.y),egui::Layout::top_down(egui::Align::Min),|ui|{
                         ui.set_min_size(egui::vec2(canvas_w,avail.y));
                         if self.page==WorkspacePage::Data {
-                            ui.horizontal(|ui|{ui.label(egui::RichText::new("CASE RECORDS").strong().color(cyan));ui.selectable_value(&mut self.data_mode,DataMode::Entities,"Entities");ui.selectable_value(&mut self.data_mode,DataMode::Relationships,"Relationships");ui.selectable_value(&mut self.data_mode,DataMode::SqlRegressions,"SQL regressions");if self.data_mode!=DataMode::SqlRegressions{ui.label(egui::RichText::new("CSV headers: source,target,relationship,date,confidence").small().color(muted));}});
+                            ui.horizontal(|ui|{ui.label(egui::RichText::new("CASE RECORDS").strong().color(cyan));ui.selectable_value(&mut self.data_mode,DataMode::Entities,"Entities");ui.selectable_value(&mut self.data_mode,DataMode::Relationships,"Relationships");ui.selectable_value(&mut self.data_mode,DataMode::SqlRegressions,"SQL regressions");ui.selectable_value(&mut self.data_mode,DataMode::Automation,"Automation");if self.data_mode==DataMode::Entities||self.data_mode==DataMode::Relationships{ui.label(egui::RichText::new("CSV headers: source,target,relationship,date,confidence").small().color(muted));}});
                             ui.horizontal(|ui|{ui.label("Case file");ui.add(egui::TextEdit::singleline(&mut self.case_path).desired_width(260.0));ui.label("Description");ui.add(egui::TextEdit::singleline(&mut self.case.description).desired_width(260.0));});
                             ui.horizontal(|ui|{ui.label("Import path");ui.add(egui::TextEdit::singleline(&mut self.import_path).desired_width(180.0));ui.label("Export path");ui.add(egui::TextEdit::singleline(&mut self.export_path).desired_width(180.0));});
+                            if self.data_mode==DataMode::Automation {
+                                ui.label(egui::RichText::new("REPEATABLE SQL INGESTION JOBS").strong().color(cyan));
+                                ui.label(egui::RichText::new("Jobs are saved in this case file. Run them here or from a script with the command-line runner.").small().color(muted));
+                                ui.horizontal(|ui|{ui.label("Job name");ui.add(egui::TextEdit::singleline(&mut self.automation_job_name).desired_width(220.0));ui.label("Database");ui.add(egui::TextEdit::singleline(&mut self.sql_path).desired_width(220.0));});
+                                ui.horizontal(|ui|{ui.label("Snapshot series");ui.add(egui::TextEdit::singleline(&mut self.sql_series).desired_width(220.0));if ui.button(if self.editing_automation_job.is_some(){"Save job changes"}else{"Add job"}).clicked(){self.save_automation_job();}if self.editing_automation_job.is_some()&&ui.button("Cancel edit").clicked(){self.editing_automation_job=None;self.automation_job_name.clear();}});
+                                ui.add(egui::TextEdit::multiline(&mut self.sql_query).desired_width(canvas_w-20.0).desired_rows(5).code_editor());
+                                if ui.button("Run all enabled jobs").clicked(){self.run_enabled_automation_jobs();}
+                                ui.add_space(8.0);ui.label(egui::RichText::new("JOBS").small().strong().color(cyan));
+                                let mut action: Option<(String,Uuid)> = None;
+                                for job in &mut self.case.automation_jobs {
+                                    ui.horizontal(|ui| {
+                                        ui.checkbox(&mut job.enabled, "");
+                                        ui.label(format!("{} · {} · {}",job.name,job.series,job.database_path));
+                                        if ui.small_button("Edit").clicked(){action=Some(("edit".into(),job.id));}
+                                        if ui.small_button("Run").clicked(){action=Some(("run".into(),job.id));}
+                                        if ui.small_button("Delete").clicked(){action=Some(("delete".into(),job.id));}
+                                    });
+                                }
+                                if let Some((verb,id))=action {match verb.as_str(){"edit"=>self.edit_automation_job(id),"run"=>self.run_automation_job(id),"delete"=>{self.case.automation_jobs.retain(|job|job.id!=id);self.status="AUTOMATION JOB DELETED".into();},_=>{}}}
+                                ui.add_space(8.0);ui.label(egui::RichText::new("RUN HISTORY · newest first").small().strong().color(cyan));
+                                egui::ScrollArea::vertical().max_height(210.0).show(ui,|ui|for run in self.case.automation_runs.iter().rev(){ui.label(egui::RichText::new(format!("{} · {} · {} → {} · {}",if run.success{"PASS"}else{"FAIL"},run.job_name,run.started_at,run.finished_at,run.message)).color(if run.success{muted}else{egui::Color32::from_rgb(238,139,115)}));});
+                                return;
+                            }
                             if self.data_mode==DataMode::SqlRegressions {
                                 let latest=self.case.snapshots.last().cloned();
                                 let baseline=latest.as_ref().and_then(|current|self.case.snapshots.iter().rev().skip(1).find(|snapshot|snapshot.source_key==current.source_key).cloned());
@@ -1344,7 +1593,123 @@ fn segment_distance(point: egui::Pos2, start: egui::Pos2, end: egui::Pos2) -> f3
     point.distance(start + segment * t)
 }
 
+fn run_automation_cli(case_path: &str, job_name: Option<&str>) -> Result<(), String> {
+    let content =
+        fs::read_to_string(case_path).map_err(|error| format!("cannot read case: {error}"))?;
+    let case = serde_json::from_str::<CaseFile>(&content)
+        .map_err(|error| format!("cannot parse case: {error}"))?;
+    let jobs: Vec<AutomationJob> = if let Some(name) = job_name {
+        let matches: Vec<AutomationJob> = case
+            .automation_jobs
+            .iter()
+            .filter(|job| job.name == name)
+            .cloned()
+            .collect();
+        if matches.len() > 1 {
+            return Err(format!("job name is ambiguous: {name}"));
+        }
+        vec![
+            matches
+                .into_iter()
+                .next()
+                .ok_or_else(|| format!("automation job not found: {name}"))?,
+        ]
+    } else {
+        case.automation_jobs
+            .iter()
+            .filter(|job| job.enabled)
+            .cloned()
+            .collect()
+    };
+    if jobs.is_empty() {
+        return Err("case contains no enabled automation jobs".into());
+    }
+    let mut app = App::default();
+    app.case = case;
+    let mut failures = 0;
+    for job in jobs {
+        let started_at = epoch_timestamp();
+        app.sql_path = job.database_path.clone();
+        app.sql_series = job.series.clone();
+        app.sql_query = job.query.clone();
+        app.ingest_sqlite_snapshot();
+        let message = app.status.clone();
+        let success = message.starts_with("SQL SNAPSHOT INGESTED");
+        if !success {
+            failures += 1;
+        }
+        println!(
+            "{} · {} · {}",
+            if success { "PASS" } else { "FAIL" },
+            job.name,
+            message
+        );
+        app.case.automation_runs.push(AutomationRun {
+            job_id: job.id,
+            job_name: job.name,
+            started_at,
+            finished_at: epoch_timestamp(),
+            success,
+            message,
+        });
+        if app.case.automation_runs.len() > 200 {
+            app.case
+                .automation_runs
+                .drain(..app.case.automation_runs.len() - 200);
+        }
+    }
+    let serialized = serde_json::to_string_pretty(&app.case).map_err(|error| error.to_string())?;
+    let temporary_path = format!("{case_path}.tmp-{}", std::process::id());
+    fs::write(&temporary_path, serialized)
+        .map_err(|error| format!("cannot write temporary case file: {error}"))?;
+    if let Err(error) = fs::rename(&temporary_path, case_path) {
+        let _ = fs::remove_file(&temporary_path);
+        return Err(format!(
+            "cannot replace case with updated run history: {error}"
+        ));
+    }
+    if failures > 0 {
+        Err(format!(
+            "{failures} automation job(s) failed; run history saved"
+        ))
+    } else {
+        Ok(())
+    }
+}
+
 fn main() -> eframe::Result<()> {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args
+        .first()
+        .is_some_and(|arg| arg == "--help" || arg == "-h")
+    {
+        println!(
+            "Arch Notebook\n\nUsage:\n  arch-notebook\n  arch-notebook --run-enabled-jobs <case.json>\n  arch-notebook --run-job <case.json> <job-name>\n\nBatch runs save snapshots and run history to the case file."
+        );
+        return Ok(());
+    }
+    if args.first().is_some_and(|arg| arg == "--run-enabled-jobs") {
+        let Some(case_path) = args.get(1) else {
+            eprintln!("usage: arch-notebook --run-enabled-jobs <case.json>");
+            std::process::exit(2);
+        };
+        if let Err(error) = run_automation_cli(case_path, None) {
+            eprintln!("automation failed: {error}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+    if args.first().is_some_and(|arg| arg == "--run-job") {
+        let (Some(case_path), Some(job_name)) = (args.get(1), args.get(2)) else {
+            eprintln!("usage: arch-notebook --run-job <case.json> <job-name>");
+            std::process::exit(2);
+        };
+        if let Err(error) = run_automation_cli(case_path, Some(job_name)) {
+            eprintln!("automation failed: {error}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1440.0, 900.0])

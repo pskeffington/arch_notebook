@@ -2,6 +2,17 @@
 name = "arch-notebook"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.89"
+description = "A Rust desktop workbench for relationship analysis and SQL connection regressions"
+license = "MIT"
+repository = "https://github.com/pskeffington/arch_notebook"
+readme = "README.md"
+keywords = ["analyst", "relationships", "sqlite", "visualization"]
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
 
 [dependencies]
 eframe = { version = "0.31", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }

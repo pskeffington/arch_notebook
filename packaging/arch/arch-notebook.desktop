@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Arch Notebook
+Comment=Investigate relationship data and compare SQL connection snapshots
+Exec=arch-notebook
+Terminal=false
+Categories=Office;Database;
+Keywords=analyst;relationships;SQL;investigation;

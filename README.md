@@ -20,6 +20,22 @@ cargo run --offline
 
 For the sample comparison, ingest once with `snapshot_id = 'baseline'`, then change the query to `snapshot_id = 'current'` and ingest again with the same snapshot series.
 
+## Automate repeatable ingestion
+
+Open **Data → Automation**, enter a unique job name, SQLite database path, snapshot series, and query, then add the job and save the case. Enable the jobs you want included in a batch run. Each run records its status and timestamps in the case and appends a new immutable snapshot when the query succeeds. In the desktop app, save the case to persist job edits and run history. The command-line runner executes enabled jobs without opening the desktop UI and saves the updated case automatically:
+
+```sh
+cargo run --offline -- --run-enabled-jobs harbor-light.case.json
+```
+
+Run one named job, including a disabled job, with:
+
+```sh
+cargo run --offline -- --run-job harbor-light.case.json "Harbor Light baseline"
+```
+
+The runner saves the updated snapshots and run history back to the case file after processing. It continues through the selected jobs if one fails, saves each outcome, and exits nonzero when any job fails. Use an operating-system scheduler such as cron or systemd timers to run the enabled-job command on a recurring schedule. Keep the SQLite source available at the configured path when automation runs.
+
 ## Other notebook workflows
 
 - Build and edit entity/link charts, inspect attributes and source references, arrange by connectivity, and review chronological timelines.
@@ -28,6 +44,47 @@ For the sample comparison, ingest once with `snapshot_id = 'baseline'`, then cha
 - Import/export relationship CSV and save/open local JSON case files. SQL snapshot history is retained with the case.
 
 All bundled case examples are fictional. Arch Notebook does not connect to a service or transmit case data.
+
+## Build and deploy
+
+The supported desktop targets are Arch Linux and macOS on Apple Silicon or Intel. Rust 1.89 or newer is required. On Linux, the application stores its database, CSV example, and default case under `$XDG_DATA_HOME/arch-notebook`, or `~/.local/share/arch-notebook` when `XDG_DATA_HOME` is unset. On macOS, it uses `~/Library/Application Support/Arch Notebook`. Existing sample files are left in place on later launches.
+
+### Arch Linux
+
+Build and install the current `main` branch as a native package with `makepkg`:
+
+```sh
+git clone https://github.com/pskeffington/arch_notebook.git
+cd arch_notebook/packaging/arch
+makepkg -si
+```
+
+The package includes the desktop menu entry and declares its shared-library dependencies. `makepkg` downloads the locked Cargo dependencies and builds the release binary for the host architecture.
+
+### macOS
+
+Install Xcode Command Line Tools and Rust, then build a self-contained `.app` bundle and zip archive for the current Mac architecture:
+
+```sh
+./scripts/package-macos.sh
+open "dist/Arch Notebook.app"
+```
+
+The script supports native Apple Silicon (`arm64`) and Intel (`x86_64`) hosts. For direct distribution outside the Mac App Store, sign with a Developer ID certificate and notarize with Apple. Configure a `notarytool` keychain profile, then run:
+
+```sh
+export APPLE_SIGNING_IDENTITY="Developer ID Application: Your Name (TEAMID)"
+export APPLE_NOTARY_PROFILE="arch-notebook-notary"
+./scripts/package-macos.sh
+```
+
+The profile is created with `xcrun notarytool store-credentials`; the signing identity and credentials are not stored in this repository. See [Apple's notarization guide](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution) and [Developer ID signing overview](https://developer.apple.com/developer-id/).
+
+### Continuous builds
+
+GitHub Actions checks formatting and builds release artifacts for Linux x86_64, macOS Apple Silicon, macOS Intel, and an Arch Linux package. Pull requests and pushes build without publishing a release; the generated workflow artifacts are available for 14 days. macOS artifacts are unsigned unless the packaging script is run locally with signing credentials.
+
+The CI runner labels follow [GitHub's current hosted runner reference](https://docs.github.com/en/actions/reference/runners/github-hosted-runners). Arch package metadata follows the [Arch package guidelines](https://wiki.archlinux.org/title/Arch_package_guidelines).
 
 ## Research basis
 

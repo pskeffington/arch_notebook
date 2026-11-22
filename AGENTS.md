@@ -3,6 +3,7 @@
 - Rust native desktop application; persist cases locally in JSON.
 - SQL ingestion reads SQLite databases in read-only mode. It must not modify the source database.
 - Treat every SQL result as an immutable connection snapshot; compare snapshots before showing regression claims.
+- Keep automation jobs and their bounded run history in the case file; command-line runs must save results atomically and retain failure records.
 - Preserve evidence references, imported record identity, and original merged entity records.
 - Keep examples fictional and do not add telemetry or network services.
 - Build artifacts belong in `/tmp/arch-notebook-target`.

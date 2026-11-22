@@ -1,0 +1,85 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  desktop:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x86_64
+            runner: ubuntu-24.04
+            package: linux
+          - name: macOS Apple Silicon
+            runner: macos-15
+            package: macos
+          - name: macOS Intel
+            runner: macos-15-intel
+            package: macos
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Linux build libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes pkg-config libegl1-mesa-dev libgl1-mesa-dev \
+            libsqlite3-dev libwayland-dev libx11-dev libxcb1-dev libxcursor-dev libxkbcommon-dev
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Fetch locked dependencies
+        run: cargo fetch --locked
+      - name: Check and build
+        run: |
+          cargo check --locked --offline
+          cargo build --release --locked --offline
+      - name: Package Linux binary archive
+        if: matrix.package == 'linux'
+        run: |
+          mkdir -p dist/arch-notebook-linux-x86_64
+          install -Dm755 target/release/arch-notebook dist/arch-notebook-linux-x86_64/arch-notebook
+          install -Dm644 packaging/arch/arch-notebook.desktop dist/arch-notebook-linux-x86_64/arch-notebook.desktop
+          install -Dm644 LICENSE dist/arch-notebook-linux-x86_64/LICENSE
+          tar -C dist -czf dist/arch-notebook-linux-x86_64.tar.gz arch-notebook-linux-x86_64
+      - name: Package macOS application bundle
+        if: matrix.package == 'macos'
+        run: scripts/package-macos.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: arch-notebook-${{ matrix.package }}-${{ runner.arch }}
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+          if-no-files-found: error
+          retention-days: 14
+
+  arch-package:
+    name: Arch Linux package
+    runs-on: ubuntu-24.04
+    container: archlinux:latest
+    steps:
+      - name: Install Arch build environment
+        run: pacman -Syu --noconfirm --needed base-devel cargo git libglvnd libx11 libxcb libxcursor libxi libxinerama libxkbcommon libxkbcommon-x11 libxrandr libxrender pkgconf rust sqlite wayland
+      - uses: actions/checkout@v4
+      - name: Build package
+        run: |
+          useradd --create-home builder
+          chown -R builder:builder "$GITHUB_WORKSPACE"
+          su builder -c "cd '$GITHUB_WORKSPACE/packaging/arch' && makepkg --noconfirm"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: arch-notebook-archlinux
+          path: packaging/arch/*.pkg.tar.zst
+          if-no-files-found: error
+          retention-days: 14

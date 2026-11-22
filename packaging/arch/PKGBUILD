@@ -1,0 +1,35 @@
+pkgname=arch-notebook-git
+pkgver=0.1.0.r1.g8381738
+pkgrel=1
+pkgdesc='Rust desktop relationship analysis and SQL regression workbench'
+arch=('x86_64' 'aarch64')
+url='https://github.com/pskeffington/arch_notebook'
+license=('MIT')
+depends=('gcc-libs' 'glibc' 'libglvnd' 'libx11' 'libxcb' 'libxcursor' 'libxi' 'libxinerama' 'libxkbcommon' 'libxkbcommon-x11' 'libxrandr' 'libxrender' 'sqlite' 'wayland')
+makedepends=('cargo' 'git' 'pkgconf' 'rust')
+provides=('arch-notebook')
+conflicts=('arch-notebook')
+source=("$pkgname::git+$url.git#branch=main")
+sha256sums=('SKIP')
+
+pkgver() {
+  cd "$srcdir/$pkgname"
+  printf '0.1.0.r%s.g%s' "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+
+prepare() {
+  cd "$srcdir/$pkgname"
+  cargo fetch --locked
+}
+
+build() {
+  cd "$srcdir/$pkgname"
+  cargo build --release --locked
+}
+
+package() {
+  cd "$srcdir/$pkgname"
+  install -Dm755 target/release/arch-notebook "$pkgdir/usr/bin/arch-notebook"
+  install -Dm644 packaging/arch/arch-notebook.desktop "$pkgdir/usr/share/applications/arch-notebook.desktop"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}
