@@ -2589,6 +2589,9 @@ impl App {
             if output_path.is_empty() {
                 return Err("GraphML export path cannot be empty".into());
             }
+            if paths_refer_to_same_file(&output_path, &self.case_path) {
+                return Err("GraphML output path matches the case file".into());
+            }
             self.ensure_path_is_not_sql_source(&output_path)?;
             let valid_entities: HashSet<Uuid> =
                 self.case.entities.iter().map(|entity| entity.id).collect();
@@ -2613,6 +2616,7 @@ impl App {
                 ("graph_title", "graph", "title", "string"),
                 ("graph_description", "graph", "description", "string"),
                 ("node_uuid", "node", "arch_notebook_uuid", "string"),
+                ("node_label", "node", "label", "string"),
                 ("node_name", "node", "name", "string"),
                 ("node_type", "node", "entity_type", "string"),
                 ("node_detail", "node", "detail", "string"),
@@ -2629,6 +2633,7 @@ impl App {
                 ("node_y", "node", "y", "double"),
                 ("node_position_locked", "node", "position_locked", "boolean"),
                 ("edge_connection_id", "edge", "connection_id", "string"),
+                ("edge_label", "edge", "label", "string"),
                 ("edge_relationship", "edge", "relationship", "string"),
                 ("edge_date", "edge", "date", "string"),
                 ("edge_confidence", "edge", "confidence", "int"),
@@ -2652,6 +2657,7 @@ impl App {
             for entity in &self.case.entities {
                 xml.push_str(&format!("    <node id=\"n_{}\">\n", entity.id));
                 graphml_data(&mut xml, "node_uuid", &entity.id.to_string());
+                graphml_data(&mut xml, "node_label", &entity.name);
                 graphml_data(&mut xml, "node_name", &entity.name);
                 graphml_data(&mut xml, "node_type", &entity.kind);
                 graphml_data(&mut xml, "node_detail", &entity.detail);
@@ -2702,6 +2708,7 @@ impl App {
                     link.directed
                 ));
                 graphml_data(&mut xml, "edge_connection_id", &link.connection_id);
+                graphml_data(&mut xml, "edge_label", &link.label);
                 graphml_data(&mut xml, "edge_relationship", &link.label);
                 graphml_data(&mut xml, "edge_date", &link.date);
                 graphml_data(&mut xml, "edge_confidence", &link.confidence.to_string());
@@ -5272,6 +5279,16 @@ fn graphml_data(xml: &mut String, key: &str, value: &str) {
     xml.push_str("</data>\n");
 }
 
+fn paths_refer_to_same_file(first: &str, second: &str) -> bool {
+    let first = Path::new(first);
+    let second = Path::new(second);
+    first == second
+        || fs::canonicalize(first)
+            .ok()
+            .zip(fs::canonicalize(second).ok())
+            .is_some_and(|(first, second)| first == second)
+}
+
 fn escape_xml_text(value: &str) -> String {
     let mut escaped = String::with_capacity(value.len());
     for character in value.chars() {
@@ -5566,6 +5583,37 @@ fn run_automation_cli(
     Ok(failures == 0)
 }
 
+fn export_graphml_cli(case_path: &str, output_path: &str, json_output: bool) -> Result<(), String> {
+    let content =
+        fs::read_to_string(case_path).map_err(|error| format!("cannot read case: {error}"))?;
+    let case = serde_json::from_str::<CaseFile>(&content)
+        .map_err(|error| format!("cannot parse case: {error}"))?;
+    let entity_count = case.entities.len();
+    let relationship_count = case.links.len();
+    let mut app = App::automation_context(case, case_path);
+    app.graphml_export_path = output_path.to_owned();
+    app.export_graphml();
+    if let Some(error) = app.status.strip_prefix("GRAPHML EXPORT FAILED · ") {
+        return Err(error.to_owned());
+    }
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "ok": true,
+                "case": case_path,
+                "output": output_path,
+                "entities": entity_count,
+                "relationships": relationship_count,
+            }))
+            .map_err(|error| error.to_string())?
+        );
+    } else {
+        println!("{}", app.status);
+    }
+    Ok(())
+}
+
 fn lock_automation_case(path: &Path) -> Result<fs::File, String> {
     if path.as_os_str().is_empty() {
         return Err("case path cannot be empty".into());
@@ -5823,8 +5871,27 @@ fn main() -> eframe::Result<()> {
         .is_some_and(|arg| arg == "--help" || arg == "-h")
     {
         println!(
-            "Arch Notebook\n\nUsage:\n  arch-notebook\n  arch-notebook --list-jobs <case.json> [--json]\n  arch-notebook --list-runs <case.json> [--json]\n  arch-notebook --validate-enabled-jobs <case.json> [--json]\n  arch-notebook --run-enabled-jobs <case.json> [--json]\n  arch-notebook --run-job <case.json> <job-name> [--json]\n\nJob and run listing and validation do not change the case. Batch runs save snapshots and run history to the case file. JSON output is available for scheduler integration."
+            "Arch Notebook\n\nUsage:\n  arch-notebook\n  arch-notebook --export-graphml <case.json> <output.graphml> [--json]\n  arch-notebook --list-jobs <case.json> [--json]\n  arch-notebook --list-runs <case.json> [--json]\n  arch-notebook --validate-enabled-jobs <case.json> [--json]\n  arch-notebook --run-enabled-jobs <case.json> [--json]\n  arch-notebook --run-job <case.json> <job-name> [--json]\n\nJob and run listing and validation do not change the case. Batch runs save snapshots and run history to the case file. JSON output is available for scheduler integration."
         );
+        return Ok(());
+    }
+    if args.first().is_some_and(|arg| arg == "--export-graphml") {
+        let json_output = args.iter().any(|arg| arg == "--json");
+        let (Some(case_path), Some(output_path)) = (args.get(1), args.get(2)) else {
+            report_cli_usage_error(
+                "usage: arch-notebook --export-graphml <case.json> <output.graphml> [--json]",
+                json_output,
+            );
+        };
+        if args.len() > 4 || args.get(3).is_some_and(|arg| arg != "--json") {
+            report_cli_usage_error(
+                "usage: arch-notebook --export-graphml <case.json> <output.graphml> [--json]",
+                json_output,
+            );
+        }
+        if let Err(error) = export_graphml_cli(case_path, output_path, json_output) {
+            report_cli_error("GraphML export failed", error, json_output);
+        }
         return Ok(());
     }
     if args.first().is_some_and(|arg| arg == "--list-jobs") {
