@@ -23,12 +23,15 @@ jobs:
           - name: Linux x86_64
             runner: ubuntu-24.04
             package: linux
+            target: x86_64-unknown-linux-gnu
           - name: macOS Apple Silicon
             runner: macos-15
             package: macos
+            target: aarch64-apple-darwin
           - name: macOS Intel
             runner: macos-15-intel
             package: macos
+            target: x86_64-apple-darwin
     steps:
       - uses: actions/checkout@v4
       - name: Select stable Rust toolchain
@@ -47,14 +50,15 @@ jobs:
       - name: Fetch locked dependencies
         run: cargo fetch --locked
       - name: Check and build
+        # Reuse this target in the macOS bundler instead of rebuilding into target/release.
         run: |
-          cargo check --locked --offline
-          cargo build --release --locked --offline
+          cargo check --locked --offline --target '${{ matrix.target }}'
+          cargo build --release --locked --offline --target '${{ matrix.target }}'
       - name: Package Linux binary archive
         if: matrix.package == 'linux'
         run: |
           mkdir -p dist/arch-notebook-linux-x86_64
-          install -Dm755 target/release/arch-notebook dist/arch-notebook-linux-x86_64/arch-notebook
+          install -Dm755 "target/${{ matrix.target }}/release/arch-notebook" dist/arch-notebook-linux-x86_64/arch-notebook
           install -Dm644 packaging/arch/arch-notebook.desktop dist/arch-notebook-linux-x86_64/arch-notebook.desktop
           install -Dm644 LICENSE dist/arch-notebook-linux-x86_64/LICENSE
           tar -C dist -czf dist/arch-notebook-linux-x86_64.tar.gz arch-notebook-linux-x86_64
