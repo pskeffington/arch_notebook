@@ -110,6 +110,8 @@ struct AutomationJob {
 
 #[derive(Clone, Serialize, Deserialize)]
 struct AutomationRun {
+    #[serde(default = "Uuid::new_v4")]
+    id: Uuid,
     job_id: Uuid,
     job_name: String,
     #[serde(default)]
@@ -2041,6 +2043,7 @@ impl App {
         }
         let message = self.status.clone();
         self.case.automation_runs.push(AutomationRun {
+            id: Uuid::new_v4(),
             job_id: job.id,
             job_name: job.name.clone(),
             database_path: job.database_path.clone(),
@@ -3734,7 +3737,7 @@ impl eframe::App for App {
                                             "{result} · {} · {}",
                                             run.job_name, run.started_at
                                         ))
-                                        .id_salt(("automation_run", run.job_id, &run.started_at))
+                                        .id_salt(("automation_run", run.id))
                                         .show(ui, |ui| {
                                             ui.label(format!("Finished {}", run.finished_at));
                                             ui.label(&run.message);
