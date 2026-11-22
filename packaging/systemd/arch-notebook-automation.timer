@@ -1,0 +1,11 @@
+[Unit]
+Description=Schedule Arch Notebook SQL automation
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+RandomizedDelaySec=5m
+Unit=arch-notebook-automation.service
+
+[Install]
+WantedBy=timers.target
