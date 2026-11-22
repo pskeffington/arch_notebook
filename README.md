@@ -52,7 +52,7 @@ List configured jobs as JSON without changing the case file:
 cargo run --offline -- --list-jobs harbor-light.case.json
 ```
 
-Add `--json` to get a stable object containing the case path and job list. The default list output remains a JSON array for compatibility.
+Add `--json` to get a schema-versioned stable object containing the case path and job list. The default list output remains a JSON array for compatibility.
 
 Read saved automation outcomes without opening the desktop app:
 
@@ -60,7 +60,7 @@ Read saved automation outcomes without opening the desktop app:
 cargo run --offline -- --list-runs harbor-light.case.json --json
 ```
 
-The result lists newest runs first with status, job identity, timestamps, database/series, the captured query and thresholds, enabled state, outcome message, linked snapshot ID, capture time, connection count, and skipped-row count when a snapshot was produced. Run and preflight JSON outcomes also include the job query and thresholds so downstream tools can interpret the result without reopening the case. Listing run history does not modify the case.
+The result uses schema version 1 and lists newest runs first with status, job identity, timestamps, database/series, the captured query and thresholds, enabled state, outcome message, linked snapshot ID, capture time, connection count, and skipped-row count when a snapshot was produced. It also returns the structured limit checks and typed snapshot delta with stable connection keys and prior/current facts, matching run and preflight outcomes. Older runs without recorded configuration return `limits: null` rather than implying their default fields were saved settings. Listing run history does not modify the case.
 
 Preflight every enabled SQL job before scheduling a batch. Validation runs each query read-only, checks minimum and optional regression limits, and evaluates jobs in run order with a temporary snapshot chain. It does not save snapshots or change the case file:
 
@@ -68,7 +68,7 @@ Preflight every enabled SQL job before scheduling a batch. Validation runs each 
 cargo run --offline -- --validate-enabled-jobs harbor-light.case.json
 ```
 
-Append `--json` for a machine-readable validation summary (`ok`, `saved`, pass/fail counts, and per-job outcomes). Batch execution also accepts `--json`; it prints the same summary shape after atomically saving snapshots and run history. The case is atomically updated after each completed job, so earlier outcomes survive if a later query stalls or the runner is interrupted. In JSON mode, standard output contains only one JSON result; errors that occur before a summary is available produce an `{ "ok": false, "error": "..." }` object, while diagnostics also go to standard error. Failed jobs still return a nonzero process exit code. For example:
+Append `--json` for a machine-readable validation summary (`ok`, `saved`, pass/fail counts, and per-job outcomes). Batch execution also accepts `--json`; it prints the same summary shape after atomically saving snapshots and run history. The case is atomically updated after each completed job, so earlier outcomes survive if a later query stalls or the runner is interrupted. In JSON mode, standard output contains only one JSON result; errors that occur before a summary is available produce an `{ "schema_version": 1, "ok": false, "error": "..." }` object, while diagnostics also go to standard error. Successful results and JSON errors carry schema version 1. Failed jobs still return a nonzero process exit code. For example:
 
 ```sh
 cargo run --offline -- --run-enabled-jobs harbor-light.case.json --json

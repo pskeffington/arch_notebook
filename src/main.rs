@@ -6860,8 +6860,10 @@ fn list_automation_jobs_cli(case_path: &str, json_output: bool) -> Result<(), St
     if json_output {
         println!(
             "{}",
-            serde_json::to_string_pretty(&serde_json::json!({"case":case_path,"jobs":jobs}))
-                .map_err(|error| error.to_string())?
+            serde_json::to_string_pretty(
+                &serde_json::json!({"schema_version":1,"case":case_path,"jobs":jobs})
+            )
+            .map_err(|error| error.to_string())?
         );
     } else {
         println!(
@@ -6872,7 +6874,13 @@ fn list_automation_jobs_cli(case_path: &str, json_output: bool) -> Result<(), St
     Ok(())
 }
 
-fn list_automation_runs_cli(case_path: &str, json_output: bool) -> Result<(), String> {
+fn list_automation_runs_cli(
+    case_path: &str,
+    json_output: bool,
+    job_filter: Option<&str>,
+    offset: usize,
+    limit: Option<usize>,
+) -> Result<(), String> {
     let content =
         fs::read_to_string(case_path).map_err(|error| format!("cannot read case: {error}"))?;
     let case = serde_json::from_str::<CaseFile>(&content)
@@ -6882,46 +6890,80 @@ fn list_automation_runs_cli(case_path: &str, json_output: bool) -> Result<(), St
         .iter()
         .map(|snapshot| (snapshot.id, snapshot))
         .collect();
-    let runs: Vec<serde_json::Value> = case
+    let matching_runs: Vec<&AutomationRun> = case
         .automation_runs
         .iter()
         .rev()
+        .filter(|run| {
+            job_filter.is_none_or(|filter| {
+                run.job_name.eq_ignore_ascii_case(filter)
+                    || run.job_id.to_string().eq_ignore_ascii_case(filter)
+            })
+        })
+        .collect();
+    let total = matching_runs.len();
+    let selected_runs = matching_runs
+        .into_iter()
+        .skip(offset)
+        .take(limit.unwrap_or(usize::MAX));
+    let runs: Vec<serde_json::Value> = selected_runs
         .map(|run| {
-            let snapshot = run
+            let snapshot_index = run
                 .snapshot_id
-                .and_then(|id| snapshots_by_id.get(&id).copied())
+                .and_then(|id| case.snapshots.iter().position(|snapshot| snapshot.id == id))
                 .or_else(|| {
                     run.snapshot_index
-                        .and_then(|index| case.snapshots.get(index))
+                        .filter(|index| *index < case.snapshots.len())
                 });
-            serde_json::json!({
-                "id": run.id,
-                "job_id": run.job_id,
-                "job": run.job_name,
-                "status": if run.success { "PASS" } else { "FAIL" },
-                "started_at": run.started_at,
-                "finished_at": run.finished_at,
-                "database_path": run.database_path,
-                "series": run.series,
-                "query": run.query,
-                "minimum_connections": run.minimum_connections,
-                "maximum_regressions": run.maximum_regressions,
-                "maximum_skipped_rows": run.maximum_skipped_rows,
-                "enabled": run.enabled,
-                "snapshot_id": run.snapshot_id,
-                "connection_count": snapshot.map(|snapshot| snapshot.connections.len()),
-                "skipped_rows": snapshot.map(|snapshot| snapshot.skipped_rows),
-                "captured_at": snapshot.map(|snapshot| snapshot.captured_at.as_str()),
-                "message": run.message,
-                "configuration_recorded": run.configuration_recorded,
-            })
+            let snapshot = snapshot_index
+                .and_then(|index| case.snapshots.get(index))
+                .or_else(|| {
+                    run.snapshot_id
+                        .and_then(|id| snapshots_by_id.get(&id).copied())
+                });
+            let previous = snapshot_index
+                .and_then(|index| previous_snapshot_index(&case, index))
+                .and_then(|index| case.snapshots.get(index));
+            let job = AutomationJob {
+                id: run.job_id,
+                name: run.job_name.clone(),
+                database_path: run.database_path.clone(),
+                series: run.series.clone(),
+                query: run.query.clone(),
+                enabled: run.enabled,
+                minimum_connections: run.minimum_connections,
+                maximum_regressions: run.maximum_regressions,
+                maximum_skipped_rows: run.maximum_skipped_rows,
+            };
+            let mut outcome =
+                automation_outcome_json(&job, run.success, &run.message, snapshot, previous);
+            outcome["id"] = serde_json::json!(run.id);
+            outcome["started_at"] = serde_json::json!(run.started_at);
+            outcome["finished_at"] = serde_json::json!(run.finished_at);
+            outcome["enabled"] = serde_json::json!(run.enabled);
+            outcome["configuration_recorded"] = serde_json::json!(run.configuration_recorded);
+            if !run.configuration_recorded {
+                outcome["limits"] = serde_json::Value::Null;
+                outcome["minimum_connections"] = serde_json::Value::Null;
+                outcome["maximum_regressions"] = serde_json::Value::Null;
+                outcome["maximum_skipped_rows"] = serde_json::Value::Null;
+            }
+            outcome
         })
         .collect();
     if json_output {
         println!(
             "{}",
-            serde_json::to_string_pretty(&serde_json::json!({"case":case_path,"runs":runs}))
-                .map_err(|error| error.to_string())?
+            serde_json::to_string_pretty(&serde_json::json!({
+                "schema_version":1,
+                "case":case_path,
+                "filter":{"job":job_filter,"offset":offset,"limit":limit},
+                "total":total,
+                "returned":runs.len(),
+                "next_offset":(offset + runs.len() < total).then_some(offset + runs.len()),
+                "runs":runs
+            }))
+            .map_err(|error| error.to_string())?
         );
     } else {
         for run in runs {
@@ -6941,10 +6983,13 @@ fn report_cli_error(action: &str, error: String, json_output: bool) -> ! {
     if json_output {
         println!(
             "{}",
-            serde_json::to_string_pretty(&serde_json::json!({"ok":false,"error":error}))
-                .unwrap_or_else(
-                    |_| "{\"ok\":false,\"error\":\"failed to serialize CLI error\"}".into()
-                )
+            serde_json::to_string_pretty(
+                &serde_json::json!({"schema_version":1,"ok":false,"error":error})
+            )
+            .unwrap_or_else(|_| {
+                "{\"schema_version\":1,\"ok\":false,\"error\":\"failed to serialize CLI error\"}"
+                    .into()
+            })
         );
     }
     eprintln!("{action}: {error}");
@@ -6955,8 +7000,12 @@ fn report_cli_usage_error(usage: &str, json_output: bool) -> ! {
     if json_output {
         println!(
             "{}",
-            serde_json::to_string_pretty(&serde_json::json!({"ok":false,"error":usage}))
-                .unwrap_or_else(|_| "{\"ok\":false,\"error\":\"invalid command arguments\"}".into())
+            serde_json::to_string_pretty(
+                &serde_json::json!({"schema_version":1,"ok":false,"error":usage})
+            )
+            .unwrap_or_else(|_| {
+                "{\"schema_version\":1,\"ok\":false,\"error\":\"invalid command arguments\"}".into()
+            })
         );
     }
     eprintln!("{usage}");
@@ -6970,7 +7019,7 @@ fn main() -> eframe::Result<()> {
         .is_some_and(|arg| arg == "--help" || arg == "-h")
     {
         println!(
-            "Arch Notebook\n\nUsage:\n  arch-notebook\n  arch-notebook --export-graphml <case.json> <output.graphml> [--json]\n  arch-notebook --list-jobs <case.json> [--json]\n  arch-notebook --list-runs <case.json> [--json]\n  arch-notebook --validate-enabled-jobs <case.json> [--json]\n  arch-notebook --run-enabled-jobs <case.json> [--json]\n  arch-notebook --run-job <case.json> <job-name> [--json]\n\nJob and run listing and validation do not change the case. Batch runs save snapshots and run history to the case file. JSON output is available for scheduler integration."
+            "Arch Notebook\n\nUsage:\n  arch-notebook\n  arch-notebook --export-graphml <case.json> <output.graphml> [--json]\n  arch-notebook --list-jobs <case.json> [--json]\n  arch-notebook --list-runs <case.json> [--json] [--job <name-or-id>] [--offset <count>] [--limit <count>]\n  arch-notebook --validate-enabled-jobs <case.json> [--json]\n  arch-notebook --run-enabled-jobs <case.json> [--json]\n  arch-notebook --run-job <case.json> <job-name> [--json]\n\nJob and run listing and validation do not change the case. Batch runs save snapshots and run history to the case file. JSON output is available for scheduler integration."
         );
         return Ok(());
     }
@@ -7013,20 +7062,78 @@ fn main() -> eframe::Result<()> {
         return Ok(());
     }
     if args.first().is_some_and(|arg| arg == "--list-runs") {
-        let json_output = args.iter().any(|arg| arg == "--json");
         let Some(case_path) = args.get(1) else {
             report_cli_usage_error(
-                "usage: arch-notebook --list-runs <case.json> [--json]",
-                json_output,
+                "usage: arch-notebook --list-runs <case.json> [--json] [--job <name-or-id>] [--offset <count>] [--limit <count>]",
+                args.iter().any(|arg| arg == "--json"),
             );
         };
-        if args.len() > 3 || args.get(2).is_some_and(|arg| arg != "--json") {
-            report_cli_usage_error(
-                "usage: arch-notebook --list-runs <case.json> [--json]",
-                json_output,
-            );
+        let json_output = args.iter().any(|arg| arg == "--json");
+        let mut job_filter = None;
+        let mut offset = 0usize;
+        let mut limit = None;
+        let mut seen_json = false;
+        let mut seen_job = false;
+        let mut seen_offset = false;
+        let mut seen_limit = false;
+        let mut index = 2;
+        while index < args.len() {
+            match args[index].as_str() {
+                "--json" if !seen_json => seen_json = true,
+                "--job" if !seen_job => {
+                    index += 1;
+                    let Some(value) = args.get(index).filter(|value| !value.trim().is_empty())
+                    else {
+                        report_cli_usage_error("--job requires a job name or UUID", json_output);
+                    };
+                    job_filter = Some(value.clone());
+                    seen_job = true;
+                }
+                "--offset" if !seen_offset => {
+                    index += 1;
+                    let Some(value) = args.get(index) else {
+                        report_cli_usage_error(
+                            "--offset requires a nonnegative integer",
+                            json_output,
+                        );
+                    };
+                    offset = value.parse::<usize>().unwrap_or_else(|_| {
+                        report_cli_usage_error(
+                            "--offset requires a nonnegative integer",
+                            json_output,
+                        )
+                    });
+                    seen_offset = true;
+                }
+                "--limit" if !seen_limit => {
+                    index += 1;
+                    let Some(value) = args.get(index) else {
+                        report_cli_usage_error("--limit requires a positive integer", json_output);
+                    };
+                    limit = Some(
+                        value
+                            .parse::<usize>()
+                            .ok()
+                            .filter(|value| *value > 0)
+                            .unwrap_or_else(|| {
+                                report_cli_usage_error(
+                                    "--limit requires a positive integer",
+                                    json_output,
+                                )
+                            }),
+                    );
+                    seen_limit = true;
+                }
+                _ => report_cli_usage_error(
+                    "usage: arch-notebook --list-runs <case.json> [--json] [--job <name-or-id>] [--offset <count>] [--limit <count>]",
+                    json_output,
+                ),
+            }
+            index += 1;
         }
-        if let Err(error) = list_automation_runs_cli(case_path, json_output) {
+        if let Err(error) =
+            list_automation_runs_cli(case_path, json_output, job_filter.as_deref(), offset, limit)
+        {
             report_cli_error("run history listing failed", error, json_output);
         }
         return Ok(());
