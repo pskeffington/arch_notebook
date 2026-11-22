@@ -70,7 +70,7 @@ jobs:
     container: archlinux:latest
     steps:
       - name: Install Arch build environment
-        run: pacman -Syu --noconfirm --needed base-devel cargo git libglvnd libx11 libxcb libxcursor libxi libxinerama libxkbcommon libxkbcommon-x11 libxrandr libxrender pkgconf rust sqlite wayland
+        run: pacman -Syu --noconfirm --needed base-devel cargo git libglvnd libx11 libxcb libxcursor libxi libxinerama libxkbcommon libxkbcommon-x11 libxrandr libxrender pkgconf rust shadow sqlite wayland
       - uses: actions/checkout@v4
       - name: Build package
         run: |
