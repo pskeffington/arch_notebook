@@ -5035,29 +5035,31 @@ fn comparison_key(connection: &ConnectionFact) -> String {
 
 fn snapshot_case_link_index(
     case: &CaseFile,
-    snapshot: &ConnectionSnapshot,
+    database_path: &str,
+    source_key: &str,
     fact: &ConnectionFact,
 ) -> Option<usize> {
     let find_endpoint = |name: &str, kind: &str, external_id: &str| {
-        let matches: Vec<Uuid> =
-            case.entities
-                .iter()
-                .filter(|entity| {
-                    if !external_id.trim().is_empty() {
-                        entity.external_ids.iter().any(|(source, id)| {
-                            source == &snapshot.database_path && id == external_id
-                        })
-                    } else {
-                        (entity.name.eq_ignore_ascii_case(name)
-                            || entity
-                                .aliases
-                                .iter()
-                                .any(|alias| alias.eq_ignore_ascii_case(name)))
-                            && compatible_entity_types(&entity.kind, kind)
-                    }
-                })
-                .map(|entity| entity.id)
-                .collect();
+        let matches: Vec<Uuid> = case
+            .entities
+            .iter()
+            .filter(|entity| {
+                if !external_id.trim().is_empty() {
+                    entity
+                        .external_ids
+                        .iter()
+                        .any(|(source, id)| source == database_path && id == external_id)
+                } else {
+                    (entity.name.eq_ignore_ascii_case(name)
+                        || entity
+                            .aliases
+                            .iter()
+                            .any(|alias| alias.eq_ignore_ascii_case(name)))
+                        && compatible_entity_types(&entity.kind, kind)
+                }
+            })
+            .map(|entity| entity.id)
+            .collect();
         (matches.len() == 1).then(|| matches[0])
     };
     let source = find_endpoint(&fact.source, &fact.source_type, &fact.source_entity_id)?;
@@ -5067,7 +5069,7 @@ fn snapshot_case_link_index(
         .iter()
         .enumerate()
         .filter(|(_, link)| {
-            link.ingest_source.as_deref() == Some(snapshot.source_key.as_str())
+            link.ingest_source.as_deref() == Some(source_key)
                 && if !fact.connection_id.is_empty() {
                     link.connection_id == fact.connection_id
                 } else {
@@ -5968,12 +5970,13 @@ impl eframe::App for App {
                                         Some(snapshot.source_key.as_str()) == source_key
                                     })
                                 }).or(latest_index);
+                                let current_is_latest = selected_index == latest_index;
                                 let baseline_index = selected_index.and_then(|current| {
                                     (0..current).rev().find(|index| {
                                         self.case.snapshots[*index].source_key == self.case.snapshots[current].source_key
                                     })
                                 });
-                                let latest = selected_index.and_then(|index|self.case.snapshots.get(index)).cloned();
+                                let current_snapshot = selected_index.and_then(|index|self.case.snapshots.get(index)).cloned();
                                 let baseline = baseline_index.and_then(|index|self.case.snapshots.get(index)).cloned();
                                 ui.add_space(6.0);
                                 ui.label(egui::RichText::new("INGEST NEW SNAPSHOT").small().strong().color(cyan));
@@ -5990,7 +5993,9 @@ impl eframe::App for App {
                                     });
                                 }
                                 Self::show_sql_validation_preview(ui, self.sql_validation_preview.as_ref(), &self.sql_path, &self.sql_series, &self.sql_query, &self.sql_parameter_text);
-                                if let Some(current)=latest {
+                                if let Some(current)=current_snapshot.clone() {
+                                    let chart_source_key = current.source_key.clone();
+                                    let chart_database_path = current.database_path.clone();
                                     let capture_label=if selected_index==latest_index{"Latest snapshot"}else{"Selected historical snapshot"};
                                     let skipped = if current.skipped_rows == 0 {
                                         String::new()
@@ -6102,7 +6107,7 @@ impl eframe::App for App {
                                             self.export_sql_comparison(&base, &current);
                                         }
                                         egui::ScrollArea::both().show(ui,|ui|egui::Grid::new("sql_regression_table").striped(true).show(ui,|ui|{
-                                            for heading in ["CHANGE","CONNECTION","CONFIDENCE","DATE","EVIDENCE","NOTES"]{ui.label(egui::RichText::new(heading).small().strong().color(cyan));}ui.end_row();
+                                            for heading in ["CHANGE","CONNECTION","CONFIDENCE","DATE","EVIDENCE","NOTES","CHART"]{ui.label(egui::RichText::new(heading).small().strong().color(cyan));}ui.end_row();
                                             for delta in visible_deltas {
                                                 let change=delta.kinds.iter().map(|kind|match kind{DeltaKind::Removed=>"REMOVED",DeltaKind::ConfidenceDeclined=>"CONFIDENCE DOWN",DeltaKind::DateChanged=>"DATE CHANGED",DeltaKind::Updated=>"CONNECTION DETAILS",DeltaKind::DirectionChanged=>"DIRECTION CHANGED",DeltaKind::EvidenceChanged=>"EVIDENCE CHANGED",DeltaKind::SourceNotesChanged=>"SOURCE NOTES CHANGED",DeltaKind::Added=>"ADDED",DeltaKind::ConfidenceIncreased=>"CONFIDENCE UP"}).collect::<Vec<_>>().join(" · ");
                                                 let previous=delta.previous_connection.as_ref();
@@ -6120,6 +6125,27 @@ impl eframe::App for App {
                                                 ui.label(format!("{} → {}",delta.previous_date.as_deref().unwrap_or("—"),current.map(|fact|fact.date.as_str()).filter(|value|!value.is_empty()).unwrap_or("—")));
                                                 ui.label(format!("{previous_evidence} → {current_evidence}"));
                                                 ui.label(format!("{previous_notes} → {current_notes}"));
+                                                if current_is_latest
+                                                    && let Some(fact) = current
+                                                    && ui.small_button("Show").clicked()
+                                                {
+                                                    if let Some(index) = snapshot_case_link_index(&self.case, &chart_database_path, &chart_source_key, fact) {
+                                                        self.selected = None;
+                                                        self.selected_link = Some(index);
+                                                        self.chart_focus = None;
+                                                        self.chart_focus_link = Some(index);
+                                                        self.chart_focus_group = None;
+                                                        self.chart_fit_path = None;
+                                                        self.sql_source_focus = None;
+                                                        self.path_result.clear();
+                                                        self.page = WorkspacePage::Chart;
+                                                        self.show_timeline = false;
+                                                    } else {
+                                                        self.status = "CURRENT CONNECTION IS NOT PRESENT ON THE CHART".into();
+                                                    }
+                                                } else {
+                                                    ui.label(if current.is_some() { "Historical" } else { "—" });
+                                                }
                                                 ui.end_row();
                                             }
                                         }));
