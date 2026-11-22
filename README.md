@@ -7,7 +7,7 @@ Arch Notebook is a local Rust desktop workbench for investigating relationship d
 ## SQL regression workflow
 
 1. Open **Data → SQL regressions** and choose a SQLite database file.
-2. Enter a stable **Snapshot series** label and a read-only query that returns `source` and `target` columns. Optional columns include `connection_id`, `source_type`, `target_type`, `relationship`, `date`, `confidence`, `directed`, `source_reference`, and `notes`. SQL `notes` are retained as source notes; analyst notes are stored separately and survive later refreshes. Missing confidence defaults to 2; supplied confidence must be an integer from 1 to 3. Direction accepts true/false, 1/0, yes/no, directed/undirected, or →/↔.
+2. Enter a stable **Snapshot series** label and a read-only query that returns `source` and `target` columns. Optional columns include `connection_id`, `source_type`, `target_type`, `relationship`, `date`, `confidence`, `directed`, `source_reference`, and `notes`. Column aliases are matched without case or surrounding whitespace; if a query returns multiple aliases for the same field (such as both `source` and `from`), ingestion reports the ambiguity instead of silently choosing one. SQL `notes` are retained as source notes; analyst notes are stored separately and survive later refreshes. Missing confidence defaults to 2; supplied confidence must be an integer from 1 to 3. Direction accepts true/false, 1/0, yes/no, directed/undirected, or →/↔.
 3. Ingest a baseline query result. Update the query or database to the next period and ingest again using the same series label.
 4. Review removed connections, confidence declines, changed event dates, additions, and confidence increases. Distinct changes to evidence, notes, endpoints, direction, or relationship details are reported alongside confidence/date changes on the same record. Comparison rows show typed endpoints, direction, evidence references, and notes before and after the change, including for removed connections. Use **Review saved series** to revisit any database/series already in the case; the fields under **Ingest new snapshot** configure a separate new capture. The latest SQL snapshot also updates the chart for that database/series while preserving manually created and other-source links.
 
@@ -42,10 +42,18 @@ List configured jobs as JSON without changing the case file:
 cargo run --offline -- --list-jobs harbor-light.case.json
 ```
 
+Add `--json` to get a stable object containing the case path and job list. The default list output remains a JSON array for compatibility.
+
 Preflight every enabled SQL job before scheduling a batch. Validation runs each query read-only, checks minimum and optional regression limits, and evaluates jobs in run order with a temporary snapshot chain. It does not save snapshots or change the case file:
 
 ```sh
 cargo run --offline -- --validate-enabled-jobs harbor-light.case.json
+```
+
+Append `--json` for a machine-readable validation summary (`ok`, `saved`, pass/fail counts, and per-job outcomes). Batch execution also accepts `--json`; it prints the same summary shape after atomically saving snapshots and run history. In JSON mode, standard output contains only the JSON result, errors go to standard error, and failed jobs still return a nonzero process exit code. For example:
+
+```sh
+cargo run --offline -- --run-enabled-jobs harbor-light.case.json --json
 ```
 
 The runner saves the updated snapshots and run history back to the case file after processing. Run history is bounded to the latest 200 records. Each run retains the job configuration and SQL query used, including failures, so later job edits or deletion do not erase the run context; expand a row in the desktop history to inspect it. Older runs that predate this configuration capture are labeled as such rather than showing default values as if they were recorded settings. Successful runs include a comparison with the previous snapshot in the same database and series; the history records removed connections, confidence declines, date changes, additions, confidence increases, and other updates. Each snapshot has a stable ID, and automation run records link directly to it; older cases migrate those links from their saved snapshot indices when loaded. In the desktop app, use **Review snapshot #N** beside a run or select any numbered capture in **Snapshot history** to compare it with the preceding capture in that series; the capture number disambiguates runs recorded within the same clock interval. Batch summaries report passed and failed job counts. The runner continues through the selected jobs if one fails, saves each outcome, and exits nonzero when any job fails. Use an operating-system scheduler such as cron or systemd timers to run the enabled-job command on a recurring schedule. Keep the SQLite source available at the configured path when automation runs.

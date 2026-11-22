@@ -1546,26 +1546,50 @@ impl App {
             }
             let column_names: Vec<String> = statement
                 .column_names()
-                .map(|name| name.to_ascii_lowercase())
+                .map(|name| name.trim().to_ascii_lowercase())
                 .collect();
-            let col = |names: &[&str]| {
-                column_names
+            let col = |field: &str, names: &[&str]| -> Result<Option<usize>, String> {
+                let matches: Vec<usize> = column_names
                     .iter()
-                    .position(|column| names.iter().any(|name| column == name))
+                    .enumerate()
+                    .filter_map(|(index, column)| {
+                        names.iter().any(|name| column == name).then_some(index)
+                    })
+                    .collect();
+                if matches.len() > 1 {
+                    return Err(format!(
+                        "SQL result has ambiguous {field} columns: {}",
+                        matches
+                            .iter()
+                            .map(|index| column_names[*index].as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ));
+                }
+                Ok(matches.first().copied())
             };
-            let source =
-                col(&["source", "from", "entity_a"]).ok_or("SQL result needs a source column")?;
-            let target =
-                col(&["target", "to", "entity_b"]).ok_or("SQL result needs a target column")?;
-            let connection_id = col(&["connection_id", "link_id", "record_id", "id"]);
-            let source_type = col(&["source_type", "from_type", "entity_a_type"]);
-            let target_type = col(&["target_type", "to_type", "entity_b_type"]);
-            let relationship = col(&["relationship", "link_type", "relation"]);
-            let date = col(&["date", "event_date", "datetime", "timestamp"]);
-            let confidence = col(&["confidence", "strength"]);
-            let directed = col(&["directed", "is_directed", "direction"]);
-            let source_reference = col(&["source_reference", "evidence", "reference", "source_id"]);
-            let notes = col(&["notes", "description"]);
+            let source = col("source", &["source", "from", "entity_a"])?
+                .ok_or("SQL result needs a source column")?;
+            let target = col("target", &["target", "to", "entity_b"])?
+                .ok_or("SQL result needs a target column")?;
+            let connection_id = col(
+                "connection ID",
+                &["connection_id", "link_id", "record_id", "id"],
+            )?;
+            let source_type = col(
+                "source type",
+                &["source_type", "from_type", "entity_a_type"],
+            )?;
+            let target_type = col("target type", &["target_type", "to_type", "entity_b_type"])?;
+            let relationship = col("relationship", &["relationship", "link_type", "relation"])?;
+            let date = col("date", &["date", "event_date", "datetime", "timestamp"])?;
+            let confidence = col("confidence", &["confidence", "strength"])?;
+            let directed = col("direction", &["directed", "is_directed", "direction"])?;
+            let source_reference = col(
+                "source reference",
+                &["source_reference", "evidence", "reference", "source_id"],
+            )?;
+            let notes = col("notes", &["notes", "description"])?;
             let mut facts = Vec::new();
             let mut explicit_ids = HashSet::new();
             let mut rows = statement.query([]).map_err(|e| e.to_string())?;
@@ -2437,9 +2461,13 @@ impl App {
         } else if let Some(i) = self.selected_link.take() {
             if i < self.case.links.len() {
                 self.case.links.remove(i);
+                self.status = "RELATIONSHIP REMOVED".into();
+            } else {
+                self.status = "RELATIONSHIP NO LONGER EXISTS".into();
             }
+            self.selected_link = None;
+            self.chart_focus_link = None;
             self.path_result.clear();
-            self.status = "RELATIONSHIP REMOVED".into();
         }
     }
 
@@ -3880,8 +3908,7 @@ impl eframe::App for App {
                                 let timeline_rect=egui::Rect::from_min_size(rect.left_bottom()-egui::vec2(0.0,105.0),egui::vec2(rect.width(),105.0));
                                 let nearest=timeline_event_positions(&self.case.links,timeline_rect).into_iter().map(|(index,point)|(index,point.distance(pos))).min_by(|a,b|a.1.total_cmp(&b.1)).filter(|(_,distance)|*distance<20.0).map(|(index,_)|index);
                                 self.selected=None;self.selected_link=nearest;
-                            } else if let Some(entity)=self.case.entities.iter().find(|e|center(e).distance(pos)<75.0*self.chart_zoom){self.selected=Some(entity.id);self.selected_link=None;}
-                            else {let lanes=link_lane_offsets(&self.case.links);let nearest=self.case.links.iter().enumerate().filter_map(|(i,l)|{let a=self.case.entities.iter().find(|e|e.id==l.from)?;let b=self.case.entities.iter().find(|e|e.id==l.to)?;let points=connection_curve_points(center(a),center(b),lanes[i]*self.chart_zoom);Some((i,polyline_distance(pos,&points)))}).filter(|(_,d)|*d<10.0*self.chart_zoom).min_by(|a,b|a.1.total_cmp(&b.1)).map(|(i,_)|i);self.selected=None;self.selected_link=nearest;}
+                            } else {let lanes=link_lane_offsets(&self.case.links);let nearest=self.case.links.iter().enumerate().filter_map(|(i,l)|{let a=self.case.entities.iter().find(|e|e.id==l.from)?;let b=self.case.entities.iter().find(|e|e.id==l.to)?;let points=connection_curve_points(center(a),center(b),lanes[i]*self.chart_zoom);Some((i,polyline_distance(pos,&points)))}).filter(|(_,d)|*d<10.0*self.chart_zoom).min_by(|a,b|a.1.total_cmp(&b.1)).filter(|(_,distance)|*distance<22.0*self.chart_zoom).map(|(i,_)|i);let entity=self.case.entities.iter().find(|e|center(e).distance(pos)<75.0*self.chart_zoom).map(|entity|entity.id);if let Some(index)=nearest{self.selected=None;self.selected_link=Some(index);}else if let Some(entity)=entity{self.selected=Some(entity);self.selected_link=None;}else{self.selected=None;self.selected_link=None;}}
                         } }
                         if response.drag_started() { if let Some(pos)=response.interact_pointer_pos(){if let Some(entity)=self.case.entities.iter().find(|e|center(e).distance(pos)<75.0*self.chart_zoom){self.selected=Some(entity.id);self.selected_link=None;}else{self.selected=None;self.chart_pan_origin=self.chart_pan;}} }
                         if response.dragged() { if let Some(pos)=response.interact_pointer_pos(){if let Some(id)=self.selected{if let Some(e)=self.case.entities.iter_mut().find(|e|e.id==id){let local=(pos-rect.center()-self.chart_pan)/self.chart_zoom+rect.size()*0.5;e.x=(local.x/rect.width()).clamp(0.05,0.95);e.y=(local.y/rect.height()).clamp(0.08,0.92);}}else{self.chart_pan=self.chart_pan_origin+response.drag_delta();}} }
@@ -3910,7 +3937,7 @@ impl eframe::App for App {
                         if let Some((keep,remove))=self.merge_candidate{let keep_name=self.case.entities.iter().find(|e|e.id==keep).map(|e|format!("{} · {}",e.name,e.kind)).unwrap_or_else(||"(missing)".into());let remove_name=self.case.entities.iter().find(|e|e.id==remove).map(|e|format!("{} · {}",e.name,e.kind)).unwrap_or_else(||"(missing)".into());ui.label(egui::RichText::new(format!("Keep {keep_name}; merge {remove_name} into it. Aliases, notes, attributes, and links will be retained.")).small().color(muted));if ui.button(format!("Merge {remove_name} into {keep_name}")).clicked(){self.merge_candidate_into_first();}}
                         ui.add_space(20.0);ui.label(egui::RichText::new("SELECTED ITEM").size(9.0).strong().color(cyan));ui.add_space(5.0);
                         if let Some(id)=self.selected{if let Some(entity)=self.case.entities.iter().find(|e|e.id==id){if !entity.aliases.is_empty(){ui.label(egui::RichText::new("KNOWN ALIASES").size(9.0).strong().color(cyan));for alias in &entity.aliases{ui.label(alias);}}if !entity.merged_records.is_empty(){egui::CollapsingHeader::new(format!("Merged record history ({})",entity.merged_records.len())).show(ui,|ui|for record in &entity.merged_records{ui.label(format!("{} · {} · {}",record.name,record.kind,record.id));if !record.detail.is_empty(){ui.label(&record.detail);}for (key,value) in &record.attributes{ui.label(format!("{key}: {value}"));}});}}}
-                        if let Some(id)=self.selected { if let Some(e)=self.case.entities.iter_mut().find(|e|e.id==id){ui.label(egui::RichText::new("TYPE").size(9.0).color(muted));ui.add(egui::TextEdit::singleline(&mut e.kind).desired_width(230.0));ui.label(egui::RichText::new("LABEL").size(9.0).color(muted));ui.add(egui::TextEdit::singleline(&mut e.name).desired_width(230.0));ui.horizontal(|ui|{ui.label(egui::RichText::new("COLOR").size(9.0).color(muted));ui.color_edit_button_srgb(&mut e.color);ui.label(format!("#{:02X}{:02X}{:02X}",e.color[0],e.color[1],e.color[2]));});ui.checkbox(&mut e.position_locked,"Pin position during automatic layouts");ui.label(egui::RichText::new("NOTES").size(9.0).color(muted));ui.add(egui::TextEdit::multiline(&mut e.detail).desired_width(230.0).desired_rows(3));ui.label(egui::RichText::new("ATTRIBUTES").size(9.0).strong().color(cyan));let mut remove=None;for (i,(key,value)) in e.attributes.iter_mut().enumerate(){ui.horizontal(|ui|{ui.add(egui::TextEdit::singleline(key).hint_text("Attribute").desired_width(90.0));ui.add(egui::TextEdit::singleline(value).hint_text("Value").desired_width(100.0));if ui.small_button("×").clicked(){remove=Some(i);}});}if let Some(i)=remove{e.attributes.remove(i);}if ui.small_button("＋ Attribute").clicked(){e.attributes.push((String::new(),String::new()));}ui.label(egui::RichText::new("LINKS").size(9.0).strong().color(cyan));for l in self.case.links.iter().filter(|l|l.from==id||l.to==id){ui.label(format!("{}  ·  {}",l.label,l.date));}}}else if let Some(i)=self.selected_link {if let Some(link)=self.case.links.get_mut(i){ui.label(egui::RichText::new("RELATIONSHIP").size(9.0).color(muted));ui.add(egui::TextEdit::singleline(&mut link.label));ui.horizontal(|ui|{ui.label("Date");ui.add(egui::TextEdit::singleline(&mut link.date).desired_width(100.0));});ui.add(egui::Slider::new(&mut link.confidence,1..=3).text("Confidence"));ui.checkbox(&mut link.directed,"Directed relationship");ui.label("Source reference");ui.add(egui::TextEdit::singleline(&mut link.source_reference).desired_width(230.0));if !link.source_notes.is_empty(){ui.label(egui::RichText::new("SOURCE NOTES").size(9.0).color(muted));ui.label(&link.source_notes);}ui.label("Analyst notes");ui.add(egui::TextEdit::multiline(&mut link.notes).desired_rows(4));}}else{ui.label(egui::RichText::new("Select an entity on the chart to inspect its attributes and connections. Select a relationship in Data to edit its properties.").small().color(muted));}
+                        if let Some(id)=self.selected { if let Some(e)=self.case.entities.iter_mut().find(|e|e.id==id){ui.label(egui::RichText::new("TYPE").size(9.0).color(muted));ui.add(egui::TextEdit::singleline(&mut e.kind).desired_width(230.0));ui.label(egui::RichText::new("LABEL").size(9.0).color(muted));ui.add(egui::TextEdit::singleline(&mut e.name).desired_width(230.0));ui.horizontal(|ui|{ui.label(egui::RichText::new("COLOR").size(9.0).color(muted));ui.color_edit_button_srgb(&mut e.color);ui.label(format!("#{:02X}{:02X}{:02X}",e.color[0],e.color[1],e.color[2]));});ui.checkbox(&mut e.position_locked,"Pin position during automatic layouts");ui.label(egui::RichText::new("NOTES").size(9.0).color(muted));ui.add(egui::TextEdit::multiline(&mut e.detail).desired_width(230.0).desired_rows(3));ui.label(egui::RichText::new("ATTRIBUTES").size(9.0).strong().color(cyan));let mut remove=None;for (i,(key,value)) in e.attributes.iter_mut().enumerate(){ui.horizontal(|ui|{ui.add(egui::TextEdit::singleline(key).hint_text("Attribute").desired_width(90.0));ui.add(egui::TextEdit::singleline(value).hint_text("Value").desired_width(100.0));if ui.small_button("×").clicked(){remove=Some(i);}});}if let Some(i)=remove{e.attributes.remove(i);}if ui.small_button("＋ Attribute").clicked(){e.attributes.push((String::new(),String::new()));}ui.label(egui::RichText::new("LINKS").size(9.0).strong().color(cyan));for l in self.case.links.iter().filter(|l|l.from==id||l.to==id){ui.label(format!("{}  ·  {}",l.label,l.date));}}}else if let Some(i)=self.selected_link {if let Some(link)=self.case.links.get_mut(i){ui.label(egui::RichText::new("RELATIONSHIP").size(9.0).color(muted));let from=link.from;let to=link.to;ui.horizontal(|ui|{if let Some(entity)=self.case.entities.iter().find(|entity|entity.id==from){if ui.small_button(format!("Source · {}",entity.name)).clicked(){self.selected=Some(from);self.selected_link=None;self.chart_focus=Some(from);}}if let Some(entity)=self.case.entities.iter().find(|entity|entity.id==to){if ui.small_button(format!("Target · {}",entity.name)).clicked(){self.selected=Some(to);self.selected_link=None;self.chart_focus=Some(to);}}});ui.add(egui::TextEdit::singleline(&mut link.label));ui.horizontal(|ui|{ui.label("Date");ui.add(egui::TextEdit::singleline(&mut link.date).desired_width(100.0));});ui.add(egui::Slider::new(&mut link.confidence,1..=3).text("Confidence"));ui.checkbox(&mut link.directed,"Directed relationship");ui.label("Source reference");ui.add(egui::TextEdit::singleline(&mut link.source_reference).desired_width(230.0));if !link.source_notes.is_empty(){ui.label(egui::RichText::new("SOURCE NOTES").size(9.0).color(muted));ui.label(&link.source_notes);}ui.label("Analyst notes");ui.add(egui::TextEdit::multiline(&mut link.notes).desired_rows(4));}}else{ui.label(egui::RichText::new("Select an entity on the chart to inspect its attributes and connections. Select a relationship in Data to edit its properties.").small().color(muted));}
                         ui.add_space(20.0);ui.label(egui::RichText::new("LEGEND").size(9.0).strong().color(cyan));ui.label(egui::RichText::new("Solid link  ·  corroborated").small().color(muted));ui.label(egui::RichText::new("Dashed link  ·  unverified").small().color(muted));
                     });
                     });
@@ -4490,7 +4517,11 @@ fn normalize_snapshot_database_paths(case: &mut CaseFile, case_path: &str) {
     }
 }
 
-fn run_automation_cli(case_path: &str, job_name: Option<&str>) -> Result<(), String> {
+fn run_automation_cli(
+    case_path: &str,
+    job_name: Option<&str>,
+    json_output: bool,
+) -> Result<(), String> {
     let content =
         fs::read_to_string(case_path).map_err(|error| format!("cannot read case: {error}"))?;
     let case = serde_json::from_str::<CaseFile>(&content)
@@ -4524,19 +4555,27 @@ fn run_automation_cli(case_path: &str, job_name: Option<&str>) -> Result<(), Str
     let mut app = App::automation_context(case, case_path);
     normalize_snapshot_database_paths(&mut app.case, &app.case_path);
     let mut failures = 0;
+    let mut outcomes = Vec::new();
     for job in jobs {
         let (success, message) = app.run_automation_job_cli(&job);
         if !success {
             failures += 1;
         }
-        println!(
-            "{} · {} · {}",
-            if success { "PASS" } else { "FAIL" },
-            job.name,
-            message
-        );
+        if json_output {
+            outcomes.push(serde_json::json!({"status":if success{"PASS"}else{"FAIL"},"job":job.name,"message":message}));
+        } else {
+            println!(
+                "{} · {} · {}",
+                if success { "PASS" } else { "FAIL" },
+                job.name,
+                message
+            );
+        }
     }
     save_case_atomically(Path::new(case_path), &app.case)?;
+    if json_output {
+        println!("{}", serde_json::to_string_pretty(&serde_json::json!({"ok":failures==0,"saved":true,"case":case_path,"passed":outcomes.iter().filter(|outcome|outcome["status"]=="PASS").count(),"failed":failures,"outcomes":outcomes})).map_err(|error|error.to_string())?);
+    }
     if failures > 0 {
         Err(format!(
             "{failures} automation job(s) failed; run history saved"
@@ -4546,7 +4585,7 @@ fn run_automation_cli(case_path: &str, job_name: Option<&str>) -> Result<(), Str
     }
 }
 
-fn validate_enabled_automation_jobs_cli(case_path: &str) -> Result<(), String> {
+fn validate_enabled_automation_jobs_cli(case_path: &str, json_output: bool) -> Result<(), String> {
     let content =
         fs::read_to_string(case_path).map_err(|error| format!("cannot read case: {error}"))?;
     let case = serde_json::from_str::<CaseFile>(&content)
@@ -4564,6 +4603,7 @@ fn validate_enabled_automation_jobs_cli(case_path: &str) -> Result<(), String> {
     let mut app = App::automation_context(case, case_path);
     normalize_snapshot_database_paths(&mut app.case, &app.case_path);
     let mut failures = 0;
+    let mut outcomes = Vec::new();
     for job in jobs {
         app.sql_path = job.database_path.clone();
         app.sql_series = job.series.clone();
@@ -4578,12 +4618,19 @@ fn validate_enabled_automation_jobs_cli(case_path: &str) -> Result<(), String> {
         if !success {
             failures += 1;
         }
-        println!(
-            "{} · {} · {}",
-            if success { "PASS" } else { "FAIL" },
-            job.name,
-            message
-        );
+        if json_output {
+            outcomes.push(serde_json::json!({"status":if success{"PASS"}else{"FAIL"},"job":job.name,"message":message}));
+        } else {
+            println!(
+                "{} · {} · {}",
+                if success { "PASS" } else { "FAIL" },
+                job.name,
+                message
+            );
+        }
+    }
+    if json_output {
+        println!("{}", serde_json::to_string_pretty(&serde_json::json!({"ok":failures==0,"saved":false,"case":case_path,"passed":outcomes.iter().filter(|outcome|outcome["status"]=="PASS").count(),"failed":failures,"outcomes":outcomes})).map_err(|error|error.to_string())?);
     }
     if failures > 0 {
         Err(format!(
@@ -4594,7 +4641,7 @@ fn validate_enabled_automation_jobs_cli(case_path: &str) -> Result<(), String> {
     }
 }
 
-fn list_automation_jobs_cli(case_path: &str) -> Result<(), String> {
+fn list_automation_jobs_cli(case_path: &str, json_output: bool) -> Result<(), String> {
     let content =
         fs::read_to_string(case_path).map_err(|error| format!("cannot read case: {error}"))?;
     let case = serde_json::from_str::<CaseFile>(&content)
@@ -4614,10 +4661,18 @@ fn list_automation_jobs_cli(case_path: &str) -> Result<(), String> {
             })
         })
         .collect();
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&jobs).map_err(|error| error.to_string())?
-    );
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({"case":case_path,"jobs":jobs}))
+                .map_err(|error| error.to_string())?
+        );
+    } else {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&jobs).map_err(|error| error.to_string())?
+        );
+    }
     Ok(())
 }
 
@@ -4628,7 +4683,7 @@ fn main() -> eframe::Result<()> {
         .is_some_and(|arg| arg == "--help" || arg == "-h")
     {
         println!(
-            "Arch Notebook\n\nUsage:\n  arch-notebook\n  arch-notebook --list-jobs <case.json>\n  arch-notebook --validate-enabled-jobs <case.json>\n  arch-notebook --run-enabled-jobs <case.json>\n  arch-notebook --run-job <case.json> <job-name>\n\nJob listing and validation do not change the case. Batch runs save snapshots and run history to the case file."
+            "Arch Notebook\n\nUsage:\n  arch-notebook\n  arch-notebook --list-jobs <case.json> [--json]\n  arch-notebook --validate-enabled-jobs <case.json> [--json]\n  arch-notebook --run-enabled-jobs <case.json> [--json]\n  arch-notebook --run-job <case.json> <job-name> [--json]\n\nJob listing and validation do not change the case. Batch runs save snapshots and run history to the case file. JSON output is available for scheduler integration."
         );
         return Ok(());
     }
@@ -4637,7 +4692,13 @@ fn main() -> eframe::Result<()> {
             eprintln!("usage: arch-notebook --list-jobs <case.json>");
             std::process::exit(2);
         };
-        if let Err(error) = list_automation_jobs_cli(case_path) {
+        if args.len() > 3 || args.get(2).is_some_and(|arg| arg != "--json") {
+            eprintln!("usage: arch-notebook --list-jobs <case.json> [--json]");
+            std::process::exit(2);
+        }
+        if let Err(error) =
+            list_automation_jobs_cli(case_path, args.iter().any(|arg| arg == "--json"))
+        {
             eprintln!("job listing failed: {error}");
             std::process::exit(1);
         }
@@ -4647,11 +4708,16 @@ fn main() -> eframe::Result<()> {
         .first()
         .is_some_and(|arg| arg == "--validate-enabled-jobs")
     {
+        let json_output = args.iter().any(|arg| arg == "--json");
         let Some(case_path) = args.get(1) else {
             eprintln!("usage: arch-notebook --validate-enabled-jobs <case.json>");
             std::process::exit(2);
         };
-        if let Err(error) = validate_enabled_automation_jobs_cli(case_path) {
+        if args.len() > 3 || args.get(2).is_some_and(|arg| arg != "--json") {
+            eprintln!("usage: arch-notebook --validate-enabled-jobs <case.json> [--json]");
+            std::process::exit(2);
+        }
+        if let Err(error) = validate_enabled_automation_jobs_cli(case_path, json_output) {
             eprintln!("automation validation failed: {error}");
             std::process::exit(1);
         }
@@ -4662,7 +4728,13 @@ fn main() -> eframe::Result<()> {
             eprintln!("usage: arch-notebook --run-enabled-jobs <case.json>");
             std::process::exit(2);
         };
-        if let Err(error) = run_automation_cli(case_path, None) {
+        if args.len() > 3 || args.get(2).is_some_and(|arg| arg != "--json") {
+            eprintln!("usage: arch-notebook --run-enabled-jobs <case.json> [--json]");
+            std::process::exit(2);
+        }
+        if let Err(error) =
+            run_automation_cli(case_path, None, args.iter().any(|arg| arg == "--json"))
+        {
             eprintln!("automation failed: {error}");
             std::process::exit(1);
         }
@@ -4673,7 +4745,15 @@ fn main() -> eframe::Result<()> {
             eprintln!("usage: arch-notebook --run-job <case.json> <job-name>");
             std::process::exit(2);
         };
-        if let Err(error) = run_automation_cli(case_path, Some(job_name)) {
+        if args.len() > 4 || args.get(3).is_some_and(|arg| arg != "--json") {
+            eprintln!("usage: arch-notebook --run-job <case.json> <job-name> [--json]");
+            std::process::exit(2);
+        }
+        if let Err(error) = run_automation_cli(
+            case_path,
+            Some(job_name),
+            args.iter().any(|arg| arg == "--json"),
+        ) {
             eprintln!("automation failed: {error}");
             std::process::exit(1);
         }
