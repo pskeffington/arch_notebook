@@ -64,7 +64,10 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
       - name: Check packaging script syntax
-        run: bash -n scripts/install-linux-user.sh scripts/install-macos-automation.sh scripts/package-macos.sh
+        run: |
+          for script in scripts/install-linux-user.sh scripts/install-macos-automation.sh scripts/package-macos.sh; do
+            bash -n "$script"
+          done
       - name: Fetch locked dependencies
         run: cargo fetch --locked
       - name: Check and build
