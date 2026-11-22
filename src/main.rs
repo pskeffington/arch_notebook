@@ -806,9 +806,9 @@ impl App {
                 .map_err(|error| error.to_string())?;
             let headers = reader
                 .headers()
-                .map(|headers| headers.iter().map(str::to_owned).collect())
+                .map(|headers| headers.iter().map(str::to_owned).collect::<Vec<String>>())
                 .map_err(|error| error.to_string())?;
-            validate_delimited_headers(&headers)?;
+            validate_delimited_headers(headers.iter())?;
             let preview = reader
                 .records()
                 .take(4)
@@ -931,7 +931,7 @@ impl App {
                 .from_path(&import_path)
                 .map_err(|e| e.to_string())?;
             let headers = reader.headers().map_err(|e| e.to_string())?.clone();
-            validate_delimited_headers(&headers)?;
+            validate_delimited_headers(headers.iter())?;
             let col = |field: &str, names: &[&str]| {
                 let selected = match field {
                     "source" => &mapping.source,
@@ -4901,9 +4901,14 @@ fn delimited_text_delimiter(path: &str) -> u8 {
     }
 }
 
-fn validate_delimited_headers(headers: &[String]) -> Result<(), String> {
+fn validate_delimited_headers<I>(headers: I) -> Result<(), String>
+where
+    I: IntoIterator,
+    I::Item: AsRef<str>,
+{
     let mut seen = HashSet::new();
     for header in headers {
+        let header = header.as_ref();
         let normalized = header.trim().to_ascii_lowercase();
         if !normalized.is_empty() && !seen.insert(normalized) {
             return Err(format!(
