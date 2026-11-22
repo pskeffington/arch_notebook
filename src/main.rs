@@ -1,10 +1,11 @@
 use eframe::egui;
-use rusqlite::{Connection, OpenFlags, types::ValueRef};
+use rusqlite::{Connection, OpenFlags, TransactionBehavior, types::ValueRef};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     env, fs,
     path::{Path, PathBuf},
+    time::Duration,
 };
 use uuid::Uuid;
 
@@ -108,6 +109,8 @@ struct AutomationJob {
     minimum_connections: usize,
     #[serde(default)]
     maximum_regressions: Option<usize>,
+    #[serde(default)]
+    maximum_skipped_rows: Option<usize>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -126,6 +129,8 @@ struct AutomationRun {
     minimum_connections: usize,
     #[serde(default)]
     maximum_regressions: Option<usize>,
+    #[serde(default)]
+    maximum_skipped_rows: Option<usize>,
     #[serde(default)]
     enabled: bool,
     #[serde(default)]
@@ -207,8 +212,17 @@ struct App {
     automation_job_name: String,
     automation_minimum_connections: usize,
     automation_maximum_regressions: Option<usize>,
+    automation_maximum_skipped_rows: Option<usize>,
     editing_automation_job: Option<Uuid>,
-    automation_editor_before_edit: Option<(String, String, String, String, usize, Option<usize>)>,
+    automation_editor_before_edit: Option<(
+        String,
+        String,
+        String,
+        String,
+        usize,
+        Option<usize>,
+        Option<usize>,
+    )>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -434,6 +448,7 @@ impl Default for App {
             automation_job_name: String::new(),
             automation_minimum_connections: 0,
             automation_maximum_regressions: None,
+            automation_maximum_skipped_rows: None,
             editing_automation_job: None,
             automation_editor_before_edit: None,
         }
@@ -675,6 +690,7 @@ impl App {
             automation_job_name: String::new(),
             automation_minimum_connections: 0,
             automation_maximum_regressions: None,
+            automation_maximum_skipped_rows: None,
             editing_automation_job: None,
             automation_editor_before_edit: None,
         }
@@ -792,6 +808,7 @@ impl App {
                 .headers()
                 .map(|headers| headers.iter().map(str::to_owned).collect())
                 .map_err(|error| error.to_string())?;
+            validate_delimited_headers(&headers)?;
             let preview = reader
                 .records()
                 .take(4)
@@ -914,6 +931,7 @@ impl App {
                 .from_path(&import_path)
                 .map_err(|e| e.to_string())?;
             let headers = reader.headers().map_err(|e| e.to_string())?.clone();
+            validate_delimited_headers(&headers)?;
             let col = |field: &str, names: &[&str]| {
                 let selected = match field {
                     "source" => &mapping.source,
@@ -1584,14 +1602,21 @@ impl App {
             let path = resolve_sqlite_database_path(&configured_path, &case_path)?;
             let path = path.to_string_lossy().into_owned();
             // Enforce read-only access at the SQLite open boundary for every configured job.
-            let connection = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY)
-                .map_err(|e| e.to_string())?;
-            let captured_at: String = connection
+            let mut connection =
+                Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+                    .map_err(|e| e.to_string())?;
+            connection
+                .busy_timeout(Duration::from_secs(5))
+                .map_err(|error| error.to_string())?;
+            let transaction = connection
+                .transaction_with_behavior(TransactionBehavior::Deferred)
+                .map_err(|error| error.to_string())?;
+            let captured_at: String = transaction
                 .query_row("SELECT strftime('%Y-%m-%dT%H:%M:%fZ','now')", [], |row| {
                     row.get(0)
                 })
                 .map_err(|e| e.to_string())?;
-            let mut statement = connection.prepare(&query).map_err(|e| e.to_string())?;
+            let mut statement = transaction.prepare(&query).map_err(|e| e.to_string())?;
             if !statement.readonly() {
                 return Err("SQL query must be read-only".into());
             }
@@ -1729,6 +1754,9 @@ impl App {
                     notes,
                 });
             }
+            drop(rows);
+            drop(statement);
+            transaction.commit().map_err(|error| error.to_string())?;
             let mut natural_ids = HashSet::new();
             for fact in &facts {
                 if fact.connection_id.is_empty() && !natural_ids.insert(fact.key.clone()) {
@@ -1862,6 +1890,7 @@ impl App {
                 job.query = self.sql_query.trim().into();
                 job.minimum_connections = self.automation_minimum_connections;
                 job.maximum_regressions = self.automation_maximum_regressions;
+                job.maximum_skipped_rows = self.automation_maximum_skipped_rows;
                 self.editing_automation_job = None;
                 self.automation_editor_before_edit = None;
                 self.status = format!("AUTOMATION JOB UPDATED · {name}");
@@ -1879,6 +1908,7 @@ impl App {
             enabled: true,
             minimum_connections: self.automation_minimum_connections,
             maximum_regressions: self.automation_maximum_regressions,
+            maximum_skipped_rows: self.automation_maximum_skipped_rows,
         });
         self.editing_automation_job = None;
         self.automation_editor_before_edit = None;
@@ -1937,6 +1967,15 @@ impl App {
             } else {
                 format!(" · {skipped_rows} ROWS SKIPPED (EMPTY ENDPOINT)")
             };
+            let skipped_row_threshold = match self.automation_maximum_skipped_rows {
+                Some(maximum) if skipped_rows > maximum => {
+                    format!(" · SKIPPED ROW LIMIT EXCEEDED ({skipped_rows}; MAXIMUM {maximum})")
+                }
+                Some(maximum) => {
+                    format!(" · SKIPPED ROW LIMIT MET ({skipped_rows}; MAXIMUM {maximum})")
+                }
+                None => String::new(),
+            };
             let threshold = if count < self.automation_minimum_connections {
                 format!(
                     " · BELOW MINIMUM ({} REQUIRED)",
@@ -1959,7 +1998,7 @@ impl App {
                 None => String::new(),
             };
             format!(
-                "SQL QUERY VALID · {count} CONNECTIONS{skipped}{threshold}{regression_threshold} · CASE UNCHANGED"
+                "SQL QUERY VALID · {count} CONNECTIONS{skipped}{skipped_row_threshold}{threshold}{regression_threshold} · CASE UNCHANGED"
             )
         } else {
             self.status
@@ -1994,6 +2033,7 @@ impl App {
                 self.sql_query.clone(),
                 self.automation_minimum_connections,
                 self.automation_maximum_regressions,
+                self.automation_maximum_skipped_rows,
             ));
             self.automation_job_name = job.name;
             self.sql_path = job.database_path;
@@ -2001,6 +2041,7 @@ impl App {
             self.sql_query = job.query;
             self.automation_minimum_connections = job.minimum_connections;
             self.automation_maximum_regressions = job.maximum_regressions;
+            self.automation_maximum_skipped_rows = job.maximum_skipped_rows;
             self.editing_automation_job = Some(id);
             self.status = "EDITING AUTOMATION JOB".into();
         }
@@ -2008,8 +2049,15 @@ impl App {
 
     fn cancel_automation_job_edit(&mut self) {
         self.editing_automation_job = None;
-        if let Some((name, path, series, query, minimum, maximum_regressions)) =
-            self.automation_editor_before_edit.take()
+        if let Some((
+            name,
+            path,
+            series,
+            query,
+            minimum,
+            maximum_regressions,
+            maximum_skipped_rows,
+        )) = self.automation_editor_before_edit.take()
         {
             self.automation_job_name = name;
             self.sql_path = path;
@@ -2017,6 +2065,7 @@ impl App {
             self.sql_query = query;
             self.automation_minimum_connections = minimum;
             self.automation_maximum_regressions = maximum_regressions;
+            self.automation_maximum_skipped_rows = maximum_skipped_rows;
         }
         self.status = "JOB EDIT CANCELED".into();
     }
@@ -2085,6 +2134,10 @@ impl App {
                 .and_then(|index| self.case.snapshots.get(index))
                 .map(|snapshot| snapshot.connections.len())
                 .unwrap_or_default();
+            let skipped_rows = snapshot_index
+                .and_then(|index| self.case.snapshots.get(index))
+                .map(|snapshot| snapshot.skipped_rows)
+                .unwrap_or_default();
             let regression_count = automation_regression_count(&self.case, &source_key);
             if count < job.minimum_connections {
                 self.status = format!(
@@ -2100,6 +2153,19 @@ impl App {
                     self.status
                 );
             }
+            if let Some(maximum) = job.maximum_skipped_rows
+                && skipped_rows > maximum
+            {
+                self.status = format!(
+                    "{} · SKIPPED ROW LIMIT EXCEEDED ({skipped_rows}; MAXIMUM {maximum})",
+                    self.status
+                );
+            } else if let Some(maximum) = job.maximum_skipped_rows {
+                self.status = format!(
+                    "{} · SKIPPED ROW LIMIT MET ({skipped_rows}; MAXIMUM {maximum})",
+                    self.status
+                );
+            }
             self.status = format!(
                 "{} · {}",
                 self.status,
@@ -2109,6 +2175,9 @@ impl App {
                 && job
                     .maximum_regressions
                     .is_none_or(|maximum| regression_count <= maximum);
+            success &= job
+                .maximum_skipped_rows
+                .is_none_or(|maximum| skipped_rows <= maximum);
         }
         let message = self.status.clone();
         self.record_automation_run(job, started_at, success, message.clone(), snapshot_index);
@@ -2135,6 +2204,7 @@ impl App {
             query: job.query.clone(),
             minimum_connections: job.minimum_connections,
             maximum_regressions: job.maximum_regressions,
+            maximum_skipped_rows: job.maximum_skipped_rows,
             enabled: job.enabled,
             configuration_recorded: true,
             started_at,
@@ -3999,8 +4069,25 @@ impl eframe::App for App {
                                 ui.label(egui::RichText::new("Jobs are saved in this case file. Run them here or from a script with the command-line runner.").small().color(muted));
                                 ui.horizontal(|ui|{ui.label("Job name");ui.add(egui::TextEdit::singleline(&mut self.automation_job_name).desired_width(220.0));ui.label("Database");ui.add(egui::TextEdit::singleline(&mut self.sql_path).hint_text("Relative to case file").desired_width(220.0));});
                                 ui.horizontal(|ui|{ui.label("Snapshot series");ui.add(egui::TextEdit::singleline(&mut self.sql_series).desired_width(220.0));ui.label("Minimum connections");ui.add(egui::DragValue::new(&mut self.automation_minimum_connections).range(0..=1_000_000));});
+                                ui.horizontal(|ui| {
+                                    let mut limit_skipped_rows =
+                                        self.automation_maximum_skipped_rows.is_some();
+                                    if ui
+                                        .checkbox(&mut limit_skipped_rows, "Limit skipped rows")
+                                        .changed()
+                                    {
+                                        self.automation_maximum_skipped_rows =
+                                            limit_skipped_rows.then_some(0);
+                                    }
+                                    if let Some(maximum) =
+                                        self.automation_maximum_skipped_rows.as_mut()
+                                    {
+                                        ui.label("Maximum empty-endpoint rows");
+                                        ui.add(egui::DragValue::new(maximum).range(0..=1_000_000));
+                                    }
+                                });
                                 ui.horizontal(|ui|{let mut limit_regressions=self.automation_maximum_regressions.is_some();if ui.checkbox(&mut limit_regressions,"Limit regressions").changed(){self.automation_maximum_regressions=limit_regressions.then_some(0);}if let Some(maximum)=self.automation_maximum_regressions.as_mut(){ui.label("Maximum removals/confidence declines");ui.add(egui::DragValue::new(maximum).range(0..=1_000_000));}if ui.button("Validate query").clicked(){self.validate_sql_query();}if ui.button(if self.editing_automation_job.is_some(){"Save job changes"}else{"Add job"}).clicked(){self.save_automation_job();}if self.editing_automation_job.is_some()&&ui.button("Cancel edit").clicked(){self.cancel_automation_job_edit();}});
-                                ui.label(egui::RichText::new("A regression is a removed connection or confidence decline; runs above the configured limit are saved as failed, with their snapshots retained.").small().color(muted));
+                                ui.label(egui::RichText::new("A regression is a removed connection or confidence decline. Runs over either configured limit are saved as failed, with their snapshots retained.").small().color(muted));
                                 ui.add(egui::TextEdit::multiline(&mut self.sql_query).desired_width(canvas_w-20.0).desired_rows(5).code_editor());
                                 if ui.button("Run enabled jobs and save").clicked(){self.run_enabled_automation_jobs();}
                                 ui.add_space(8.0);ui.label(egui::RichText::new("JOBS").small().strong().color(cyan));
@@ -4008,7 +4095,7 @@ impl eframe::App for App {
                                 for job in &mut self.case.automation_jobs {
                                     ui.horizontal(|ui| {
                                         ui.checkbox(&mut job.enabled, "");
-                                        ui.label(format!("{} · {} · {} · min {} · max regressions {}",job.name,job.series,job.database_path,job.minimum_connections,job.maximum_regressions.map(|value|value.to_string()).unwrap_or_else(||"unlimited".into())));
+                                        ui.label(format!("{} · {} · {} · min {} · max regressions {} · max skipped rows {}",job.name,job.series,job.database_path,job.minimum_connections,job.maximum_regressions.map(|value|value.to_string()).unwrap_or_else(||"unlimited".into()),job.maximum_skipped_rows.map(|value|value.to_string()).unwrap_or_else(||"unlimited".into())));
                                         if ui.small_button("Edit").clicked(){action=Some(("edit".into(),job.id));}
                                         if ui.small_button("Run and save").clicked(){action=Some(("run".into(),job.id));}
                                         if ui.small_button("Delete").clicked(){action=Some(("delete".into(),job.id));}
@@ -4030,9 +4117,10 @@ impl eframe::App for App {
                                             ui.label(&run.message);
                                             if run.configuration_recorded {
                                                 ui.label(format!(
-                                                    "Minimum {} connections · maximum regressions {} · job {}",
+                                                    "Minimum {} connections · maximum regressions {} · maximum skipped rows {} · job {}",
                                                     run.minimum_connections,
                                                     run.maximum_regressions.map(|value|value.to_string()).unwrap_or_else(||"unlimited".into()),
+                                                    run.maximum_skipped_rows.map(|value|value.to_string()).unwrap_or_else(||"unlimited".into()),
                                                     if run.enabled { "enabled" } else { "disabled" }
                                                 ));
                                                 ui.label(format!(
@@ -4813,6 +4901,20 @@ fn delimited_text_delimiter(path: &str) -> u8 {
     }
 }
 
+fn validate_delimited_headers(headers: &[String]) -> Result<(), String> {
+    let mut seen = HashSet::new();
+    for header in headers {
+        let normalized = header.trim().to_ascii_lowercase();
+        if !normalized.is_empty() && !seen.insert(normalized) {
+            return Err(format!(
+                "delimited file has an ambiguous duplicate column header: {}",
+                header.trim()
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn delimited_text_format(path: &str) -> &'static str {
     if delimited_text_delimiter(path) == b'\t' {
         "TSV"
@@ -5056,9 +5158,22 @@ fn run_automation_cli(
         if !success {
             failures += 1;
         }
+        let run = app.case.automation_runs.last();
+        let snapshot_id = run.and_then(|run| run.snapshot_id);
+        let snapshot =
+            snapshot_id.and_then(|id| app.case.snapshots.iter().find(|snapshot| snapshot.id == id));
+        let connection_count = snapshot.map(|snapshot| snapshot.connections.len());
+        let skipped_rows = snapshot.map(|snapshot| snapshot.skipped_rows);
         save_case_atomically(Path::new(case_path), &app.case)?;
         if json_output {
-            outcomes.push(serde_json::json!({"status":if success{"PASS"}else{"FAIL"},"job":job.name,"message":message}));
+            outcomes.push(serde_json::json!({
+                "status": if success { "PASS" } else { "FAIL" },
+                "job": job.name,
+                "message": message,
+                "snapshot_id": snapshot_id,
+                "connection_count": connection_count,
+                "skipped_rows": skipped_rows,
+            }));
         } else {
             println!(
                 "{} · {} · {}",
@@ -5125,16 +5240,27 @@ fn validate_enabled_automation_jobs_cli(
         app.sql_query = job.query.clone();
         app.automation_minimum_connections = job.minimum_connections;
         app.automation_maximum_regressions = job.maximum_regressions;
+        app.automation_maximum_skipped_rows = job.maximum_skipped_rows;
+        let snapshot_count_before = app.case.snapshots.len();
         app.validate_sql_query_for_batch();
         let message = app.status.clone();
+        let snapshot = app.case.snapshots.get(snapshot_count_before);
         let success = message.starts_with("SQL QUERY VALID")
             && message.contains("MINIMUM MET")
-            && !message.contains("REGRESSION LIMIT EXCEEDED");
+            && !message.contains("REGRESSION LIMIT EXCEEDED")
+            && !message.contains("SKIPPED ROW LIMIT EXCEEDED");
         if !success {
             failures += 1;
         }
         if json_output {
-            outcomes.push(serde_json::json!({"status":if success{"PASS"}else{"FAIL"},"job":job.name,"message":message}));
+            outcomes.push(serde_json::json!({
+                "status": if success { "PASS" } else { "FAIL" },
+                "job": job.name,
+                "message": message,
+                "snapshot_id": snapshot.map(|snapshot| snapshot.id),
+                "connection_count": snapshot.map(|snapshot| snapshot.connections.len()),
+                "skipped_rows": snapshot.map(|snapshot| snapshot.skipped_rows),
+            }));
         } else {
             println!(
                 "{} · {} · {}",
@@ -5167,6 +5293,7 @@ fn list_automation_jobs_cli(case_path: &str, json_output: bool) -> Result<(), St
                 "series": job.series,
                 "minimum_connections": job.minimum_connections,
                 "maximum_regressions": job.maximum_regressions,
+                "maximum_skipped_rows": job.maximum_skipped_rows,
             })
         })
         .collect();
@@ -5219,6 +5346,7 @@ fn list_automation_runs_cli(case_path: &str, json_output: bool) -> Result<(), St
                 "snapshot_id": run.snapshot_id,
                 "connection_count": snapshot.map(|snapshot| snapshot.connections.len()),
                 "skipped_rows": snapshot.map(|snapshot| snapshot.skipped_rows),
+                "maximum_skipped_rows": run.maximum_skipped_rows,
                 "message": run.message,
                 "configuration_recorded": run.configuration_recorded,
             })
