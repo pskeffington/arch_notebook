@@ -129,7 +129,7 @@ All bundled case examples are fictional. Arch Notebook does not connect to a ser
 
 ## Build and deploy
 
-The supported desktop targets are Arch Linux and macOS on Apple Silicon or Intel. Rust 1.89 or newer is required to build. macOS bundles SQLite so it does not depend on the older system SQLite library; Linux builds link to the system SQLite library, which is installed as an application dependency. On Linux, the application stores its database, CSV example, and default case under `$XDG_DATA_HOME/arch-notebook`, or `~/.local/share/arch-notebook` when `XDG_DATA_HOME` is unset. On macOS, it uses `~/Library/Application Support/Arch Notebook`. Existing sample files are left in place on later launches.
+The supported desktop targets are Arch Linux on x86_64, generic Linux archives on x86_64 and ARM64, and macOS on Apple Silicon or Intel. Rust 1.89 or newer is required to build. macOS bundles SQLite so it does not depend on the older system SQLite library; Linux builds link to the system SQLite library, which is installed as an application dependency. On Linux, the application stores its database, CSV example, and default case under `$XDG_DATA_HOME/arch-notebook`, or `~/.local/share/arch-notebook` when `XDG_DATA_HOME` is unset. On macOS, it uses `~/Library/Application Support/Arch Notebook`. Existing sample files are left in place on later launches.
 
 ### Arch Linux
 
@@ -166,7 +166,7 @@ The profile is created with `xcrun notarytool store-credentials`; the signing id
 
 ### Continuous builds
 
-GitHub Actions checks formatting and builds release artifacts for Linux x86_64, macOS Apple Silicon, macOS Intel, and an Arch Linux package. Pull requests and pushes build without publishing a release; a newer push to `main` supersedes an older `main` build so CI prioritizes the latest commit. Generated workflow artifacts are available for 14 days. Publishing a GitHub Release triggers the workflow to attach the Linux archive, Arch package, macOS zips, and a `SHA256SUMS` file. macOS zip names state whether they are `unsigned`, `developer-id-signed`, or `notarized`; CI artifacts are unsigned because signing credentials are not stored in the repository.
+GitHub Actions checks formatting and builds Linux x86_64 and ARM64 archives, macOS Apple Silicon and Intel apps, and an Arch Linux x86_64 package. Pull requests and pushes build without publishing a release; a newer push to `main` supersedes an older `main` build so CI prioritizes the latest commit. Generated workflow artifacts are available for 14 days. Publishing a GitHub Release triggers the workflow to attach the Linux archives, Arch package, macOS zips, and a `SHA256SUMS` file. macOS zip names state whether they are `unsigned`, `developer-id-signed`, or `notarized`; CI artifacts are unsigned because signing credentials are not stored in the repository.
 
 To attach a locally signed and notarized macOS archive to a published release, build it with the credentials described above and upload it with:
 

@@ -27,14 +27,26 @@ jobs:
           - name: Linux x86_64
             runner: ubuntu-24.04
             package: linux
+            artifact_arch: x86_64
+            archive_dir: arch-notebook-linux-x86_64
+            archive_name: arch-notebook-linux-x86_64.tar.gz
             target: x86_64-unknown-linux-gnu
+          - name: Linux ARM64
+            runner: ubuntu-24.04-arm
+            package: linux
+            artifact_arch: aarch64
+            archive_dir: arch-notebook-linux-aarch64
+            archive_name: arch-notebook-linux-aarch64.tar.gz
+            target: aarch64-unknown-linux-gnu
           - name: macOS Apple Silicon
             runner: macos-15
             package: macos
+            artifact_arch: arm64
             target: aarch64-apple-darwin
           - name: macOS Intel
             runner: macos-15-intel
             package: macos
+            artifact_arch: x86_64
             target: x86_64-apple-darwin
     steps:
       - uses: actions/checkout@v4
@@ -61,11 +73,11 @@ jobs:
       - name: Package Linux binary archive
         if: matrix.package == 'linux'
         run: |
-          mkdir -p dist/arch-notebook-linux-x86_64
-          install -Dm755 "target/${{ matrix.target }}/release/arch-notebook" dist/arch-notebook-linux-x86_64/arch-notebook
-          install -Dm644 packaging/arch/arch-notebook.desktop dist/arch-notebook-linux-x86_64/arch-notebook.desktop
-          install -Dm644 LICENSE dist/arch-notebook-linux-x86_64/LICENSE
-          tar -C dist -czf dist/arch-notebook-linux-x86_64.tar.gz arch-notebook-linux-x86_64
+          mkdir -p "dist/${{ matrix.archive_dir }}"
+          install -Dm755 "target/${{ matrix.target }}/release/arch-notebook" "dist/${{ matrix.archive_dir }}/arch-notebook"
+          install -Dm644 packaging/arch/arch-notebook.desktop "dist/${{ matrix.archive_dir }}/arch-notebook.desktop"
+          install -Dm644 LICENSE "dist/${{ matrix.archive_dir }}/LICENSE"
+          tar -C dist -czf "dist/${{ matrix.archive_name }}" "${{ matrix.archive_dir }}"
       - name: Package macOS application bundle
         if: matrix.package == 'macos'
         env:
@@ -73,7 +85,7 @@ jobs:
         run: scripts/package-macos.sh
       - uses: actions/upload-artifact@v4
         with:
-          name: arch-notebook-${{ matrix.package }}-${{ runner.arch }}
+          name: arch-notebook-${{ matrix.package }}-${{ matrix.artifact_arch }}
           path: |
             dist/*.tar.gz
             dist/*.zip
