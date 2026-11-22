@@ -11,6 +11,12 @@ if [[ $# -gt 2 ]]; then
   exit 2
 fi
 
+schedule="${ARCH_NOTEBOOK_AUTOMATION_SCHEDULE:-hourly}"
+case "$schedule" in
+  hourly|daily|weekly) ;;
+  *) echo "ARCH_NOTEBOOK_AUTOMATION_SCHEDULE must be hourly, daily, or weekly." >&2; exit 2 ;;
+esac
+
 home_dir="${HOME:?HOME must be set}"
 case "$home_dir" in
   /*) ;;
@@ -65,12 +71,12 @@ esac
 unit_dir="$config_home/systemd/user"
 mkdir -p "$unit_dir"
 
-python3 - "$unit_dir" "$binary" "$case_file" <<'PY'
+python3 - "$unit_dir" "$binary" "$case_file" "$schedule" <<'PY'
 import os
 import sys
 import tempfile
 
-unit_dir, binary, case_file = sys.argv[1:]
+unit_dir, binary, case_file, schedule = sys.argv[1:]
 
 def quote_exec_arg(value: str) -> str:
     if any(ord(character) < 32 or ord(character) == 127 for character in value):
@@ -95,14 +101,14 @@ timer = """[Unit]
 Description=Schedule Arch Notebook SQL automation
 
 [Timer]
-OnCalendar=hourly
+OnCalendar={schedule}
 Persistent=true
 RandomizedDelaySec=5m
 Unit=arch-notebook-automation.service
 
 [Install]
 WantedBy=timers.target
-"""
+""".format(schedule=schedule)
 
 def replace_atomically(destination: str, contents: str) -> None:
     fd, temporary = tempfile.mkstemp(
@@ -130,6 +136,6 @@ PY
 
 systemctl --user daemon-reload
 systemctl --user enable --now arch-notebook-automation.timer
-echo "Enabled hourly Arch Notebook automation for: $case_file"
+echo "Enabled $schedule Arch Notebook automation for: $case_file"
 echo "Check status with: systemctl --user status arch-notebook-automation.timer"
 echo "View run output with: journalctl --user -u arch-notebook-automation.service"

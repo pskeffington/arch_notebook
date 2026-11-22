@@ -155,7 +155,7 @@ On Arch Linux with systemd, configure enabled jobs in the app, then install the 
 arch-notebook-install-automation
 ```
 
-Pass a case-file path to schedule a different case. The installer writes user-owned units under `${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user`, validates the case, and enables the timer. It runs hourly, catches up a missed run after the machine was offline, and adds up to five minutes of randomized delay. User timers run only while the user systemd manager is active; to keep it running after logout and start it at boot, enable lingering for the account with `loginctl enable-linger "$USER"`. The service allows a run up to one hour to finish. Run it immediately with `systemctl --user start arch-notebook-automation.service`; inspect results with `journalctl --user -u arch-notebook-automation.service`. On macOS, first open the app and enable jobs, then install the bundled LaunchAgent for the case:
+Pass a case-file path to schedule a different case. Set `ARCH_NOTEBOOK_AUTOMATION_SCHEDULE=daily` or `weekly` before running either platform installer to change the cadence; hourly is the default. The Linux installer writes user-owned units under `${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user`, validates the case, and enables the timer. It catches up a missed calendar run after the machine was offline and adds up to five minutes of randomized delay. User timers run only while the user systemd manager is active; to keep it running after logout and start it at boot, enable lingering for the account with `loginctl enable-linger "$USER"`. The service allows a run up to one hour to finish. Run it immediately with `systemctl --user start arch-notebook-automation.service`; inspect results with `journalctl --user -u arch-notebook-automation.service`. On macOS, first open the app and enable jobs, then install the bundled LaunchAgent for the case:
 
 ```sh
 app_bundle="/Applications/Arch Notebook.app"
@@ -164,7 +164,7 @@ bash "$app_bundle/Contents/Resources/install-macos-automation.sh" \
   "$app_bundle"
 ```
 
-The installer writes and validates a per-user LaunchAgent plist, then loads it for the current login session. It runs once when loaded and hourly afterward; inspect `~/Library/Logs/arch-notebook-automation.log` and `~/Library/Logs/arch-notebook-automation-error.log`. To remove the schedule, run `launchctl bootout "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.archnotebook.automation.plist"` and remove that plist. Keep the SQLite source available at the configured path when automation runs.
+The installer writes and validates a per-user LaunchAgent plist, then loads it for the current login session. It runs once when loaded and then at the selected interval; inspect `~/Library/Logs/arch-notebook-automation.log` and `~/Library/Logs/arch-notebook-automation-error.log`. To remove the schedule, run `launchctl bootout "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.archnotebook.automation.plist"` and remove that plist. Keep the SQLite source available at the configured path when automation runs.
 
 ## Other notebook workflows
 

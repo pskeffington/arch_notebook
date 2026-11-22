@@ -11,6 +11,12 @@ if [[ $# -lt 1 || $# -gt 2 ]]; then
   exit 2
 fi
 
+schedule="${ARCH_NOTEBOOK_AUTOMATION_SCHEDULE:-hourly}"
+case "$schedule" in
+  hourly|daily|weekly) ;;
+  *) echo "ARCH_NOTEBOOK_AUTOMATION_SCHEDULE must be hourly, daily, or weekly." >&2; exit 2 ;;
+esac
+
 case_file="$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"
 app_bundle="${2:-/Applications/Arch Notebook.app}"
 binary="$app_bundle/Contents/MacOS/arch-notebook"
@@ -33,18 +39,19 @@ log_dir="$HOME/Library/Logs"
 plist_path="$agent_dir/$label.plist"
 mkdir -p "$agent_dir" "$log_dir"
 
-python3 - "$plist_path" "$binary" "$case_file" "$log_dir" "$label" <<'PY'
+python3 - "$plist_path" "$binary" "$case_file" "$log_dir" "$label" "$schedule" <<'PY'
 import os
 import plistlib
 import sys
 import tempfile
 
-destination, binary, case_file, log_dir, label = sys.argv[1:]
+destination, binary, case_file, log_dir, label, schedule = sys.argv[1:]
+interval_seconds = {"hourly": 3600, "daily": 86400, "weekly": 604800}[schedule]
 payload = {
     "Label": label,
     "ProgramArguments": [binary, "--run-enabled-jobs", case_file, "--json"],
     "RunAtLoad": True,
-    "StartInterval": 3600,
+    "StartInterval": interval_seconds,
     "StandardOutPath": os.path.join(log_dir, "arch-notebook-automation.log"),
     "StandardErrorPath": os.path.join(log_dir, "arch-notebook-automation-error.log"),
 }
@@ -68,5 +75,5 @@ gui_domain="gui/$(id -u)"
 launchctl bootout "$gui_domain" "$plist_path" >/dev/null 2>&1 || true
 launchctl bootstrap "$gui_domain" "$plist_path"
 echo "Installed and loaded $plist_path"
-echo "The first run starts at login/load; later runs start hourly."
+echo "The first run starts at login/load; later runs start $schedule."
 echo "Logs: $log_dir/arch-notebook-automation{,-error}.log"
