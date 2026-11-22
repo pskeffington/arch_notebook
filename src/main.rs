@@ -2212,6 +2212,46 @@ impl App {
         success
     }
 
+    fn validate_automation_job(&mut self, id: Uuid) -> bool {
+        let Some(job) = self
+            .case
+            .automation_jobs
+            .iter()
+            .find(|job| job.id == id)
+            .cloned()
+        else {
+            self.status = "SQL QUERY INVALID · job not found".into();
+            return false;
+        };
+        let editor_state = (
+            self.sql_path.clone(),
+            self.sql_series.clone(),
+            self.sql_query.clone(),
+            self.automation_minimum_connections,
+            self.automation_maximum_regressions,
+            self.automation_maximum_skipped_rows,
+            self.editing_automation_job,
+        );
+        self.sql_path = job.database_path;
+        self.sql_series = job.series;
+        self.sql_query = job.query;
+        self.automation_minimum_connections = job.minimum_connections;
+        self.automation_maximum_regressions = job.maximum_regressions;
+        self.automation_maximum_skipped_rows = job.maximum_skipped_rows;
+        self.editing_automation_job = Some(id);
+        let valid = self.validate_sql_query();
+        (
+            self.sql_path,
+            self.sql_series,
+            self.sql_query,
+            self.automation_minimum_connections,
+            self.automation_maximum_regressions,
+            self.automation_maximum_skipped_rows,
+            self.editing_automation_job,
+        ) = editor_state;
+        valid
+    }
+
     fn run_automation_job_cli(&mut self, job: &AutomationJob) -> (bool, String) {
         self.execute_automation_job(job)
     }
@@ -4420,12 +4460,26 @@ impl eframe::App for App {
                                     ui.horizontal(|ui| {
                                         ui.checkbox(&mut job.enabled, "");
                                         ui.label(format!("{} · {} · {} · min {} · max regressions {} · max skipped rows {}",job.name,job.series,job.database_path,job.minimum_connections,job.maximum_regressions.map(|value|value.to_string()).unwrap_or_else(||"unlimited".into()),job.maximum_skipped_rows.map(|value|value.to_string()).unwrap_or_else(||"unlimited".into())));
+                                        if ui.small_button("Validate").clicked(){action=Some(("validate".into(),job.id));}
                                         if ui.small_button("Edit").clicked(){action=Some(("edit".into(),job.id));}
                                         if ui.small_button("Run and save").clicked(){action=Some(("run".into(),job.id));}
                                         if ui.small_button("Delete").clicked(){action=Some(("delete".into(),job.id));}
                                     });
+                                    egui::CollapsingHeader::new("SQL query and capture configuration")
+                                        .id_salt(("automation_job_query", job.id))
+                                        .show(ui, |ui| {
+                                            ui.label(format!("SQLite {} · series {}", job.database_path, job.series));
+                                            let mut query = job.query.clone();
+                                            ui.add(
+                                                egui::TextEdit::multiline(&mut query)
+                                                    .desired_width(canvas_w - 30.0)
+                                                    .desired_rows(3)
+                                                    .code_editor()
+                                                    .interactive(false),
+                                            );
+                                        });
                                 }
-                                if let Some((verb,id))=action {match verb.as_str(){"edit"=>self.edit_automation_job(id),"run"=>{let job_name=self.case.automation_jobs.iter().find(|job|job.id==id).map(|job|job.name.clone()).unwrap_or_else(||"(missing job)".into());let passed=self.run_automation_job(id);let summary=format!("JOB RUN {} · {job_name}",if passed{"PASSED"}else{"FAILED"});self.save_automation_results(&summary);},"delete"=>{if self.editing_automation_job==Some(id){self.cancel_automation_job_edit();}self.case.automation_jobs.retain(|job|job.id!=id);self.status="AUTOMATION JOB DELETED".into();},_=>{}}}
+                                if let Some((verb,id))=action {match verb.as_str(){"validate"=>{self.validate_automation_job(id);},"edit"=>self.edit_automation_job(id),"run"=>{let job_name=self.case.automation_jobs.iter().find(|job|job.id==id).map(|job|job.name.clone()).unwrap_or_else(||"(missing job)".into());let passed=self.run_automation_job(id);let summary=format!("JOB RUN {} · {job_name}",if passed{"PASSED"}else{"FAILED"});self.save_automation_results(&summary);},"delete"=>{if self.editing_automation_job==Some(id){self.cancel_automation_job_edit();}self.case.automation_jobs.retain(|job|job.id!=id);self.status="AUTOMATION JOB DELETED".into();},_=>{}}}
                                 ui.add_space(8.0);ui.label(egui::RichText::new("RUN HISTORY · newest first").small().strong().color(cyan));
                                 let mut review_snapshot = None;
                                 egui::ScrollArea::vertical().max_height(210.0).show(ui, |ui| {
