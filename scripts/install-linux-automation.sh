@@ -136,6 +136,7 @@ PY
 
 systemctl --user daemon-reload
 systemctl --user enable --now arch-notebook-automation.timer
+systemctl --user restart arch-notebook-automation.timer
 echo "Enabled $schedule Arch Notebook automation for: $case_file"
 echo "Check status with: systemctl --user status arch-notebook-automation.timer"
 echo "View run output with: journalctl --user -u arch-notebook-automation.service"
