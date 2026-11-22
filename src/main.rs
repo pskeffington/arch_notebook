@@ -2,7 +2,7 @@ use eframe::egui;
 use quick_xml::{
     Reader as XmlReader, escape::resolve_predefined_entity, events::Event as XmlEvent,
 };
-use rusqlite::{Connection, OpenFlags, TransactionBehavior, types::ValueRef};
+use rusqlite::{Connection, OpenFlags, TransactionBehavior, params_from_iter, types::ValueRef};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet, VecDeque},
@@ -95,6 +95,8 @@ struct ConnectionSnapshot {
     #[serde(default)]
     configured_database_path: String,
     query: String,
+    #[serde(default)]
+    parameters: Vec<(String, String)>,
     captured_at: String,
     connections: Vec<ConnectionFact>,
     #[serde(default)]
@@ -108,6 +110,8 @@ struct AutomationJob {
     database_path: String,
     series: String,
     query: String,
+    #[serde(default)]
+    parameters: Vec<(String, String)>,
     enabled: bool,
     #[serde(default)]
     minimum_connections: usize,
@@ -129,6 +133,8 @@ struct AutomationRun {
     series: String,
     #[serde(default)]
     query: String,
+    #[serde(default)]
+    parameters: Vec<(String, String)>,
     #[serde(default)]
     minimum_connections: usize,
     #[serde(default)]
@@ -153,6 +159,7 @@ struct SqlValidationPreview {
     configured_database_path: String,
     series: String,
     query: String,
+    parameters: Vec<(String, String)>,
     captured_at: String,
     connection_count: usize,
     skipped_rows: usize,
@@ -223,6 +230,7 @@ struct App {
     sql_path: String,
     sql_series: String,
     sql_query: String,
+    sql_parameter_text: String,
     sql_validation_preview: Option<SqlValidationPreview>,
     automation_job_filter: String,
     sql_snapshot_source: Option<String>,
@@ -233,6 +241,7 @@ struct App {
     automation_maximum_skipped_rows: Option<usize>,
     editing_automation_job: Option<Uuid>,
     automation_editor_before_edit: Option<(
+        String,
         String,
         String,
         String,
@@ -487,7 +496,8 @@ impl Default for App {
             duplicate_candidates: Vec::new(),
             sql_path: data_dir.join("sample_connections.sqlite").to_string_lossy().into_owned(),
             sql_series: "Harbor Light connection review".into(),
-            sql_query: "SELECT connection_id, source, source_type, target, target_type, relationship, event_date AS date, confidence, directed, source_reference, notes FROM connection_observations WHERE snapshot_id = 'baseline' ORDER BY connection_id;".into(),
+            sql_query: "SELECT connection_id, source, source_type, target, target_type, relationship, event_date AS date, confidence, directed, source_reference, notes FROM connection_observations WHERE snapshot_id = :snapshot_id ORDER BY connection_id;".into(),
+            sql_parameter_text: "snapshot_id=baseline".into(),
             sql_validation_preview: None,
             automation_job_filter: String::new(),
             sql_snapshot_source: None,
@@ -734,6 +744,7 @@ impl App {
             sql_path: String::new(),
             sql_series: String::new(),
             sql_query: String::new(),
+            sql_parameter_text: String::new(),
             sql_validation_preview: None,
             automation_job_filter: String::new(),
             sql_snapshot_source: None,
@@ -1708,6 +1719,7 @@ impl App {
         let case_path = self.case_path.clone();
         let series = self.sql_series.trim().to_string();
         let query = self.sql_query.trim().to_string();
+        let parameters = parse_sql_parameters(&self.sql_parameter_text);
         let previously_selected = self
             .selected_link
             .and_then(|index| self.case.links.get(index))
@@ -1722,6 +1734,7 @@ impl App {
             if query.is_empty() {
                 return Err("SQL query cannot be empty".into());
             }
+            let parameters = parameters?;
             let path = resolve_sqlite_database_path(&configured_path, &case_path)?;
             let path = path.to_string_lossy().into_owned();
             // Enforce read-only access at the SQLite open boundary for every configured job.
@@ -1743,6 +1756,7 @@ impl App {
             if !statement.readonly() {
                 return Err("SQL query must be read-only".into());
             }
+            let parameter_values = sql_parameter_values(&statement, &parameters)?;
             let column_names: Vec<String> = statement
                 .column_names()
                 .map(|name| name.trim().to_ascii_lowercase())
@@ -1792,7 +1806,9 @@ impl App {
             let mut facts = Vec::new();
             let mut explicit_ids = HashSet::new();
             let mut skipped_rows = 0;
-            let mut rows = statement.query([]).map_err(|e| e.to_string())?;
+            let mut rows = statement
+                .query(params_from_iter(parameter_values.iter()))
+                .map_err(|e| e.to_string())?;
             while let Some(row) = rows.next().map_err(|e| e.to_string())? {
                 let source_name = sql_value(row, Some(source))
                     .map_err(|e| e.to_string())?
@@ -1937,6 +1953,7 @@ impl App {
                 database_path: path,
                 configured_database_path: configured_path,
                 query,
+                parameters,
                 captured_at,
                 connections: facts,
                 skipped_rows,
@@ -1970,6 +1987,13 @@ impl App {
 
     fn save_automation_job(&mut self) {
         let name = self.automation_job_name.trim().to_string();
+        let parameters = match parse_sql_parameters(&self.sql_parameter_text) {
+            Ok(parameters) => parameters,
+            Err(error) => {
+                self.status = format!("JOB NOT SAVED · {error}");
+                return;
+            }
+        };
         if name.is_empty()
             || self.sql_path.trim().is_empty()
             || self.sql_series.trim().is_empty()
@@ -2011,6 +2035,7 @@ impl App {
                 job.database_path = self.sql_path.trim().into();
                 job.series = self.sql_series.trim().into();
                 job.query = self.sql_query.trim().into();
+                job.parameters = parameters;
                 job.minimum_connections = self.automation_minimum_connections;
                 job.maximum_regressions = self.automation_maximum_regressions;
                 job.maximum_skipped_rows = self.automation_maximum_skipped_rows;
@@ -2028,6 +2053,7 @@ impl App {
             database_path: self.sql_path.trim().into(),
             series: self.sql_series.trim().into(),
             query: self.sql_query.trim().into(),
+            parameters,
             enabled: true,
             minimum_connections: self.automation_minimum_connections,
             maximum_regressions: self.automation_maximum_regressions,
@@ -2081,6 +2107,7 @@ impl App {
                 configured_database_path: snapshot.configured_database_path.clone(),
                 series: snapshot.series.clone(),
                 query: snapshot.query.clone(),
+                parameters: snapshot.parameters.clone(),
                 captured_at: snapshot.captured_at.clone(),
                 connection_count: snapshot.connections.len(),
                 skipped_rows: snapshot.skipped_rows,
@@ -2173,11 +2200,14 @@ impl App {
         database_path: &str,
         series: &str,
         query: &str,
+        parameter_text: &str,
     ) {
         let Some(preview) = preview.filter(|preview| {
             preview.configured_database_path == database_path.trim()
                 && preview.series == series.trim()
                 && preview.query == query.trim()
+                && parse_sql_parameters(parameter_text)
+                    .is_ok_and(|parameters| parameters == preview.parameters)
         }) else {
             return;
         };
@@ -2250,6 +2280,7 @@ impl App {
                 self.sql_path.clone(),
                 self.sql_series.clone(),
                 self.sql_query.clone(),
+                self.sql_parameter_text.clone(),
                 self.automation_minimum_connections,
                 self.automation_maximum_regressions,
                 self.automation_maximum_skipped_rows,
@@ -2258,6 +2289,7 @@ impl App {
             self.sql_path = job.database_path;
             self.sql_series = job.series;
             self.sql_query = job.query;
+            self.sql_parameter_text = format_sql_parameters(&job.parameters);
             self.automation_minimum_connections = job.minimum_connections;
             self.automation_maximum_regressions = job.maximum_regressions;
             self.automation_maximum_skipped_rows = job.maximum_skipped_rows;
@@ -2273,6 +2305,7 @@ impl App {
             path,
             series,
             query,
+            parameter_text,
             minimum,
             maximum_regressions,
             maximum_skipped_rows,
@@ -2282,6 +2315,7 @@ impl App {
             self.sql_path = path;
             self.sql_series = series;
             self.sql_query = query;
+            self.sql_parameter_text = parameter_text;
             self.automation_minimum_connections = minimum;
             self.automation_maximum_regressions = maximum_regressions;
             self.automation_maximum_skipped_rows = maximum_skipped_rows;
@@ -2304,9 +2338,15 @@ impl App {
             self.sql_path.clone(),
             self.sql_series.clone(),
             self.sql_query.clone(),
+            self.sql_parameter_text.clone(),
         );
         let (success, message) = self.execute_automation_job(&job);
-        (self.sql_path, self.sql_series, self.sql_query) = editor_state;
+        (
+            self.sql_path,
+            self.sql_series,
+            self.sql_query,
+            self.sql_parameter_text,
+        ) = editor_state;
         self.status = message;
         success
     }
@@ -2326,6 +2366,7 @@ impl App {
             self.sql_path.clone(),
             self.sql_series.clone(),
             self.sql_query.clone(),
+            self.sql_parameter_text.clone(),
             self.automation_minimum_connections,
             self.automation_maximum_regressions,
             self.automation_maximum_skipped_rows,
@@ -2334,6 +2375,7 @@ impl App {
         self.sql_path = job.database_path;
         self.sql_series = job.series;
         self.sql_query = job.query;
+        self.sql_parameter_text = format_sql_parameters(&job.parameters);
         self.automation_minimum_connections = job.minimum_connections;
         self.automation_maximum_regressions = job.maximum_regressions;
         self.automation_maximum_skipped_rows = job.maximum_skipped_rows;
@@ -2343,6 +2385,7 @@ impl App {
             self.sql_path,
             self.sql_series,
             self.sql_query,
+            self.sql_parameter_text,
             self.automation_minimum_connections,
             self.automation_maximum_regressions,
             self.automation_maximum_skipped_rows,
@@ -2378,6 +2421,7 @@ impl App {
         self.sql_path = job.database_path.clone();
         self.sql_series = job.series.clone();
         self.sql_query = job.query.clone();
+        self.sql_parameter_text = format_sql_parameters(&job.parameters);
         self.status = "JOB RUNNING".into();
         self.ingest_sqlite_snapshot();
         let ingestion_succeeded = self.status.starts_with("SQL SNAPSHOT INGESTED");
@@ -2462,6 +2506,7 @@ impl App {
             database_path: job.database_path.clone(),
             series: job.series.clone(),
             query: job.query.clone(),
+            parameters: job.parameters.clone(),
             minimum_connections: job.minimum_connections,
             maximum_regressions: job.maximum_regressions,
             maximum_skipped_rows: job.maximum_skipped_rows,
@@ -4046,6 +4091,85 @@ fn sql_value(row: &rusqlite::Row<'_>, index: Option<usize>) -> rusqlite::Result<
     })
 }
 
+fn normalize_sql_parameter_name(name: &str) -> String {
+    name.trim()
+        .trim_start_matches(|character| matches!(character, ':' | '@' | '$'))
+        .to_owned()
+}
+
+fn valid_sql_parameter_name(name: &str) -> bool {
+    let mut characters = name.chars();
+    matches!(characters.next(), Some('a'..='z' | 'A'..='Z' | '_'))
+        && characters.all(|character| character.is_ascii_alphanumeric() || character == '_')
+}
+
+fn parse_sql_parameters(text: &str) -> Result<Vec<(String, String)>, String> {
+    let mut parameters = Vec::new();
+    let mut names = HashSet::new();
+    for (line_index, line) in text.lines().enumerate() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Some((raw_name, value)) = line.split_once('=') else {
+            return Err(format!(
+                "SQL parameter line {} must use name=value",
+                line_index + 1
+            ));
+        };
+        let name = normalize_sql_parameter_name(raw_name);
+        if !valid_sql_parameter_name(&name) {
+            return Err(format!(
+                "SQL parameter line {} needs a name starting with a letter or underscore",
+                line_index + 1
+            ));
+        }
+        if !names.insert(name.clone()) {
+            return Err(format!("duplicate SQL parameter: {name}"));
+        }
+        parameters.push((name, value.trim().to_owned()));
+    }
+    Ok(parameters)
+}
+
+fn format_sql_parameters(parameters: &[(String, String)]) -> String {
+    parameters
+        .iter()
+        .map(|(name, value)| format!("{name}={value}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn sql_parameter_values(
+    statement: &rusqlite::Statement<'_>,
+    parameters: &[(String, String)],
+) -> Result<Vec<String>, String> {
+    let configured: HashMap<&str, &str> = parameters
+        .iter()
+        .map(|(name, value)| (name.as_str(), value.as_str()))
+        .collect();
+    let mut used = HashSet::new();
+    let mut values = Vec::with_capacity(statement.parameter_count());
+    for index in 1..=statement.parameter_count() {
+        let Some(raw_name) = statement.parameter_name(index) else {
+            return Err("SQL queries must use named parameters (:name, @name, or $name)".into());
+        };
+        if !matches!(raw_name.chars().next(), Some(':' | '@' | '$')) {
+            return Err("SQL queries must use named parameters (:name, @name, or $name)".into());
+        }
+        let name = normalize_sql_parameter_name(raw_name);
+        let Some(value) = configured.get(name.as_str()) else {
+            return Err(format!("missing SQL parameter value: {name}"));
+        };
+        used.insert(name);
+        values.push((*value).to_owned());
+    }
+    if let Some((name, _)) = parameters.iter().find(|(name, _)| !used.contains(name)) {
+        return Err(format!("SQL parameter is not used by the query: {name}"));
+    }
+    Ok(values)
+}
+
 fn epoch_timestamp() -> String {
     let seconds = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -4362,6 +4486,7 @@ fn automation_outcome_json(
         "maximum_regressions": job.maximum_regressions,
         "maximum_skipped_rows": job.maximum_skipped_rows,
         "query": job.query,
+        "parameters": job.parameters,
         "limits": {
             "minimum_connections": {
                 "required": job.minimum_connections,
@@ -4713,7 +4838,9 @@ impl eframe::App for App {
                                 ui.horizontal(|ui|{let mut limit_regressions=self.automation_maximum_regressions.is_some();if ui.checkbox(&mut limit_regressions,"Limit regressions").changed(){self.automation_maximum_regressions=limit_regressions.then_some(0);}if let Some(maximum)=self.automation_maximum_regressions.as_mut(){ui.label("Maximum removals/confidence declines");ui.add(egui::DragValue::new(maximum).range(0..=1_000_000));}if ui.button("Validate query").clicked(){self.validate_sql_query();}if ui.button(if self.editing_automation_job.is_some(){"Save job changes"}else{"Add job"}).clicked(){self.save_automation_job();}if self.editing_automation_job.is_some()&&ui.button("Cancel edit").clicked(){self.cancel_automation_job_edit();}});
                                 ui.label(egui::RichText::new("A regression is a removed connection or confidence decline. Runs over either configured limit are saved as failed, with their snapshots retained.").small().color(muted));
                                 ui.add(egui::TextEdit::multiline(&mut self.sql_query).desired_width(canvas_w-20.0).desired_rows(5).code_editor());
-                                Self::show_sql_validation_preview(ui, self.sql_validation_preview.as_ref(), &self.sql_path, &self.sql_series, &self.sql_query);
+                                ui.label(egui::RichText::new("Named SQL parameters · name=value per line; bind as text with :name, @name, or $name").small().color(muted));
+                                ui.add(egui::TextEdit::multiline(&mut self.sql_parameter_text).desired_width(canvas_w-20.0).desired_rows(2).code_editor());
+                                Self::show_sql_validation_preview(ui, self.sql_validation_preview.as_ref(), &self.sql_path, &self.sql_series, &self.sql_query, &self.sql_parameter_text);
                                 let enabled_job_count = self
                                     .case
                                     .automation_jobs
@@ -4807,6 +4934,7 @@ impl eframe::App for App {
                                         .id_salt(("automation_job_query", job.id))
                                         .show(ui, |ui| {
                                             ui.label(format!("SQLite {} · series {}", job.database_path, job.series));
+                                            ui.label(format!("Parameters: {}", if job.parameters.is_empty() { "(none)".to_owned() } else { format_sql_parameters(&job.parameters) }));
                                             let mut query = job.query.clone();
                                             ui.add(
                                                 egui::TextEdit::multiline(&mut query)
@@ -4821,6 +4949,7 @@ impl eframe::App for App {
                                                 &job.database_path,
                                                 &job.series,
                                                 &job.query,
+                                                &format_sql_parameters(&job.parameters),
                                             );
                                         });
                                 }
@@ -4849,6 +4978,14 @@ impl eframe::App for App {
                                                 ui.label(format!(
                                                     "SQLite {} · series {}",
                                                     run.database_path, run.series
+                                                ));
+                                                ui.label(format!(
+                                                    "SQL parameters: {}",
+                                                    if run.parameters.is_empty() {
+                                                        "(none)".to_owned()
+                                                    } else {
+                                                        format_sql_parameters(&run.parameters)
+                                                    }
                                                 ));
                                             } else {
                                                 ui.label(egui::RichText::new(
@@ -4943,8 +5080,10 @@ impl eframe::App for App {
                                 ui.horizontal(|ui|{ui.label("SQLite file");ui.add(egui::TextEdit::singleline(&mut self.sql_path).hint_text("Relative to case file").desired_width(260.0));ui.label("Series");ui.add(egui::TextEdit::singleline(&mut self.sql_series).desired_width(260.0));});
                                 ui.label(egui::RichText::new("Read-only SQL query · required columns: source, target").small().color(muted));
                                 ui.add(egui::TextEdit::multiline(&mut self.sql_query).desired_width(canvas_w-20.0).desired_rows(4).code_editor());
+                                ui.label(egui::RichText::new("Named SQL parameters · name=value per line; bind as text with :name, @name, or $name").small().color(muted));
+                                ui.add(egui::TextEdit::multiline(&mut self.sql_parameter_text).desired_width(canvas_w-20.0).desired_rows(2).code_editor());
                                 ui.horizontal(|ui|{if ui.button("Validate query").clicked(){self.validate_sql_query();}if ui.button("Ingest SQL snapshot").clicked(){self.ingest_sqlite_snapshot();}});
-                                Self::show_sql_validation_preview(ui, self.sql_validation_preview.as_ref(), &self.sql_path, &self.sql_series, &self.sql_query);
+                                Self::show_sql_validation_preview(ui, self.sql_validation_preview.as_ref(), &self.sql_path, &self.sql_series, &self.sql_query, &self.sql_parameter_text);
                                 if let Some(current)=latest {
                                     let capture_label=if selected_index==latest_index{"Latest snapshot"}else{"Selected historical snapshot"};
                                     let skipped = if current.skipped_rows == 0 {
@@ -4953,6 +5092,27 @@ impl eframe::App for App {
                                         format!(" · {} rows skipped", current.skipped_rows)
                                     };
                                     ui.label(format!("{capture_label} #{}: {} · {} · {} connections{skipped}",selected_index.map(|index|index+1).unwrap_or_default(),current.captured_at,current.series,current.connections.len()));
+                                    egui::CollapsingHeader::new("Captured SQL configuration")
+                                        .id_salt(("snapshot_sql_configuration", current.id))
+                                        .show(ui, |ui| {
+                                            ui.label(egui::RichText::new("QUERY AT CAPTURE").small().strong().color(cyan));
+                                            let mut query = current.query.clone();
+                                            ui.add(
+                                                egui::TextEdit::multiline(&mut query)
+                                                    .desired_width(canvas_w - 30.0)
+                                                    .desired_rows(3)
+                                                    .code_editor()
+                                                    .interactive(false),
+                                            );
+                                            ui.label(format!(
+                                                "Parameters: {}",
+                                                if current.parameters.is_empty() {
+                                                    "(none)".to_owned()
+                                                } else {
+                                                    format_sql_parameters(&current.parameters)
+                                                }
+                                            ));
+                                        });
                                     if let Some(base)=baseline {
                                         let deltas=compare_snapshots(&base,&current);
                                         let count=|kind|deltas.iter().filter(|delta|delta.kinds.contains(&kind)).count();
@@ -7095,6 +7255,7 @@ fn validate_enabled_automation_jobs_cli(
         app.sql_path = job.database_path.clone();
         app.sql_series = job.series.clone();
         app.sql_query = job.query.clone();
+        app.sql_parameter_text = format_sql_parameters(&job.parameters);
         app.automation_minimum_connections = job.minimum_connections;
         app.automation_maximum_regressions = job.maximum_regressions;
         app.automation_maximum_skipped_rows = job.maximum_skipped_rows;
@@ -7147,6 +7308,21 @@ fn list_automation_jobs_cli(
         .iter()
         .filter(|job| !enabled_only || job.enabled)
         .map(|job| {
+            let latest_run = case
+                .automation_runs
+                .iter()
+                .rev()
+                .find(|run| run.job_id == job.id)
+                .map(|run| {
+                    serde_json::json!({
+                        "id": run.id,
+                        "status": if run.success { "PASS" } else { "FAIL" },
+                        "started_at": run.started_at,
+                        "finished_at": run.finished_at,
+                        "message": run.message,
+                        "snapshot_id": run.snapshot_id,
+                    })
+                });
             serde_json::json!({
                 "id": job.id,
                 "name": job.name,
@@ -7154,9 +7330,11 @@ fn list_automation_jobs_cli(
                 "database_path": job.database_path,
                 "series": job.series,
                 "query": job.query,
+                "parameters": job.parameters,
                 "minimum_connections": job.minimum_connections,
                 "maximum_regressions": job.maximum_regressions,
                 "maximum_skipped_rows": job.maximum_skipped_rows,
+                "latest_run": latest_run,
             })
         })
         .collect();
@@ -7239,6 +7417,7 @@ fn list_automation_runs_cli(
                 database_path: run.database_path.clone(),
                 series: run.series.clone(),
                 query: run.query.clone(),
+                parameters: run.parameters.clone(),
                 enabled: run.enabled,
                 minimum_connections: run.minimum_connections,
                 maximum_regressions: run.maximum_regressions,
@@ -7253,6 +7432,7 @@ fn list_automation_runs_cli(
             outcome["configuration_recorded"] = serde_json::json!(run.configuration_recorded);
             if !run.configuration_recorded {
                 outcome["limits"] = serde_json::Value::Null;
+                outcome["parameters"] = serde_json::Value::Null;
                 outcome["minimum_connections"] = serde_json::Value::Null;
                 outcome["maximum_regressions"] = serde_json::Value::Null;
                 outcome["maximum_skipped_rows"] = serde_json::Value::Null;
@@ -7647,6 +7827,7 @@ mod tests {
             database_path: "db".into(),
             configured_database_path: "db".into(),
             query: String::new(),
+            parameters: Vec::new(),
             captured_at: String::new(),
             connections: vec![fact(key)],
             skipped_rows: 0,
