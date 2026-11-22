@@ -13,7 +13,7 @@ use std::{
 };
 use uuid::Uuid;
 
-const CURRENT_CASE_FORMAT_VERSION: u32 = 9;
+const CURRENT_CASE_FORMAT_VERSION: u32 = 10;
 
 #[derive(Clone, Serialize, Deserialize)]
 struct Entity {
@@ -25,6 +25,8 @@ struct Entity {
     attributes: Vec<(String, String)>,
     #[serde(default)]
     aliases: Vec<String>,
+    #[serde(default)]
+    external_ids: Vec<(String, String)>,
     #[serde(default)]
     merged_records: Vec<MergedEntityRecord>,
     x: f32,
@@ -73,6 +75,10 @@ struct ConnectionFact {
     key: String,
     #[serde(default)]
     connection_id: String,
+    #[serde(default)]
+    source_entity_id: String,
+    #[serde(default)]
+    target_entity_id: String,
     source: String,
     source_type: String,
     target: String,
@@ -311,6 +317,8 @@ struct ImportColumnMapping {
     record_type: String,
     source_entity_id: String,
     target_entity_id: String,
+    source_external_ids: String,
+    target_external_ids: String,
     source_detail: String,
     target_detail: String,
     source_aliases: String,
@@ -596,6 +604,7 @@ fn demo_case() -> CaseFile {
         detail: detail.into(),
         attributes: Vec::new(),
         aliases: Vec::new(),
+        external_ids: Vec::new(),
         merged_records: Vec::new(),
         x,
         y,
@@ -1012,6 +1021,8 @@ impl App {
                     record_type: infer(&["record_type"]),
                     source_entity_id: infer(&["source_entity_id"]),
                     target_entity_id: infer(&["target_entity_id"]),
+                    source_external_ids: infer(&["source_external_ids_json"]),
+                    target_external_ids: infer(&["target_external_ids_json"]),
                     source_detail: infer(&["source_detail_json"]),
                     target_detail: infer(&["target_detail_json"]),
                     source_aliases: infer(&["source_aliases_json"]),
@@ -1121,6 +1132,8 @@ impl App {
                     "record_type" => &mapping.record_type,
                     "source_entity_id" => &mapping.source_entity_id,
                     "target_entity_id" => &mapping.target_entity_id,
+                    "source_external_ids" => &mapping.source_external_ids,
+                    "target_external_ids" => &mapping.target_external_ids,
                     "source_detail" => &mapping.source_detail,
                     "target_detail" => &mapping.target_detail,
                     "source_aliases" => &mapping.source_aliases,
@@ -1146,6 +1159,8 @@ impl App {
             let record_type = col("record_type", &["record_type"]);
             let source_entity_id = col("source_entity_id", &["source_entity_id"]);
             let target_entity_id = col("target_entity_id", &["target_entity_id"]);
+            let source_external_ids = col("source_external_ids", &["source_external_ids_json"]);
+            let target_external_ids = col("target_external_ids", &["target_external_ids_json"]);
             let source = col("source", &["source", "from", "entity_a"])
                 .ok_or("CSV needs a source column")?;
             let target = col("target", &["target", "to", "entity_b"]);
@@ -1396,6 +1411,42 @@ impl App {
                 for (entity_id, is_source) in [(a, true), (b, false)] {
                     let entity_position = entity_index.by_id[&entity_id];
                     let entity_name = entities[entity_position].name.clone();
+                    let external_ids_column = if is_source {
+                        source_external_ids
+                    } else {
+                        target_external_ids
+                    };
+                    if let Some(index) = external_ids_column {
+                        let encoded = row.get(index).unwrap_or("");
+                        if !encoded.is_empty() {
+                            let external_ids = serde_json::from_str::<Vec<(String, String)>>(encoded)
+                                .map_err(|error| format!("CSV has invalid {}_external_ids_json for {entity_name}: {error}", if is_source { "source" } else { "target" }))?;
+                            let mut normalized = Vec::new();
+                            for (source, external_id) in external_ids {
+                                let source = source.trim().to_owned();
+                                let external_id = external_id.trim().to_owned();
+                                if source.is_empty() || external_id.is_empty() {
+                                    return Err(format!(
+                                        "CSV has an empty {} external identity for {entity_name}",
+                                        if is_source { "source" } else { "target" }
+                                    ));
+                                }
+                                if !normalized.contains(&(source.clone(), external_id.clone())) {
+                                    normalized.push((source, external_id));
+                                }
+                            }
+                            let canonical = serde_json::to_string(&normalized)
+                                .map_err(|error| error.to_string())?;
+                            record_imported_entity_value(
+                                &mut imported_entity_values,
+                                entity_id,
+                                "external_ids",
+                                &canonical,
+                                &entity_name,
+                            )?;
+                            entities[entity_position].external_ids = normalized;
+                        }
+                    }
                     let color_column = if is_source {
                         source_color
                     } else {
@@ -1733,6 +1784,20 @@ impl App {
                     }
                 }
             }
+            let mut imported_entity_identities = HashMap::<(String, String), Uuid>::new();
+            for entity in &entities {
+                for identity in &entity.external_ids {
+                    if let Some(previous) =
+                        imported_entity_identities.insert(identity.clone(), entity.id)
+                        && previous != entity.id
+                    {
+                        return Err(format!(
+                            "CSV assigns source entity identity {} to multiple chart entities",
+                            identity.1
+                        ));
+                    }
+                }
+            }
             Ok((created, updated, skipped, entities, links))
         })();
         self.status = match result {
@@ -1823,6 +1888,14 @@ impl App {
                 .ok_or("SQL result needs a source column")?;
             let target = col("target", &["target", "to", "entity_b"])?
                 .ok_or("SQL result needs a target column")?;
+            let source_entity_id = col(
+                "source entity ID",
+                &["source_entity_id", "source_external_id", "from_entity_id"],
+            )?;
+            let target_entity_id = col(
+                "target entity ID",
+                &["target_entity_id", "target_external_id", "to_entity_id"],
+            )?;
             let connection_id = col(
                 "connection ID",
                 &["connection_id", "link_id", "record_id", "id"],
@@ -1853,6 +1926,14 @@ impl App {
                     .trim()
                     .to_string();
                 let target_name = sql_value(row, Some(target))
+                    .map_err(|e| e.to_string())?
+                    .trim()
+                    .to_string();
+                let source_entity_id = sql_value(row, source_entity_id)
+                    .map_err(|e| e.to_string())?
+                    .trim()
+                    .to_string();
+                let target_entity_id = sql_value(row, target_entity_id)
                     .map_err(|e| e.to_string())?
                     .trim()
                     .to_string();
@@ -1898,6 +1979,9 @@ impl App {
                         explicit_id.trim()
                     ));
                 }
+                let endpoints_swapped = !is_directed
+                    && (source_name.to_lowercase(), source_kind.to_lowercase())
+                        > (target_name.to_lowercase(), target_kind.to_lowercase());
                 let (source_name, source_kind, target_name, target_kind, natural_key) =
                     canonical_connection(
                         &source_name,
@@ -1907,14 +1991,37 @@ impl App {
                         &relationship,
                         is_directed,
                     )?;
+                let (source_entity_id, target_entity_id) = if endpoints_swapped {
+                    (target_entity_id, source_entity_id)
+                } else {
+                    (source_entity_id, target_entity_id)
+                };
                 let identity = if explicit_id.trim().is_empty() {
-                    format!("natural-v2:{natural_key}")
+                    if source_entity_id.trim().is_empty() && target_entity_id.trim().is_empty() {
+                        format!("natural-v2:{natural_key}")
+                    } else {
+                        format!(
+                            "entity-v1:{}",
+                            entity_identity_connection_key(
+                                &source_name,
+                                &source_kind,
+                                &source_entity_id,
+                                &target_name,
+                                &target_kind,
+                                &target_entity_id,
+                                &relationship,
+                                is_directed,
+                            )
+                        )
+                    }
                 } else {
                     format!("id:{}", explicit_id.trim())
                 };
                 facts.push(ConnectionFact {
                     key: identity,
                     connection_id: explicit_id.trim().to_owned(),
+                    source_entity_id,
+                    target_entity_id,
                     source: source_name,
                     source_type: source_kind,
                     target: target_name,
@@ -1957,10 +2064,20 @@ impl App {
             let mut links = self.case.links.clone();
             links.retain(|link| link.ingest_source.as_deref() != Some(source_key.as_str()));
             for fact in &facts {
-                let from =
-                    entity_index.find_or_add_entity(&fact.source, &fact.source_type, &mut entities);
-                let to =
-                    entity_index.find_or_add_entity(&fact.target, &fact.target_type, &mut entities);
+                let from = entity_index.find_or_add_entity_with_external_id(
+                    &fact.source,
+                    &fact.source_type,
+                    &path,
+                    &fact.source_entity_id,
+                    &mut entities,
+                )?;
+                let to = entity_index.find_or_add_entity_with_external_id(
+                    &fact.target,
+                    &fact.target_type,
+                    &path,
+                    &fact.target_entity_id,
+                    &mut entities,
+                )?;
                 links.push(Link {
                     from,
                     to,
@@ -2806,6 +2923,7 @@ impl App {
                 "connection_id".to_string(),
                 "source".to_string(),
                 "source_entity_id".to_string(),
+                "source_external_ids_json".to_string(),
                 "source_type".to_string(),
                 "source_detail_json".to_string(),
                 "source_aliases_json".to_string(),
@@ -2815,6 +2933,7 @@ impl App {
                 "relationship".to_string(),
                 "target".to_string(),
                 "target_entity_id".to_string(),
+                "target_external_ids_json".to_string(),
                 "target_type".to_string(),
                 "target_detail_json".to_string(),
                 "target_aliases_json".to_string(),
@@ -2845,6 +2964,10 @@ impl App {
                     let conf = link.confidence.to_string();
                     let source_entity_id = a.id.to_string();
                     let target_entity_id = b.id.to_string();
+                    let source_external_ids = serde_json::to_string(&a.external_ids)
+                        .map_err(|error| error.to_string())?;
+                    let target_external_ids = serde_json::to_string(&b.external_ids)
+                        .map_err(|error| error.to_string())?;
                     let source_detail =
                         serde_json::to_string(&a.detail).map_err(|error| error.to_string())?;
                     let source_aliases =
@@ -2866,6 +2989,7 @@ impl App {
                         link.connection_id.as_str(),
                         a.name.as_str(),
                         source_entity_id.as_str(),
+                        source_external_ids.as_str(),
                         a.kind.as_str(),
                         source_detail.as_str(),
                         source_aliases.as_str(),
@@ -2875,6 +2999,7 @@ impl App {
                         link.label.as_str(),
                         b.name.as_str(),
                         target_entity_id.as_str(),
+                        target_external_ids.as_str(),
                         b.kind.as_str(),
                         target_detail.as_str(),
                         target_aliases.as_str(),
@@ -2912,6 +3037,8 @@ impl App {
                 .filter(|entity| !linked_entities.contains(&entity.id))
             {
                 let entity_id = entity.id.to_string();
+                let external_ids = serde_json::to_string(&entity.external_ids)
+                    .map_err(|error| error.to_string())?;
                 let detail =
                     serde_json::to_string(&entity.detail).map_err(|error| error.to_string())?;
                 let aliases =
@@ -2925,6 +3052,7 @@ impl App {
                     String::new(),
                     entity.name.clone(),
                     entity_id,
+                    external_ids,
                     entity.kind.clone(),
                     detail,
                     aliases,
@@ -3033,6 +3161,7 @@ impl App {
                 ("node_type", "node", "entity_type", "string"),
                 ("node_detail", "node", "detail", "string"),
                 ("node_aliases", "node", "aliases_json", "string"),
+                ("node_external_ids", "node", "external_ids_json", "string"),
                 ("node_attributes", "node", "attributes_json", "string"),
                 (
                     "node_merged_records",
@@ -3077,6 +3206,12 @@ impl App {
                     &mut xml,
                     "node_aliases",
                     &serde_json::to_string(&entity.aliases).map_err(|error| error.to_string())?,
+                );
+                graphml_data(
+                    &mut xml,
+                    "node_external_ids",
+                    &serde_json::to_string(&entity.external_ids)
+                        .map_err(|error| error.to_string())?,
                 );
                 graphml_data(
                     &mut xml,
@@ -3193,9 +3328,11 @@ impl App {
                     "connection_key",
                     "source_before",
                     "source_type_before",
+                    "source_entity_id_before",
                     "relationship_before",
                     "target_before",
                     "target_type_before",
+                    "target_entity_id_before",
                     "directed_before",
                     "confidence_before",
                     "date_before",
@@ -3203,9 +3340,11 @@ impl App {
                     "source_notes_before",
                     "source",
                     "source_type",
+                    "source_entity_id",
                     "relationship",
                     "target",
                     "target_type",
+                    "target_entity_id",
                     "directed",
                     "confidence",
                     "date",
@@ -3264,10 +3403,14 @@ impl App {
                         fact.map(|value| value.source.clone()).unwrap_or_default(),
                         fact.map(|value| value.source_type.clone())
                             .unwrap_or_default(),
+                        fact.map(|value| value.source_entity_id.clone())
+                            .unwrap_or_default(),
                         fact.map(|value| value.relationship.clone())
                             .unwrap_or_default(),
                         fact.map(|value| value.target.clone()).unwrap_or_default(),
                         fact.map(|value| value.target_type.clone())
+                            .unwrap_or_default(),
+                        fact.map(|value| value.target_entity_id.clone())
                             .unwrap_or_default(),
                         fact.map(|value| value.directed.to_string())
                             .unwrap_or_default(),
@@ -3638,6 +3781,11 @@ impl App {
             self.case.entities[keep_index].position_locked = true;
         }
         let keep = &mut self.case.entities[keep_index];
+        for external_id in &removed.external_ids {
+            if !keep.external_ids.contains(external_id) {
+                keep.external_ids.push(external_id.clone());
+            }
+        }
         if (keep.kind.trim().is_empty() || keep.kind.eq_ignore_ascii_case("ENTITY"))
             && !removed.kind.trim().is_empty()
             && !removed.kind.eq_ignore_ascii_case("ENTITY")
@@ -3900,6 +4048,7 @@ struct EntityIndex {
     by_name: HashMap<String, Vec<usize>>,
     by_alias: HashMap<String, Vec<usize>>,
     by_id: HashMap<Uuid, usize>,
+    by_external_id: HashMap<(String, String), Vec<usize>>,
 }
 
 impl EntityIndex {
@@ -3913,6 +4062,13 @@ impl EntityIndex {
                 .push(position);
             index.by_id.insert(entity.id, position);
             index.register_aliases(position, entity);
+            for (source, external_id) in &entity.external_ids {
+                index
+                    .by_external_id
+                    .entry((source.clone(), external_id.clone()))
+                    .or_default()
+                    .push(position);
+            }
         }
         index
     }
@@ -3968,6 +4124,7 @@ impl EntityIndex {
             detail: String::new(),
             attributes: Vec::new(),
             aliases: Vec::new(),
+            external_ids: Vec::new(),
             merged_records: Vec::new(),
             x: 0.12 + (position % 4) as f32 * 0.23,
             y: 0.15 + (position / 4) as f32 * 0.2,
@@ -4048,6 +4205,74 @@ impl EntityIndex {
             return entities[position].id;
         }
 
+        self.add_new_entity(name, kind, entities)
+    }
+
+    fn find_or_add_entity_with_external_id(
+        &mut self,
+        name: &str,
+        kind: &str,
+        source: &str,
+        external_id: &str,
+        entities: &mut Vec<Entity>,
+    ) -> Result<Uuid, String> {
+        let external_id = external_id.trim();
+        if external_id.is_empty() {
+            return Ok(self.find_or_add_entity(name, kind, entities));
+        }
+        let key = (source.to_owned(), external_id.to_owned());
+        if let Some(positions) = self.by_external_id.get(&key) {
+            if positions.len() != 1 {
+                return Err(format!(
+                    "SQL entity identity {external_id} is assigned to multiple chart entities"
+                ));
+            }
+            let position = positions[0];
+            if !compatible_entity_types(&entities[position].kind, kind) {
+                return Err(format!(
+                    "SQL entity identity {external_id} conflicts with entity type {}",
+                    entities[position].kind
+                ));
+            }
+            if entities[position].kind.eq_ignore_ascii_case("ENTITY")
+                && !kind.trim().is_empty()
+                && !kind.eq_ignore_ascii_case("ENTITY")
+            {
+                entities[position].kind = kind.to_owned();
+            }
+            return Ok(entities[position].id);
+        }
+
+        let source_identity_already_named = self
+            .by_name
+            .get(&name.to_lowercase())
+            .into_iter()
+            .flatten()
+            .any(|position| {
+                entities[*position].name.eq_ignore_ascii_case(name)
+                    && compatible_entity_types(&entities[*position].kind, kind)
+                    && entities[*position]
+                        .external_ids
+                        .iter()
+                        .any(|(existing_source, _)| existing_source == source)
+            });
+        let entity_id = if source_identity_already_named {
+            self.add_new_entity(name, kind, entities)
+        } else {
+            self.find_or_add_entity(name, kind, entities)
+        };
+        let position = self.by_id[&entity_id];
+        entities[position]
+            .external_ids
+            .push((source.to_owned(), external_id.to_owned()));
+        self.by_external_id.entry(key).or_default().push(position);
+        Ok(entity_id)
+    }
+
+    fn add_new_entity(&mut self, name: &str, kind: &str, entities: &mut Vec<Entity>) -> Uuid {
+        let is_generic =
+            |value: &str| value.trim().is_empty() || value.eq_ignore_ascii_case("ENTITY");
+        let normalized_name = name.to_lowercase();
         let id = Uuid::new_v4();
         let position = entities.len();
         let entity = Entity {
@@ -4057,6 +4282,7 @@ impl EntityIndex {
             detail: String::new(),
             attributes: Vec::new(),
             aliases: Vec::new(),
+            external_ids: Vec::new(),
             merged_records: Vec::new(),
             x: 0.12 + (position % 4) as f32 * 0.23,
             y: 0.15 + (position / 4) as f32 * 0.2,
@@ -4400,6 +4626,8 @@ fn compare_snapshots(
                     || now.source_type != previous.source_type
                     || now.target != previous.target
                     || now.target_type != previous.target_type
+                    || now.source_entity_id != previous.source_entity_id
+                    || now.target_entity_id != previous.target_entity_id
                     || now.relationship != previous.relationship
                     || now.directed != previous.directed
                 {
@@ -4499,9 +4727,57 @@ fn connection_delta_matches_filter(
         })
 }
 
+fn entity_identity_connection_key(
+    source: &str,
+    source_type: &str,
+    source_entity_id: &str,
+    target: &str,
+    target_type: &str,
+    target_entity_id: &str,
+    relationship: &str,
+    directed: bool,
+) -> String {
+    let endpoint = |name: &str, kind: &str, external_id: &str| {
+        if external_id.trim().is_empty() {
+            format!("name:{}:{}", name.to_lowercase(), kind.to_lowercase())
+        } else {
+            format!("id:{}", external_id.trim())
+        }
+    };
+    let mut source_key = endpoint(source, source_type, source_entity_id);
+    let mut target_key = endpoint(target, target_type, target_entity_id);
+    if !directed && source_key > target_key {
+        std::mem::swap(&mut source_key, &mut target_key);
+    }
+    serde_json::to_string(&(
+        source_key,
+        relationship.trim().to_lowercase(),
+        target_key,
+        directed,
+    ))
+    .unwrap_or_default()
+}
+
 fn comparison_key(connection: &ConnectionFact) -> String {
     if !connection.connection_id.trim().is_empty() {
         return format!("id:{}", connection.connection_id.trim());
+    }
+    if !connection.source_entity_id.trim().is_empty()
+        || !connection.target_entity_id.trim().is_empty()
+    {
+        return format!(
+            "entity:{}",
+            entity_identity_connection_key(
+                &connection.source,
+                &connection.source_type,
+                &connection.source_entity_id,
+                &connection.target,
+                &connection.target_type,
+                &connection.target_entity_id,
+                &connection.relationship,
+                connection.directed,
+            )
+        );
     }
     if let Some(key) = connection.key.strip_prefix("natural-v2:") {
         return format!("natural:{key}");
@@ -4631,9 +4907,11 @@ fn snapshot_delta_json(
                     "connection_id": connection.connection_id,
                     "source": connection.source,
                     "source_type": connection.source_type,
+                    "source_entity_id": connection.source_entity_id,
                     "relationship": connection.relationship,
                     "target": connection.target,
                     "target_type": connection.target_type,
+                    "target_entity_id": connection.target_entity_id,
                     "date": connection.date,
                     "confidence": connection.confidence,
                     "directed": connection.directed,
@@ -4888,7 +5166,7 @@ impl eframe::App for App {
                     }
                     ui.separator();
                     if ui.button("＋ Entity").clicked() {
-                        let item=Entity { id:Uuid::new_v4(),name:"New entity".into(),kind:"PERSON".into(),detail:"Add an analyst note".into(),attributes:Vec::new(),aliases:Vec::new(),merged_records:Vec::new(),x:0.5,y:0.5,position_locked:false,color:[55,128,162] };
+                        let item=Entity { id:Uuid::new_v4(),name:"New entity".into(),kind:"PERSON".into(),detail:"Add an analyst note".into(),attributes:Vec::new(),aliases:Vec::new(),external_ids:Vec::new(),merged_records:Vec::new(),x:0.5,y:0.5,position_locked:false,color:[55,128,162] };
                         self.selected=Some(item.id); self.selected_link=None; self.case.entities.push(item);self.duplicate_candidates.clear();
                     }
                     let link_entities: Vec<(Uuid, String)> = self
@@ -5795,7 +6073,7 @@ impl eframe::App for App {
                             }
                         });
                     egui::ScrollArea::vertical().max_height(440.0).show(ui, |ui| {
-                        let fields: [(&str, &mut String); 28] = [
+                        let fields: [(&str, &mut String); 30] = [
                             ("Source entity", &mut self.import_column_mapping.source),
                             ("Source entity ID", &mut self.import_column_mapping.source_entity_id),
                             ("Target entity", &mut self.import_column_mapping.target),
@@ -5816,6 +6094,8 @@ impl eframe::App for App {
                             ("Target detail JSON", &mut self.import_column_mapping.target_detail),
                             ("Source aliases JSON", &mut self.import_column_mapping.source_aliases),
                             ("Target aliases JSON", &mut self.import_column_mapping.target_aliases),
+                            ("Source external IDs JSON", &mut self.import_column_mapping.source_external_ids),
+                            ("Target external IDs JSON", &mut self.import_column_mapping.target_external_ids),
                             ("Source color", &mut self.import_column_mapping.source_color),
                             ("Target color", &mut self.import_column_mapping.target_color),
                             ("Source chart X", &mut self.import_column_mapping.source_x),
@@ -6241,6 +6521,8 @@ fn remap_import_mapping_headers(mapping: &mut ImportColumnMapping, headers: &[St
         &mut mapping.record_type,
         &mut mapping.source_entity_id,
         &mut mapping.target_entity_id,
+        &mut mapping.source_external_ids,
+        &mut mapping.target_external_ids,
         &mut mapping.source_detail,
         &mut mapping.target_detail,
         &mut mapping.source_aliases,
@@ -6712,6 +6994,7 @@ fn graphml_csv_bytes(path: &str) -> Result<Vec<u8>, String> {
         "connection_id",
         "source",
         "source_entity_id",
+        "source_external_ids_json",
         "source_type",
         "source_detail_json",
         "source_aliases_json",
@@ -6722,6 +7005,7 @@ fn graphml_csv_bytes(path: &str) -> Result<Vec<u8>, String> {
         "relationship",
         "target",
         "target_entity_id",
+        "target_external_ids_json",
         "target_type",
         "target_detail_json",
         "target_aliases_json",
@@ -6756,6 +7040,8 @@ fn graphml_csv_bytes(path: &str) -> Result<Vec<u8>, String> {
                 "description",
                 "aliases_json",
                 "aliases",
+                "external_ids_json",
+                "external_ids",
                 "merged_records_json",
                 "attributes_json",
                 "color",
@@ -6803,14 +7089,21 @@ fn graphml_csv_bytes(path: &str) -> Result<Vec<u8>, String> {
                 })
             })
             .unwrap_or_default();
+        let external_ids = graphml_property(node, &["external_ids_json", "external_ids"])
+            .map(serde_json::from_str::<Vec<(String, String)>>)
+            .transpose()
+            .map_err(|error| format!("GraphML node {} has invalid external IDs: {error}", node.id))?
+            .unwrap_or_default();
         let entity_id = node_ids[&node.id].to_string();
         let source_detail = graphml_json_property(&detail)?;
         let source_aliases = graphml_json_property(&aliases)?;
+        let source_external_ids = graphml_json_property(&external_ids)?;
         let mut row = vec![String::new(); headers.len()];
         let fields = [
             ("record_type", "entity"),
             ("source", name),
             ("source_entity_id", entity_id.as_str()),
+            ("source_external_ids_json", source_external_ids.as_str()),
             ("source_type", kind),
             ("source_detail_json", source_detail.as_str()),
             ("source_aliases_json", source_aliases.as_str()),
@@ -7817,47 +8110,286 @@ fn read_sqlite_schema(database_path: &str) -> Result<Vec<serde_json::Value>, Str
     Ok(schema)
 }
 
+fn quote_sql_identifier(identifier: &str) -> String {
+    format!("\"{}\"", identifier.replace('"', "\"\""))
+}
+
+fn schema_column<'a>(object: &'a serde_json::Value, aliases: &[&str]) -> Option<&'a str> {
+    let columns = object["columns"].as_array()?;
+    aliases.iter().find_map(|alias| {
+        columns.iter().find_map(|column| {
+            let name = column["name"].as_str()?;
+            name.trim().eq_ignore_ascii_case(alias).then_some(name)
+        })
+    })
+}
+
+fn sqlite_inferred_endpoint(
+    link_object: &serde_json::Value,
+    schema: &[serde_json::Value],
+    id_column: &str,
+    join_alias: &str,
+) -> Option<(String, String, Option<String>, String)> {
+    let link_name = link_object["name"].as_str()?;
+    let mut candidates = Vec::new();
+    for object in schema {
+        let Some(table_name) = object["name"].as_str() else {
+            continue;
+        };
+        if table_name.eq_ignore_ascii_case(link_name) {
+            continue;
+        }
+        let Some(columns) = object["columns"].as_array() else {
+            continue;
+        };
+        let primary_keys: Vec<&str> = columns
+            .iter()
+            .filter(|column| column["primary_key_order"].as_i64().unwrap_or_default() > 0)
+            .filter_map(|column| column["name"].as_str())
+            .collect();
+        if primary_keys.len() != 1 {
+            continue;
+        }
+        let key_column = primary_keys[0];
+        let Some(name_column) = schema_column(
+            object,
+            &[
+                "name",
+                "entity_name",
+                "person_name",
+                "organization_name",
+                "display_name",
+                "display",
+                "full_name",
+                "label",
+                "title",
+                "value",
+            ],
+        ) else {
+            continue;
+        };
+        let normalized_table_name = table_name.trim().to_ascii_lowercase();
+        let priority = match normalized_table_name.as_str() {
+            "entity" | "entities" | "node" | "nodes" => 2,
+            "person" | "persons" | "people" | "organization" | "organizations" => 1,
+            _ => 0,
+        };
+        candidates.push((priority, table_name, key_column, name_column, object));
+    }
+    let best_priority = candidates.iter().map(|candidate| candidate.0).max()?;
+    let mut best: Vec<_> = candidates
+        .into_iter()
+        .filter(|candidate| candidate.0 == best_priority)
+        .collect();
+    if best.len() != 1 {
+        return None;
+    }
+    let (_, table_name, key_column, name_column, object) = best.pop()?;
+    let link_alias = quote_sql_identifier("link_row");
+    let entity_alias = quote_sql_identifier(join_alias);
+    let join = format!(
+        "LEFT JOIN {} AS {entity_alias} ON {entity_alias}.{} = {link_alias}.{}",
+        quote_sql_identifier(table_name),
+        quote_sql_identifier(key_column),
+        quote_sql_identifier(id_column),
+    );
+    let expression = format!("{entity_alias}.{}", quote_sql_identifier(name_column));
+    let type_expression = schema_column(object, &["entity_type", "type", "kind"])
+        .map(|column| format!("{entity_alias}.{}", quote_sql_identifier(column)));
+    let identity_expression = format!("{link_alias}.{}", quote_sql_identifier(id_column));
+    Some((expression, join, type_expression, identity_expression))
+}
+
+fn sqlite_endpoint_expression(
+    link_object: &serde_json::Value,
+    schema: &[serde_json::Value],
+    direct_aliases: &[&str],
+    id_aliases: &[&str],
+    join_alias: &str,
+) -> Option<(String, Option<String>, Option<String>, Option<String>)> {
+    let link_alias = quote_sql_identifier("link_row");
+    if let Some(column) = schema_column(link_object, direct_aliases) {
+        let identity_expression = schema_column(link_object, id_aliases)
+            .map(|id| format!("{link_alias}.{}", quote_sql_identifier(id)));
+        return Some((
+            format!("{link_alias}.{}", quote_sql_identifier(column)),
+            None,
+            None,
+            identity_expression,
+        ));
+    }
+    let id_column = schema_column(link_object, id_aliases)?;
+    let raw_expression = format!("{link_alias}.{}", quote_sql_identifier(id_column));
+    let raw_endpoint = || {
+        Some((
+            raw_expression.clone(),
+            None,
+            None,
+            Some(raw_expression.clone()),
+        ))
+    };
+    let foreign_keys = link_object["foreign_keys"].as_array();
+    if let Some(foreign_key) = foreign_keys.and_then(|keys| {
+        keys.iter().find(|key| {
+            key["from"]
+                .as_str()
+                .is_some_and(|column| column.eq_ignore_ascii_case(id_column))
+        })
+    }) {
+        let Some(target_table) = foreign_key["table"].as_str() else {
+            return raw_endpoint();
+        };
+        let Some(foreign_key_id) = foreign_key["id"].as_i64() else {
+            return raw_endpoint();
+        };
+        if foreign_keys
+            .map(|keys| {
+                keys.iter()
+                    .filter(|key| key["id"].as_i64() == Some(foreign_key_id))
+                    .count()
+            })
+            .unwrap_or_default()
+            != 1
+        {
+            return raw_endpoint();
+        }
+        let Some(target_object) = schema.iter().find(|object| {
+            object["name"]
+                .as_str()
+                .is_some_and(|name| name.eq_ignore_ascii_case(target_table))
+        }) else {
+            return raw_endpoint();
+        };
+        let target_key = foreign_key["to"]
+            .as_str()
+            .filter(|column| !column.is_empty())
+            .or_else(|| {
+                target_object["columns"]
+                    .as_array()?
+                    .iter()
+                    .find_map(|column| {
+                        (column["primary_key_order"].as_i64().unwrap_or_default() > 0)
+                            .then(|| column["name"].as_str())
+                            .flatten()
+                    })
+            });
+        let Some(target_key) = target_key else {
+            return raw_endpoint();
+        };
+        let Some(name_column) = schema_column(
+            target_object,
+            &[
+                "name",
+                "entity_name",
+                "person_name",
+                "organization_name",
+                "display_name",
+                "display",
+                "full_name",
+                "label",
+                "title",
+                "value",
+            ],
+        ) else {
+            return raw_endpoint();
+        };
+        let entity_alias = quote_sql_identifier(join_alias);
+        let join = format!(
+            "LEFT JOIN {} AS {entity_alias} ON {entity_alias}.{} = {link_alias}.{}",
+            quote_sql_identifier(target_table),
+            quote_sql_identifier(target_key),
+            quote_sql_identifier(id_column),
+        );
+        let expression = format!("{entity_alias}.{}", quote_sql_identifier(name_column));
+        let type_expression = schema_column(target_object, &["entity_type", "type", "kind"])
+            .map(|column| format!("{entity_alias}.{}", quote_sql_identifier(column)));
+        return Some((
+            expression,
+            Some(join),
+            type_expression,
+            Some(raw_expression.clone()),
+        ));
+    }
+    if foreign_keys.is_none_or(|keys| {
+        keys.iter().all(|key| {
+            key["from"]
+                .as_str()
+                .is_none_or(|column| !column.eq_ignore_ascii_case(id_column))
+        })
+    }) && let Some((expression, join, type_expression, identity_expression)) =
+        sqlite_inferred_endpoint(link_object, schema, id_column, join_alias)
+    {
+        return Some((
+            expression,
+            Some(join),
+            type_expression,
+            Some(identity_expression),
+        ));
+    }
+    raw_endpoint()
+}
+
 fn sqlite_query_templates(schema: &[serde_json::Value]) -> Vec<(String, String)> {
-    let fields: [(&str, &[&str]); 11] = [
-        (
-            "source",
-            &[
-                "source",
-                "from",
-                "entity_a",
-                "source_name",
-                "from_name",
-                "entity_a_name",
-                "source_id",
-                "from_id",
-                "entity_a_id",
-                "origin",
-            ],
-        ),
-        (
-            "target",
-            &[
-                "target",
-                "to",
-                "entity_b",
-                "target_name",
-                "to_name",
-                "entity_b_name",
-                "target_id",
-                "to_id",
-                "entity_b_id",
-                "destination",
-            ],
-        ),
+    let source_aliases = [
+        "source",
+        "from",
+        "entity_a",
+        "source_name",
+        "from_name",
+        "entity_a_name",
+        "source_entity_name",
+        "from_entity_name",
+        "source_person_name",
+        "from_person_name",
+        "origin",
+    ];
+    let source_id_aliases = [
+        "source_id",
+        "from_id",
+        "entity_a_id",
+        "source_entity_id",
+        "from_entity_id",
+        "source_person_id",
+        "from_person_id",
+        "source_node_id",
+        "from_node_id",
+    ];
+    let target_aliases = [
+        "target",
+        "to",
+        "entity_b",
+        "target_name",
+        "to_name",
+        "entity_b_name",
+        "target_entity_name",
+        "to_entity_name",
+        "target_person_name",
+        "to_person_name",
+        "destination",
+    ];
+    let target_id_aliases = [
+        "target_id",
+        "to_id",
+        "entity_b_id",
+        "target_entity_id",
+        "to_entity_id",
+        "target_person_id",
+        "to_person_id",
+        "target_node_id",
+        "to_node_id",
+    ];
+    let fields: [(&str, &[&str]); 7] = [
         (
             "connection_id",
-            &["connection_id", "link_id", "record_id", "id"],
+            &[
+                "connection_id",
+                "link_id",
+                "edge_id",
+                "relationship_id",
+                "record_id",
+                "id",
+            ],
         ),
-        (
-            "source_type",
-            &["source_type", "from_type", "entity_a_type"],
-        ),
-        ("target_type", &["target_type", "to_type", "entity_b_type"]),
         ("relationship", &["relationship", "link_type", "relation"]),
         ("date", &["date", "event_date", "datetime", "timestamp"]),
         ("confidence", &["confidence", "strength"]),
@@ -7879,37 +8411,85 @@ fn sqlite_query_templates(schema: &[serde_json::Value]) -> Vec<(String, String)>
         let Some(object_name) = object["name"].as_str() else {
             continue;
         };
-        let Some(columns) = object["columns"].as_array() else {
+        let Some((source_expression, source_join, source_type_expression, source_identity)) =
+            sqlite_endpoint_expression(
+                object,
+                schema,
+                &source_aliases,
+                &source_id_aliases,
+                "source_entity",
+            )
+        else {
             continue;
         };
-        let matching_column = |aliases: &[&str]| {
-            aliases.iter().find_map(|alias| {
-                columns.iter().find_map(|column| {
-                    let name = column["name"].as_str()?;
-                    name.trim().eq_ignore_ascii_case(alias).then_some(name)
-                })
-            })
-        };
-        if matching_column(fields[0].1).is_none() || matching_column(fields[1].1).is_none() {
+        let Some((target_expression, target_join, target_type_expression, target_identity)) =
+            sqlite_endpoint_expression(
+                object,
+                schema,
+                &target_aliases,
+                &target_id_aliases,
+                "target_entity",
+            )
+        else {
             continue;
+        };
+        let mut selected = vec![
+            format!("{source_expression} AS \"source\""),
+            format!("{target_expression} AS \"target\""),
+        ];
+        if let Some(identity) = source_identity {
+            selected.push(format!("{identity} AS \"source_entity_id\""));
         }
-        let mut selected = Vec::new();
+        if let Some(identity) = target_identity {
+            selected.push(format!("{identity} AS \"target_entity_id\""));
+        }
         for (canonical, aliases) in fields {
-            if let Some(column) = matching_column(aliases) {
+            if let Some(column) = schema_column(object, aliases) {
                 selected.push(format!(
-                    "\"{}\" AS \"{canonical}\"",
-                    column.replace('"', "\"\"")
+                    "\"link_row\".{} AS \"{canonical}\"",
+                    quote_sql_identifier(column)
                 ));
             }
         }
-        templates.push((
-            object_name.to_owned(),
-            format!(
-                "SELECT {}\nFROM \"{}\";",
-                selected.join(",\n       "),
-                object_name.replace('"', "\"\"")
+        for (canonical, aliases, joined_expression) in [
+            (
+                "source_type",
+                &["source_type", "from_type", "entity_a_type"][..],
+                source_type_expression,
             ),
-        ));
+            (
+                "target_type",
+                &["target_type", "to_type", "entity_b_type"][..],
+                target_type_expression,
+            ),
+        ] {
+            let expression = schema_column(object, aliases)
+                .map(|column| format!("\"link_row\".{}", quote_sql_identifier(column)))
+                .or(joined_expression);
+            if let Some(expression) = expression {
+                selected.push(format!("{expression} AS \"{canonical}\""));
+            }
+        }
+        let mut joins = Vec::new();
+        if let Some(join) = source_join {
+            joins.push(join);
+        }
+        if let Some(join) = target_join {
+            if !joins.contains(&join) {
+                joins.push(join);
+            }
+        }
+        let mut query = format!(
+            "SELECT {}\nFROM {} AS \"link_row\"",
+            selected.join(",\n       "),
+            quote_sql_identifier(object_name)
+        );
+        for join in joins {
+            query.push('\n');
+            query.push_str(&join);
+        }
+        query.push(';');
+        templates.push((object_name.to_owned(), query));
     }
     templates
 }
@@ -8876,8 +9456,10 @@ mod tests {
             connection_id: String::new(),
             source: "Northstar Imports".into(),
             source_type: "ORGANIZATION".into(),
+            source_entity_id: String::new(),
             target: "Pier 19 Warehouse".into(),
             target_type: "LOCATION".into(),
+            target_entity_id: String::new(),
             relationship: "LEASES".into(),
             date: "2025-01-28".into(),
             confidence: 2,
