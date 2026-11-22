@@ -7099,6 +7099,7 @@ fn parse_graphml(path: &str) -> Result<GraphMlDocument, String> {
     let mut active_data: Option<(GraphMlScope, String, String)> = None;
     let mut root_seen = false;
     let mut graph_count = 0;
+    let mut graph_depth = 0usize;
     let mut buffer = Vec::new();
     loop {
         let event = reader
@@ -7123,10 +7124,11 @@ fn parse_graphml(path: &str) -> Result<GraphMlDocument, String> {
                     }
                 }
                 b"graph" => {
-                    graph_count += 1;
-                    if graph_count > 1 {
-                        return Err("GraphML import supports one top-level graph".into());
+                    graph_depth += 1;
+                    if graph_depth > 1 {
+                        return Err("nested GraphML graphs are not supported".into());
                     }
+                    graph_count += 1;
                     let attributes = graphml_xml_attributes(&start, decoder)?;
                     document.default_directed = match attributes
                         .get("edgedefault")
@@ -7143,6 +7145,9 @@ fn parse_graphml(path: &str) -> Result<GraphMlDocument, String> {
                     };
                 }
                 b"node" => {
+                    if graph_depth != 1 {
+                        return Err("GraphML nodes must be inside a top-level graph".into());
+                    }
                     if node.is_some() || edge.is_some() {
                         return Err("nested GraphML nodes and edges are not supported".into());
                     }
@@ -7153,11 +7158,16 @@ fn parse_graphml(path: &str) -> Result<GraphMlDocument, String> {
                     });
                 }
                 b"edge" => {
+                    if graph_depth != 1 {
+                        return Err("GraphML edges must be inside a top-level graph".into());
+                    }
                     if node.is_some() || edge.is_some() {
                         return Err("nested GraphML nodes and edges are not supported".into());
                     }
                     let attributes = graphml_xml_attributes(&start, decoder)?;
-                    edge = Some(graphml_edge_record(attributes)?);
+                    let mut record = graphml_edge_record(attributes)?;
+                    record.directed.get_or_insert(document.default_directed);
+                    edge = Some(record);
                 }
                 b"data" => {
                     let attributes = graphml_xml_attributes(&start, decoder)?;
@@ -7192,7 +7202,30 @@ fn parse_graphml(path: &str) -> Result<GraphMlDocument, String> {
                         );
                     }
                 }
+                b"graph" => {
+                    if graph_depth != 0 || node.is_some() || edge.is_some() {
+                        return Err("nested GraphML graphs are not supported".into());
+                    }
+                    graph_count += 1;
+                    let attributes = graphml_xml_attributes(&start, decoder)?;
+                    document.default_directed = match attributes
+                        .get("edgedefault")
+                        .map(String::as_str)
+                        .unwrap_or("undirected")
+                    {
+                        "directed" => true,
+                        "undirected" => false,
+                        value => {
+                            return Err(format!(
+                                "GraphML edgedefault must be directed or undirected, got {value}"
+                            ));
+                        }
+                    };
+                }
                 b"node" => {
+                    if graph_depth != 1 {
+                        return Err("GraphML nodes must be inside a top-level graph".into());
+                    }
                     let attributes = graphml_xml_attributes(&start, decoder)?;
                     document.nodes.push(GraphMlRecord {
                         id: attributes.get("id").cloned().unwrap_or_default(),
@@ -7200,8 +7233,13 @@ fn parse_graphml(path: &str) -> Result<GraphMlDocument, String> {
                     });
                 }
                 b"edge" => {
+                    if graph_depth != 1 {
+                        return Err("GraphML edges must be inside a top-level graph".into());
+                    }
                     let attributes = graphml_xml_attributes(&start, decoder)?;
-                    document.edges.push(graphml_edge_record(attributes)?);
+                    let mut record = graphml_edge_record(attributes)?;
+                    record.directed.get_or_insert(document.default_directed);
+                    document.edges.push(record);
                 }
                 b"data" => {
                     let attributes = graphml_xml_attributes(&start, decoder)?;
@@ -7271,6 +7309,11 @@ fn parse_graphml(path: &str) -> Result<GraphMlDocument, String> {
                         .edges
                         .push(edge.take().ok_or("GraphML edge end tag has no start")?);
                 }
+                b"graph" => {
+                    graph_depth = graph_depth
+                        .checked_sub(1)
+                        .ok_or("GraphML graph end tag has no start")?;
+                }
                 _ => {}
             },
             XmlEvent::Eof => break,
@@ -7278,10 +7321,10 @@ fn parse_graphml(path: &str) -> Result<GraphMlDocument, String> {
         }
         buffer.clear();
     }
-    if !root_seen || graph_count != 1 {
-        return Err("file does not contain one GraphML graph".into());
+    if !root_seen || graph_count == 0 {
+        return Err("file does not contain a GraphML graph".into());
     }
-    if node.is_some() || edge.is_some() || active_data.is_some() {
+    if graph_depth != 0 || node.is_some() || edge.is_some() || active_data.is_some() {
         return Err("GraphML document ended inside an element".into());
     }
     Ok(document)
