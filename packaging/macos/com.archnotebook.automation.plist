@@ -9,7 +9,6 @@
 		<string>/Applications/Arch Notebook.app/Contents/MacOS/arch-notebook</string>
 		<string>--run-enabled-jobs</string>
 		<string>/Users/REPLACE_WITH_USER/Library/Application Support/Arch Notebook/harbor-light.case.json</string>
-		<string>--json</string>
 	</array>
 	<key>RunAtLoad</key>
 	<true/>

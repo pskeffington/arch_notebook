@@ -98,7 +98,8 @@ Type=oneshot
 TimeoutStartSec=1h
 ExecStart={command}
 """.format(command=" ".join(map(quote_exec_arg, [
-    binary, "--run-enabled-jobs", case_file, "--json"
+    # Scheduler output goes to the journal; keep it to per-job summaries.
+    binary, "--run-enabled-jobs", case_file
 ])))
 
 timer = """[Unit]

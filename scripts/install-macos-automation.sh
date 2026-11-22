@@ -57,7 +57,8 @@ destination, binary, case_file, log_dir, label, schedule = sys.argv[1:]
 interval_seconds = {"hourly": 3600, "daily": 86400, "weekly": 604800}[schedule]
 payload = {
     "Label": label,
-    "ProgramArguments": [binary, "--run-enabled-jobs", case_file, "--json"],
+    # launchd appends stdout to these files, so avoid full connection deltas.
+    "ProgramArguments": [binary, "--run-enabled-jobs", case_file],
     "RunAtLoad": True,
     "StartInterval": interval_seconds,
     "StandardOutPath": os.path.join(log_dir, "arch-notebook-automation.log"),
