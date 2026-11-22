@@ -58,11 +58,11 @@ cargo run --offline -- --run-enabled-jobs harbor-light.case.json --json
 
 The runner saves the updated snapshots and run history back to the case file after processing. Run history is bounded to the latest 200 records. Each run retains the job configuration and SQL query used, including failures, so later job edits or deletion do not erase the run context; expand a row in the desktop history to inspect it. Older runs that predate this configuration capture are labeled as such rather than showing default values as if they were recorded settings. Successful runs include a comparison with the previous snapshot in the same database and series; the history records removed connections, confidence declines, date changes, additions, confidence increases, and other updates. Each snapshot has a stable ID, and automation run records link directly to it; older cases migrate those links from their saved snapshot indices when loaded. In the desktop app, use **Review snapshot #N** beside a run or select any numbered capture in **Snapshot history** to compare it with the preceding capture in that series; the capture number disambiguates runs recorded within the same clock interval. Batch summaries report passed and failed job counts. The runner continues through the selected jobs if one fails, saves each outcome, and exits nonzero when any job fails.
 
-On Linux with systemd, copy the example user units and edit the case path in the service if needed:
+On Arch Linux with systemd, copy the example user units installed with the package and edit the case path in the service if needed. From a source checkout, use the corresponding files under `packaging/systemd/` instead:
 
 ```sh
 mkdir -p ~/.config/systemd/user
-cp packaging/systemd/arch-notebook-automation.{service,timer} ~/.config/systemd/user/
+cp /usr/share/arch-notebook/systemd/arch-notebook-automation.{service,timer} ~/.config/systemd/user/
 systemctl --user daemon-reload
 systemctl --user enable --now arch-notebook-automation.timer
 ```
