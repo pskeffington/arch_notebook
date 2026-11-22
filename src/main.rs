@@ -7651,6 +7651,86 @@ fn export_graphml_cli(case_path: &str, output_path: &str, json_output: bool) -> 
     Ok(())
 }
 
+fn inspect_sqlite_schema_cli(database_path: &str, json_output: bool) -> Result<(), String> {
+    let connection = Connection::open_with_flags(database_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map_err(|error| format!("cannot open SQLite database read-only: {error}"))?;
+    connection
+        .busy_timeout(Duration::from_secs(5))
+        .map_err(|error| error.to_string())?;
+    let objects = {
+        let mut statement = connection
+            .prepare(
+                "SELECT type, name FROM sqlite_schema \
+                 WHERE type IN ('table', 'view') AND substr(name, 1, 7) <> 'sqlite_' \
+                 ORDER BY type, name",
+            )
+            .map_err(|error| error.to_string())?;
+        statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(|error| error.to_string())?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|error| error.to_string())?
+    };
+    let mut schema = Vec::with_capacity(objects.len());
+    for (object_type, name) in objects {
+        let pragma = format!("PRAGMA table_info(\"{}\")", name.replace('"', "\"\""));
+        let mut statement = connection
+            .prepare(&pragma)
+            .map_err(|error| error.to_string())?;
+        let columns = statement
+            .query_map([], |row| {
+                Ok(serde_json::json!({
+                    "name": row.get::<_, String>(1)?,
+                    "type": row.get::<_, String>(2)?,
+                    "not_null": row.get::<_, bool>(3)?,
+                    "primary_key_order": row.get::<_, i64>(5)?,
+                }))
+            })
+            .map_err(|error| error.to_string())?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|error| error.to_string())?;
+        schema.push(serde_json::json!({
+            "type": object_type,
+            "name": name,
+            "columns": columns,
+        }));
+    }
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "schema_version": 1,
+                "database": database_path,
+                "objects": schema,
+            }))
+            .map_err(|error| error.to_string())?
+        );
+    } else {
+        for object in schema {
+            let object_type = object["type"].as_str().unwrap_or("object");
+            let name = object["name"].as_str().unwrap_or("");
+            println!("{object_type} {name}");
+            for column in object["columns"].as_array().into_iter().flatten() {
+                println!(
+                    "  {} · {}{}",
+                    column["name"].as_str().unwrap_or(""),
+                    column["type"].as_str().unwrap_or(""),
+                    if column["primary_key_order"].as_i64().unwrap_or_default() > 0 {
+                        " · primary key"
+                    } else if column["not_null"].as_bool().unwrap_or(false) {
+                        " · not null"
+                    } else {
+                        ""
+                    }
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
 fn export_sql_comparison_cli(
     case_path: &str,
     baseline_id: Uuid,
@@ -8171,8 +8251,27 @@ fn main() -> eframe::Result<()> {
         .is_some_and(|arg| arg == "--help" || arg == "-h")
     {
         println!(
-            "Arch Notebook\n\nUsage:\n  arch-notebook\n  arch-notebook --export-graphml <case.json> <output.graphml> [--json]\n  arch-notebook --export-sql-comparison <case.json> <baseline-snapshot-id> <current-snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --list-jobs <case.json> [--enabled-only] [--json]\n  arch-notebook --list-runs <case.json> [--json] [--job <name-or-id>] [--offset <count>] [--limit <count>]\n  arch-notebook --validate-enabled-jobs <case.json> [--json] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --validate-run <case.json> <run-id> [--json]\n  arch-notebook --run-enabled-jobs <case.json> [--json] [--skip-recent-success] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --run-job <case.json> <job-name-or-id> [--param name=value ...] [--json]\n  arch-notebook --rerun-run <case.json> <run-id> [--json]\n\nJob and run listing and validation do not change the case. Run history is newest first and can be filtered or paged. SQL comparisons can be exported from saved snapshots for downstream tools. Batch runs save snapshots and run history to the case file. JSON output is available for scheduler integration."
+            "Arch Notebook\n\nUsage:\n  arch-notebook\n  arch-notebook --inspect-sqlite <database.sqlite> [--json]\n  arch-notebook --export-graphml <case.json> <output.graphml> [--json]\n  arch-notebook --export-sql-comparison <case.json> <baseline-snapshot-id> <current-snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --list-jobs <case.json> [--enabled-only] [--json]\n  arch-notebook --list-runs <case.json> [--json] [--job <name-or-id>] [--offset <count>] [--limit <count>]\n  arch-notebook --validate-enabled-jobs <case.json> [--json] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --validate-run <case.json> <run-id> [--json]\n  arch-notebook --run-enabled-jobs <case.json> [--json] [--skip-recent-success] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --run-job <case.json> <job-name-or-id> [--param name=value ...] [--json]\n  arch-notebook --rerun-run <case.json> <run-id> [--json]\n\nJob and run listing and validation do not change the case. Run history is newest first and can be filtered or paged. SQL comparisons can be exported from saved snapshots for downstream tools. Batch runs save snapshots and run history to the case file. JSON output is available for scheduler integration."
         );
+        return Ok(());
+    }
+    if args.first().is_some_and(|arg| arg == "--inspect-sqlite") {
+        let json_output = args.iter().any(|arg| arg == "--json");
+        let Some(database_path) = args.get(1) else {
+            report_cli_usage_error(
+                "usage: arch-notebook --inspect-sqlite <database.sqlite> [--json]",
+                json_output,
+            );
+        };
+        if args.len() > 3 || args.get(2).is_some_and(|arg| arg != "--json") {
+            report_cli_usage_error(
+                "usage: arch-notebook --inspect-sqlite <database.sqlite> [--json]",
+                json_output,
+            );
+        }
+        if let Err(error) = inspect_sqlite_schema_cli(database_path, json_output) {
+            report_cli_error("SQLite schema inspection failed", error, json_output);
+        }
         return Ok(());
     }
     if args.first().is_some_and(|arg| arg == "--export-graphml") {
