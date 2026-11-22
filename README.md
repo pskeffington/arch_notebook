@@ -82,7 +82,13 @@ The profile is created with `xcrun notarytool store-credentials`; the signing id
 
 ### Continuous builds
 
-GitHub Actions checks formatting and builds release artifacts for Linux x86_64, macOS Apple Silicon, macOS Intel, and an Arch Linux package. Pull requests and pushes build without publishing a release; the generated workflow artifacts are available for 14 days. macOS artifacts are unsigned unless the packaging script is run locally with signing credentials.
+GitHub Actions checks formatting and builds release artifacts for Linux x86_64, macOS Apple Silicon, macOS Intel, and an Arch Linux package. Pull requests and pushes build without publishing a release; the generated workflow artifacts are available for 14 days. Publishing a GitHub Release triggers the workflow to attach the Linux archive, Arch package, macOS zips, and a `SHA256SUMS` file. macOS zip names state whether they are `unsigned`, `developer-id-signed`, or `notarized`; CI artifacts are unsigned because signing credentials are not stored in the repository.
+
+To attach a locally signed and notarized macOS archive to a published release, build it with the credentials described above and upload it with:
+
+```sh
+gh release upload v0.1.0 "dist/Arch-Notebook-macos-$(uname -m)-notarized.zip" --clobber
+```
 
 The CI runner labels follow [GitHub's current hosted runner reference](https://docs.github.com/en/actions/reference/runners/github-hosted-runners). Arch package metadata follows the [Arch package guidelines](https://wiki.archlinux.org/title/Arch_package_guidelines).
 

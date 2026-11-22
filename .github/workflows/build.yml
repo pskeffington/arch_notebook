@@ -6,6 +6,8 @@ on:
     tags: ['v*']
   pull_request:
   workflow_dispatch:
+  release:
+    types: [published]
 
 permissions:
   contents: read
@@ -87,3 +89,26 @@ jobs:
           path: packaging/arch/*.pkg.tar.zst
           if-no-files-found: error
           retention-days: 14
+
+  attach-release-assets:
+    name: Attach deployment artifacts to published release
+    if: github.event_name == 'release'
+    needs: [desktop, arch-package]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: arch-notebook-*
+          path: release-assets
+          merge-multiple: true
+      - name: Generate checksums and upload release files
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cd release-assets
+          sha256sum * > SHA256SUMS
+          gh release upload "$GITHUB_REF_NAME" * --clobber

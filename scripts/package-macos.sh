@@ -13,7 +13,14 @@ esac
 version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -n 1)"
 app_name="Arch Notebook"
 app_bundle="$repo_root/dist/$app_name.app"
-archive="$repo_root/dist/Arch-Notebook-macos-$(uname -m).zip"
+distribution_status="unsigned"
+if [[ -n "${APPLE_SIGNING_IDENTITY:-}" ]]; then
+  distribution_status="developer-id-signed"
+fi
+if [[ -n "${APPLE_NOTARY_PROFILE:-}" ]]; then
+  distribution_status="notarized"
+fi
+archive="$repo_root/dist/Arch-Notebook-macos-$(uname -m)-$distribution_status.zip"
 
 cargo build --release --locked --target "$rust_target"
 rm -rf "$app_bundle"
