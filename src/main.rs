@@ -4618,6 +4618,43 @@ fn resolve_sqlite_database_path(database_path: &str, case_path: &str) -> Result<
     })
 }
 
+fn sqlite_database_identity_path(database_path: &str, case_path: &str) -> PathBuf {
+    if let Ok(path) = resolve_sqlite_database_path(database_path, case_path) {
+        return path;
+    }
+
+    let database_path = Path::new(database_path);
+    let resolved = if database_path.is_absolute() {
+        database_path.to_path_buf()
+    } else {
+        let case_parent = Path::new(case_path)
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        case_parent.join(database_path)
+    };
+
+    let mut ancestor = resolved.as_path();
+    let mut missing = Vec::new();
+    loop {
+        if let Ok(canonical_ancestor) = fs::canonicalize(ancestor) {
+            let mut identity = canonical_ancestor;
+            for component in missing.iter().rev() {
+                identity.push(component);
+            }
+            return identity;
+        }
+        let Some(name) = ancestor.file_name() else {
+            return resolved;
+        };
+        missing.push(name.to_os_string());
+        let Some(parent) = ancestor.parent() else {
+            return resolved;
+        };
+        ancestor = parent;
+    }
+}
+
 fn same_sql_series(
     first_database: &str,
     first_series: &str,
@@ -4628,21 +4665,8 @@ fn same_sql_series(
     if first_series.trim() != second_series.trim() {
         return false;
     }
-    let configured_path = |database: &str| {
-        resolve_sqlite_database_path(database, case_path).unwrap_or_else(|_| {
-            let path = Path::new(database);
-            if path.is_absolute() {
-                path.to_path_buf()
-            } else {
-                Path::new(case_path)
-                    .parent()
-                    .filter(|parent| !parent.as_os_str().is_empty())
-                    .unwrap_or_else(|| Path::new("."))
-                    .join(path)
-            }
-        })
-    };
-    configured_path(first_database) == configured_path(second_database)
+    sqlite_database_identity_path(first_database, case_path)
+        == sqlite_database_identity_path(second_database, case_path)
 }
 
 fn sql_source_key(database_path: &str, series: &str) -> String {
