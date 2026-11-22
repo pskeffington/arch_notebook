@@ -7781,12 +7781,11 @@ fn sqlite_query_template(schema: &[serde_json::Value]) -> Option<(String, String
         let object_name = object["name"].as_str()?;
         let columns = object["columns"].as_array()?;
         let matching_column = |aliases: &[&str]| {
-            columns.iter().find_map(|column| {
-                let name = column["name"].as_str()?;
-                aliases
-                    .iter()
-                    .any(|alias| name.trim().eq_ignore_ascii_case(alias))
-                    .then_some(name)
+            aliases.iter().find_map(|alias| {
+                columns.iter().find_map(|column| {
+                    let name = column["name"].as_str()?;
+                    name.trim().eq_ignore_ascii_case(alias).then_some(name)
+                })
             })
         };
         if matching_column(fields[0].1).is_none() || matching_column(fields[1].1).is_none() {
@@ -7815,6 +7814,7 @@ fn sqlite_query_template(schema: &[serde_json::Value]) -> Option<(String, String
 
 fn inspect_sqlite_schema_cli(database_path: &str, json_output: bool) -> Result<(), String> {
     let schema = read_sqlite_schema(database_path)?;
+    let query_template = sqlite_query_template(&schema);
     if json_output {
         println!(
             "{}",
@@ -7824,6 +7824,9 @@ fn inspect_sqlite_schema_cli(database_path: &str, json_output: bool) -> Result<(
                 "database": database_path,
                 "object_count": schema.len(),
                 "objects": schema,
+                "query_template": query_template.as_ref().map(|(table, sql)| {
+                    serde_json::json!({ "table": table, "sql": sql })
+                }),
             }))
             .map_err(|error| error.to_string())?
         );
@@ -7831,7 +7834,7 @@ fn inspect_sqlite_schema_cli(database_path: &str, json_output: bool) -> Result<(
         if schema.is_empty() {
             println!("No user tables or views found.");
         } else {
-            for object in schema {
+            for object in &schema {
                 let object_type = object["type"].as_str().unwrap_or("object");
                 let name = object["name"].as_str().unwrap_or("");
                 println!("{object_type} {name}");
@@ -7850,6 +7853,13 @@ fn inspect_sqlite_schema_cli(database_path: &str, json_output: bool) -> Result<(
                     );
                 }
             }
+        }
+        match query_template {
+            Some((table, sql)) => println!("Suggested query from {table}:\n{sql}"),
+            None if !schema.is_empty() => {
+                println!("No table or view has recognizable source and target columns.");
+            }
+            None => {}
         }
     }
     Ok(())
