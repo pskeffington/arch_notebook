@@ -8795,24 +8795,42 @@ fn read_sqlite_schema(database_path: &str) -> Result<Vec<serde_json::Value>, Str
     };
     let mut schema = Vec::with_capacity(objects.len());
     for (object_type, name) in objects {
-        let pragma = format!("PRAGMA table_info(\"{}\")", name.replace('"', "\"\""));
-        let mut statement = connection
-            .prepare(&pragma)
-            .map_err(|error| error.to_string())?;
-        let columns = statement
-            .query_map([], |row| {
-                Ok(serde_json::json!({
-                    "name": row.get::<_, String>(1)?,
-                    "type": row.get::<_, String>(2)?,
-                    "not_null": row.get::<_, bool>(3)?,
-                    "primary_key_order": row.get::<_, i64>(5)?,
-                }))
-            })
-            .map_err(|error| error.to_string())?
-            .collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(|error| error.to_string())?;
+        let columns = if object_type == "view" {
+            let query = format!("SELECT * FROM {} LIMIT 0", quote_sql_identifier(&name));
+            let statement = connection
+                .prepare(&query)
+                .map_err(|error| format!("cannot inspect SQLite view {name}: {error}"))?;
+            statement
+                .column_names()
+                .map(|column| {
+                    serde_json::json!({
+                        "name": column,
+                        "type": "",
+                        "not_null": false,
+                        "primary_key_order": 0,
+                    })
+                })
+                .collect::<Vec<_>>()
+        } else {
+            let pragma = format!("PRAGMA table_info({})", quote_sql_identifier(&name));
+            let mut statement = connection
+                .prepare(&pragma)
+                .map_err(|error| error.to_string())?;
+            statement
+                .query_map([], |row| {
+                    Ok(serde_json::json!({
+                        "name": row.get::<_, String>(1)?,
+                        "type": row.get::<_, String>(2)?,
+                        "not_null": row.get::<_, bool>(3)?,
+                        "primary_key_order": row.get::<_, i64>(5)?,
+                    }))
+                })
+                .map_err(|error| error.to_string())?
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(|error| error.to_string())?
+        };
         let foreign_key_pragma =
-            format!("PRAGMA foreign_key_list(\"{}\")", name.replace('"', "\"\""));
+            format!("PRAGMA foreign_key_list({})", quote_sql_identifier(&name));
         let mut statement = connection
             .prepare(&foreign_key_pragma)
             .map_err(|error| error.to_string())?;
