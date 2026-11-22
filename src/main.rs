@@ -4264,6 +4264,15 @@ impl EntityIndex {
             {
                 entities[position].kind = kind.to_owned();
             }
+            if !entities[position].name.eq_ignore_ascii_case(name)
+                && !entities[position]
+                    .aliases
+                    .iter()
+                    .any(|alias| alias.eq_ignore_ascii_case(name))
+            {
+                entities[position].aliases.push(name.to_owned());
+                self.register_aliases(position, &entities[position]);
+            }
             return Ok(entities[position].id);
         }
 
