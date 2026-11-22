@@ -7419,8 +7419,8 @@ fn rerun_saved_automation_configuration_cli(
     let new_run_id = new_run.id;
     let duration_ms = new_run.duration_ms;
     let snapshot_id = new_run.snapshot_id;
-    let snapshot = snapshot_id
-        .and_then(|id| app.case.snapshots.iter().find(|snapshot| snapshot.id == id));
+    let snapshot =
+        snapshot_id.and_then(|id| app.case.snapshots.iter().find(|snapshot| snapshot.id == id));
     let snapshot_index = snapshot_id.and_then(|id| {
         app.case
             .snapshots
@@ -8056,7 +8056,7 @@ fn main() -> eframe::Result<()> {
         .is_some_and(|arg| arg == "--help" || arg == "-h")
     {
         println!(
-            "Arch Notebook\n\nUsage:\n  arch-notebook\n  arch-notebook --export-graphml <case.json> <output.graphml> [--json]\n  arch-notebook --export-sql-comparison <case.json> <baseline-snapshot-id> <current-snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --list-jobs <case.json> [--enabled-only] [--json]\n  arch-notebook --list-runs <case.json> [--json] [--job <name-or-id>] [--offset <count>] [--limit <count>]\n  arch-notebook --validate-enabled-jobs <case.json> [--json] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --run-enabled-jobs <case.json> [--json] [--skip-recent-success] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --run-job <case.json> <job-name-or-id> [--param name=value ...] [--json]\n\nJob and run listing and validation do not change the case. Run history is newest first and can be filtered or paged. SQL comparisons can be exported from saved snapshots for downstream tools. Batch runs save snapshots and run history to the case file. JSON output is available for scheduler integration."
+            "Arch Notebook\n\nUsage:\n  arch-notebook\n  arch-notebook --export-graphml <case.json> <output.graphml> [--json]\n  arch-notebook --export-sql-comparison <case.json> <baseline-snapshot-id> <current-snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --list-jobs <case.json> [--enabled-only] [--json]\n  arch-notebook --list-runs <case.json> [--json] [--job <name-or-id>] [--offset <count>] [--limit <count>]\n  arch-notebook --validate-enabled-jobs <case.json> [--json] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --run-enabled-jobs <case.json> [--json] [--skip-recent-success] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --run-job <case.json> <job-name-or-id> [--param name=value ...] [--json]\n  arch-notebook --rerun-run <case.json> <run-id> [--json]\n\nJob and run listing and validation do not change the case. Run history is newest first and can be filtered or paged. SQL comparisons can be exported from saved snapshots for downstream tools. Batch runs save snapshots and run history to the case file. JSON output is available for scheduler integration."
         );
         return Ok(());
     }
@@ -8303,6 +8303,27 @@ fn main() -> eframe::Result<()> {
             Err(error) => report_cli_error("automation failed", error, json_output),
             Ok(false) => {
                 eprintln!("automation failed; run history saved");
+                std::process::exit(1);
+            }
+            Ok(true) => {}
+        }
+        return Ok(());
+    }
+    if args.first().is_some_and(|arg| arg == "--rerun-run") {
+        let json_output = args.iter().any(|arg| arg == "--json");
+        let usage = "usage: arch-notebook --rerun-run <case.json> <run-id> [--json]";
+        let (Some(case_path), Some(run_id)) = (args.get(1), args.get(2)) else {
+            report_cli_usage_error(usage, json_output);
+        };
+        if args.len() > 4 || args.get(3).is_some_and(|arg| arg != "--json") {
+            report_cli_usage_error(usage, json_output);
+        }
+        let run_id = Uuid::parse_str(run_id)
+            .unwrap_or_else(|_| report_cli_usage_error("invalid run UUID", json_output));
+        match rerun_saved_automation_configuration_cli(case_path, run_id, json_output) {
+            Err(error) => report_cli_error("automation rerun failed", error, json_output),
+            Ok(false) => {
+                eprintln!("automation rerun failed; run history saved");
                 std::process::exit(1);
             }
             Ok(true) => {}
