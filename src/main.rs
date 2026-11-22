@@ -6945,6 +6945,7 @@ fn run_automation_cli(
     case_path: &str,
     job_name: Option<&str>,
     selected_jobs: Option<&[String]>,
+    skip_recent_success: bool,
     json_output: bool,
 ) -> Result<bool, String> {
     let _case_lock = lock_automation_case(Path::new(case_path))?;
@@ -6985,8 +6986,42 @@ fn run_automation_cli(
     let mut app = App::automation_context(case, case_path);
     normalize_snapshot_database_paths(&mut app.case, &app.case_path);
     let mut failures = 0;
+    let mut skipped = Vec::new();
     let mut outcomes = Vec::new();
     for job in jobs {
+        let latest_matching_run = skip_recent_success
+            .then(|| {
+                app.case.automation_runs.iter().rev().find(|run| {
+                    run.job_id == job.id
+                        && run.configuration_recorded
+                        && run.database_path == job.database_path
+                        && run.series == job.series
+                        && run.query == job.query
+                        && run.parameters == job.parameters
+                        && run.minimum_connections == job.minimum_connections
+                        && run.maximum_regressions == job.maximum_regressions
+                        && run.maximum_skipped_rows == job.maximum_skipped_rows
+                })
+            })
+            .flatten();
+        if let Some(run) = latest_matching_run.filter(|run| run.success) {
+            skipped.push(serde_json::json!({
+                "job_id": job.id,
+                "job": job.name,
+                "status": "SKIPPED",
+                "reason": "latest run for this configuration succeeded",
+                "run_id": run.id,
+                "finished_at": run.finished_at,
+                "snapshot_id": run.snapshot_id,
+            }));
+            if !json_output {
+                println!(
+                    "SKIP · {} · latest run for this configuration succeeded",
+                    job.name
+                );
+            }
+            continue;
+        }
         let (success, message) = app.run_automation_job_cli(&job);
         if !success {
             failures += 1;
@@ -7018,8 +7053,14 @@ fn run_automation_cli(
             );
         }
     }
+    if outcomes.is_empty() && !skipped.is_empty() {
+        if json_output {
+            println!("{}", serde_json::to_string_pretty(&serde_json::json!({"schema_version":1,"ok":true,"saved":false,"case":case_path,"passed":0,"failed":0,"skipped":skipped.len(),"outcomes":outcomes,"skipped_jobs":skipped})).map_err(|error|error.to_string())?);
+        }
+        return Ok(true);
+    }
     if json_output {
-        println!("{}", serde_json::to_string_pretty(&serde_json::json!({"schema_version":1,"ok":failures==0,"saved":true,"case":case_path,"passed":outcomes.iter().filter(|outcome|outcome["status"]=="PASS").count(),"failed":failures,"outcomes":outcomes})).map_err(|error|error.to_string())?);
+        println!("{}", serde_json::to_string_pretty(&serde_json::json!({"schema_version":1,"ok":failures==0,"saved":!outcomes.is_empty(),"case":case_path,"passed":outcomes.iter().filter(|outcome|outcome["status"]=="PASS").count(),"failed":failures,"skipped":skipped.len(),"outcomes":outcomes,"skipped_jobs":skipped})).map_err(|error|error.to_string())?);
     }
     Ok(failures == 0)
 }
@@ -7537,7 +7578,7 @@ fn main() -> eframe::Result<()> {
         .is_some_and(|arg| arg == "--help" || arg == "-h")
     {
         println!(
-            "Arch Notebook\n\nUsage:\n  arch-notebook\n  arch-notebook --export-graphml <case.json> <output.graphml> [--json]\n  arch-notebook --export-sql-comparison <case.json> <baseline-snapshot-id> <current-snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --list-jobs <case.json> [--enabled-only] [--json]\n  arch-notebook --list-runs <case.json> [--json] [--job <name-or-id>] [--offset <count>] [--limit <count>]\n  arch-notebook --validate-enabled-jobs <case.json> [--json] [--job <name-or-id> ...]\n  arch-notebook --run-enabled-jobs <case.json> [--json] [--job <name-or-id> ...]\n  arch-notebook --run-job <case.json> <job-name-or-id> [--json]\n\nJob and run listing and validation do not change the case. Run history is newest first and can be filtered or paged. SQL comparisons can be exported from saved snapshots for downstream tools. Batch runs save snapshots and run history to the case file. JSON output is available for scheduler integration."
+            "Arch Notebook\n\nUsage:\n  arch-notebook\n  arch-notebook --export-graphml <case.json> <output.graphml> [--json]\n  arch-notebook --export-sql-comparison <case.json> <baseline-snapshot-id> <current-snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --list-jobs <case.json> [--enabled-only] [--json]\n  arch-notebook --list-runs <case.json> [--json] [--job <name-or-id>] [--offset <count>] [--limit <count>]\n  arch-notebook --validate-enabled-jobs <case.json> [--json] [--job <name-or-id> ...]\n  arch-notebook --run-enabled-jobs <case.json> [--json] [--skip-recent-success] [--job <name-or-id> ...]\n  arch-notebook --run-job <case.json> <job-name-or-id> [--json]\n\nJob and run listing and validation do not change the case. Run history is newest first and can be filtered or paged. SQL comparisons can be exported from saved snapshots for downstream tools. Batch runs save snapshots and run history to the case file. JSON output is available for scheduler integration."
         );
         return Ok(());
     }
@@ -7709,13 +7750,48 @@ fn main() -> eframe::Result<()> {
         return Ok(());
     }
     if args.first().is_some_and(|arg| arg == "--run-enabled-jobs") {
-        let usage =
-            "usage: arch-notebook --run-enabled-jobs <case.json> [--json] [--job <name-or-id> ...]";
+        let usage = "usage: arch-notebook --run-enabled-jobs <case.json> [--json] [--skip-recent-success] [--job <name-or-id> ...]";
         let Some(case_path) = args.get(1) else {
             report_cli_usage_error(usage, args.iter().any(|arg| arg == "--json"));
         };
-        let (json_output, selected_jobs) = parse_batch_selection_args(&args, usage);
-        match run_automation_cli(case_path, None, selected_jobs.as_deref(), json_output) {
+        let json_output = args.iter().any(|arg| arg == "--json");
+        let mut skip_recent_success = false;
+        let mut selectors = Vec::new();
+        let mut seen_json = false;
+        let mut seen_skip = false;
+        let mut index = 2;
+        while index < args.len() {
+            match args[index].as_str() {
+                "--json" if !seen_json => seen_json = true,
+                "--skip-recent-success" if !seen_skip => {
+                    skip_recent_success = true;
+                    seen_skip = true;
+                }
+                "--job" => {
+                    index += 1;
+                    let Some(value) = args
+                        .get(index)
+                        .filter(|value| !value.trim().is_empty() && !value.starts_with("--"))
+                    else {
+                        report_cli_usage_error(
+                            "--job requires an enabled job name or UUID",
+                            json_output,
+                        );
+                    };
+                    selectors.push(value.clone());
+                }
+                _ => report_cli_usage_error(usage, json_output),
+            }
+            index += 1;
+        }
+        let selected_jobs = (!selectors.is_empty()).then_some(selectors);
+        match run_automation_cli(
+            case_path,
+            None,
+            selected_jobs.as_deref(),
+            skip_recent_success,
+            json_output,
+        ) {
             Err(error) => report_cli_error("automation failed", error, json_output),
             Ok(false) => {
                 eprintln!("automation failed; run history saved");
@@ -7739,7 +7815,7 @@ fn main() -> eframe::Result<()> {
                 json_output,
             );
         }
-        match run_automation_cli(case_path, Some(job_name), None, json_output) {
+        match run_automation_cli(case_path, Some(job_name), None, false, json_output) {
             Err(error) => report_cli_error("automation failed", error, json_output),
             Ok(false) => {
                 eprintln!("automation failed; run history saved");
