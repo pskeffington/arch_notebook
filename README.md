@@ -21,7 +21,7 @@ cargo run --offline -- --export-sql-comparison harbor-light.case.json <baseline-
 
 The JSON response reports the output format, snapshot IDs, and number of changed records. Get snapshot UUIDs from `--list-runs --json` or the case’s saved snapshot records.
 
-CSV/TSV and comparison reports are written to a temporary sibling file and atomically replace the destination only after the full export succeeds. **Import GraphML** stages nodes and relationships through the validated import path; it supports a single graph and imports recognized IDs, aliases, entity attributes, direction, evidence, notes, and chart styling. **Export GraphML** works with graph tools such as Gephi and Cytoscape and includes endpoint IDs, direction, labels, evidence, notes, confidence, source provenance, entity attributes, and chart styling. GraphML is an interchange format; CSV/TSV carries the full Arch Notebook case fields for round-trips. For scripts, run `arch-notebook --export-graphml case.json chart.graphml --json` without opening the desktop app; the JSON result reports the output path and exported entity and relationship counts.
+CSV/TSV and comparison reports are written to a temporary sibling file and atomically replace the destination only after the full export succeeds. **Import GraphML** stages nodes and relationships through the validated import path; it supports a single graph and imports recognized IDs, aliases, entity attributes, direction, evidence, notes, and chart styling. **Export GraphML** works with graph tools such as Gephi and Cytoscape and includes endpoint IDs, direction, labels, evidence, notes, confidence, source provenance, entity attributes, and chart styling. GraphML is an interchange format; CSV/TSV carries the full Arch Notebook case fields for round-trips. For scripts, run `arch-notebook --export-graphml case.json chart.graphml --json` without opening the desktop app; the schema-versioned JSON result reports the output path and exported entity and relationship counts.
 
 Connections with a unique, stable `connection_id` are matched across snapshots by that ID. A query result with duplicate IDs is rejected so ambiguous rows cannot distort regression comparisons. Without an ID, the app uses a natural key from source, target, relationship, types, and direction; duplicate natural keys in one result are rejected, so include a unique ID when the source contains parallel connections with otherwise identical fields. During CSV or SQL ingestion, entities are reconciled by name, a unique compatible alias, and supplied type. This keeps a merged entity connected to its imported records on refresh; ambiguous aliases remain separate for analyst review. Same-name entities of different types remain distinct while generic entities can gain a type from later imports.
 
@@ -46,6 +46,13 @@ Desktop batch runs save an atomic checkpoint after each job, then save the final
 
 ```sh
 cargo run --offline -- --run-enabled-jobs harbor-light.case.json
+```
+
+Supply repeated `--job <name-or-id>` selectors to validate or run a subset of enabled jobs. Name matching ignores case; UUIDs remain stable across renames, and selected jobs execute in case-file order. A selected disabled or unknown job is an error. Use `--run-job` to run one named job even when it is disabled:
+
+```sh
+cargo run --offline -- --validate-enabled-jobs harbor-light.case.json --job "Harbor Light baseline" --json
+cargo run --offline -- --run-enabled-jobs harbor-light.case.json --job "Harbor Light baseline" --json
 ```
 
 Run one named job, including a disabled job, with:

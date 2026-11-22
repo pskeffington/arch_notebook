@@ -6621,6 +6621,7 @@ fn normalize_snapshot_database_paths(case: &mut CaseFile, case_path: &str) {
 fn run_automation_cli(
     case_path: &str,
     job_name: Option<&str>,
+    selected_jobs: Option<&[String]>,
     json_output: bool,
 ) -> Result<bool, String> {
     let _case_lock = lock_automation_case(Path::new(case_path))?;
@@ -6644,6 +6645,8 @@ fn run_automation_cli(
                 .next()
                 .ok_or_else(|| format!("automation job not found: {name}"))?,
         ]
+    } else if let Some(selected_jobs) = selected_jobs {
+        select_enabled_automation_jobs(&case, selected_jobs)?
     } else {
         case.automation_jobs
             .iter()
@@ -6696,6 +6699,44 @@ fn run_automation_cli(
     Ok(failures == 0)
 }
 
+fn select_enabled_automation_jobs(
+    case: &CaseFile,
+    selectors: &[String],
+) -> Result<Vec<AutomationJob>, String> {
+    let mut selected_ids = HashSet::new();
+    for selector in selectors {
+        let matches: Vec<&AutomationJob> = case
+            .automation_jobs
+            .iter()
+            .filter(|job| {
+                job.name.eq_ignore_ascii_case(selector)
+                    || job.id.to_string().eq_ignore_ascii_case(selector)
+            })
+            .collect();
+        if matches.len() > 1 {
+            return Err(format!("job selector is ambiguous: {selector}"));
+        }
+        let Some(job) = matches.first() else {
+            return Err(format!("automation job not found: {selector}"));
+        };
+        if !job.enabled {
+            return Err(format!("automation job is disabled: {}", job.name));
+        }
+        if !selected_ids.insert(job.id) {
+            return Err(format!(
+                "automation job selected more than once: {}",
+                job.name
+            ));
+        }
+    }
+    Ok(case
+        .automation_jobs
+        .iter()
+        .filter(|job| job.enabled && selected_ids.contains(&job.id))
+        .cloned()
+        .collect())
+}
+
 fn export_graphml_cli(case_path: &str, output_path: &str, json_output: bool) -> Result<(), String> {
     let content =
         fs::read_to_string(case_path).map_err(|error| format!("cannot read case: {error}"))?;
@@ -6713,6 +6754,7 @@ fn export_graphml_cli(case_path: &str, output_path: &str, json_output: bool) -> 
         println!(
             "{}",
             serde_json::to_string_pretty(&serde_json::json!({
+                "schema_version": 1,
                 "ok": true,
                 "case": case_path,
                 "output": output_path,
@@ -6819,18 +6861,22 @@ fn lock_automation_case(path: &Path) -> Result<fs::File, String> {
 
 fn validate_enabled_automation_jobs_cli(
     case_path: &str,
+    selected_jobs: Option<&[String]>,
     json_output: bool,
 ) -> Result<bool, String> {
     let content =
         fs::read_to_string(case_path).map_err(|error| format!("cannot read case: {error}"))?;
     let case = serde_json::from_str::<CaseFile>(&content)
         .map_err(|error| format!("cannot parse case: {error}"))?;
-    let jobs: Vec<AutomationJob> = case
-        .automation_jobs
-        .iter()
-        .filter(|job| job.enabled)
-        .cloned()
-        .collect();
+    let jobs = if let Some(selected_jobs) = selected_jobs {
+        select_enabled_automation_jobs(&case, selected_jobs)?
+    } else {
+        case.automation_jobs
+            .iter()
+            .filter(|job| job.enabled)
+            .cloned()
+            .collect()
+    };
     if jobs.is_empty() {
         return Err("case contains no enabled automation jobs".into());
     }
@@ -7074,6 +7120,34 @@ fn report_cli_usage_error(usage: &str, json_output: bool) -> ! {
     std::process::exit(2);
 }
 
+fn parse_batch_selection_args(args: &[String], usage: &str) -> (bool, Option<Vec<String>>) {
+    let json_output = args.iter().any(|arg| arg == "--json");
+    let mut selectors = Vec::new();
+    let mut seen_json = false;
+    let mut index = 2;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--json" if !seen_json => seen_json = true,
+            "--job" => {
+                index += 1;
+                let Some(value) = args
+                    .get(index)
+                    .filter(|value| !value.trim().is_empty() && !value.starts_with("--"))
+                else {
+                    report_cli_usage_error(
+                        "--job requires an enabled job name or UUID",
+                        json_output,
+                    );
+                };
+                selectors.push(value.clone());
+            }
+            _ => report_cli_usage_error(usage, json_output),
+        }
+        index += 1;
+    }
+    (json_output, (!selectors.is_empty()).then_some(selectors))
+}
+
 fn main() -> eframe::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args
@@ -7081,7 +7155,7 @@ fn main() -> eframe::Result<()> {
         .is_some_and(|arg| arg == "--help" || arg == "-h")
     {
         println!(
-            "Arch Notebook\n\nUsage:\n  arch-notebook\n  arch-notebook --export-graphml <case.json> <output.graphml> [--json]\n  arch-notebook --export-sql-comparison <case.json> <baseline-snapshot-id> <current-snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --list-jobs <case.json> [--json]\n  arch-notebook --list-runs <case.json> [--json] [--job <name-or-id>] [--offset <count>] [--limit <count>]\n  arch-notebook --validate-enabled-jobs <case.json> [--json]\n  arch-notebook --run-enabled-jobs <case.json> [--json]\n  arch-notebook --run-job <case.json> <job-name> [--json]\n\nJob and run listing and validation do not change the case. Run history is newest first and can be filtered or paged. SQL comparisons can be exported from saved snapshots for downstream tools. Batch runs save snapshots and run history to the case file. JSON output is available for scheduler integration."
+            "Arch Notebook\n\nUsage:\n  arch-notebook\n  arch-notebook --export-graphml <case.json> <output.graphml> [--json]\n  arch-notebook --export-sql-comparison <case.json> <baseline-snapshot-id> <current-snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --list-jobs <case.json> [--json]\n  arch-notebook --list-runs <case.json> [--json] [--job <name-or-id>] [--offset <count>] [--limit <count>]\n  arch-notebook --validate-enabled-jobs <case.json> [--json] [--job <name-or-id> ...]\n  arch-notebook --run-enabled-jobs <case.json> [--json] [--job <name-or-id> ...]\n  arch-notebook --run-job <case.json> <job-name> [--json]\n\nJob and run listing and validation do not change the case. Run history is newest first and can be filtered or paged. SQL comparisons can be exported from saved snapshots for downstream tools. Batch runs save snapshots and run history to the case file. JSON output is available for scheduler integration."
         );
         return Ok(());
     }
@@ -7231,20 +7305,13 @@ fn main() -> eframe::Result<()> {
         .first()
         .is_some_and(|arg| arg == "--validate-enabled-jobs")
     {
-        let json_output = args.iter().any(|arg| arg == "--json");
+        let usage = "usage: arch-notebook --validate-enabled-jobs <case.json> [--json] [--job <name-or-id> ...]";
         let Some(case_path) = args.get(1) else {
-            report_cli_usage_error(
-                "usage: arch-notebook --validate-enabled-jobs <case.json> [--json]",
-                json_output,
-            );
+            report_cli_usage_error(usage, args.iter().any(|arg| arg == "--json"));
         };
-        if args.len() > 3 || args.get(2).is_some_and(|arg| arg != "--json") {
-            report_cli_usage_error(
-                "usage: arch-notebook --validate-enabled-jobs <case.json> [--json]",
-                json_output,
-            );
-        }
-        match validate_enabled_automation_jobs_cli(case_path, json_output) {
+        let (json_output, selected_jobs) = parse_batch_selection_args(&args, usage);
+        match validate_enabled_automation_jobs_cli(case_path, selected_jobs.as_deref(), json_output)
+        {
             Err(error) => report_cli_error("automation validation failed", error, json_output),
             Ok(false) => {
                 eprintln!("automation validation failed; case file was not changed");
@@ -7255,20 +7322,13 @@ fn main() -> eframe::Result<()> {
         return Ok(());
     }
     if args.first().is_some_and(|arg| arg == "--run-enabled-jobs") {
-        let json_output = args.iter().any(|arg| arg == "--json");
+        let usage =
+            "usage: arch-notebook --run-enabled-jobs <case.json> [--json] [--job <name-or-id> ...]";
         let Some(case_path) = args.get(1) else {
-            report_cli_usage_error(
-                "usage: arch-notebook --run-enabled-jobs <case.json> [--json]",
-                json_output,
-            );
+            report_cli_usage_error(usage, args.iter().any(|arg| arg == "--json"));
         };
-        if args.len() > 3 || args.get(2).is_some_and(|arg| arg != "--json") {
-            report_cli_usage_error(
-                "usage: arch-notebook --run-enabled-jobs <case.json> [--json]",
-                json_output,
-            );
-        }
-        match run_automation_cli(case_path, None, json_output) {
+        let (json_output, selected_jobs) = parse_batch_selection_args(&args, usage);
+        match run_automation_cli(case_path, None, selected_jobs.as_deref(), json_output) {
             Err(error) => report_cli_error("automation failed", error, json_output),
             Ok(false) => {
                 eprintln!("automation failed; run history saved");
@@ -7292,7 +7352,7 @@ fn main() -> eframe::Result<()> {
                 json_output,
             );
         }
-        match run_automation_cli(case_path, Some(job_name), json_output) {
+        match run_automation_cli(case_path, Some(job_name), None, json_output) {
             Err(error) => report_cli_error("automation failed", error, json_output),
             Ok(false) => {
                 eprintln!("automation failed; run history saved");
