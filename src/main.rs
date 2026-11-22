@@ -2022,7 +2022,7 @@ impl App {
         self.status = format!("AUTOMATION JOB ADDED · {name}");
     }
 
-    fn validate_sql_query(&mut self) {
+    fn validate_sql_query(&mut self) -> bool {
         if self.data_mode == DataMode::Automation
             && let Some(existing) = self.case.automation_jobs.iter().find(|job| {
                 Some(job.id) != self.editing_automation_job
@@ -2039,16 +2039,16 @@ impl App {
                 "SQL QUERY INVALID · database and series already belong to {}",
                 existing.name
             );
-            return;
+            return false;
         }
-        self.validate_sql_query_with_snapshot_context(false);
+        self.validate_sql_query_with_snapshot_context(false)
     }
 
-    fn validate_sql_query_for_batch(&mut self) {
-        self.validate_sql_query_with_snapshot_context(true);
+    fn validate_sql_query_for_batch(&mut self) -> bool {
+        self.validate_sql_query_with_snapshot_context(true)
     }
 
-    fn validate_sql_query_with_snapshot_context(&mut self, keep_candidate_snapshot: bool) {
+    fn validate_sql_query_with_snapshot_context(&mut self, keep_candidate_snapshot: bool) -> bool {
         let case_before = self.case.clone();
         let selected_link_before = self.selected_link;
         let snapshot_source_before = self.sql_snapshot_source.clone();
@@ -2103,8 +2103,21 @@ impl App {
                 }
                 None => String::new(),
             };
+            let limits_pass = automation_limits_pass(
+                count,
+                regression_count,
+                skipped_rows,
+                self.automation_minimum_connections,
+                self.automation_maximum_regressions,
+                self.automation_maximum_skipped_rows,
+            );
+            let validation_result = if limits_pass {
+                "SQL QUERY VALID"
+            } else {
+                "SQL QUERY LIMITS FAILED"
+            };
             format!(
-                "SQL QUERY VALID · {count} CONNECTIONS{skipped}{skipped_row_threshold}{threshold}{regression_threshold} · CASE UNCHANGED"
+                "{validation_result} · {count} CONNECTIONS{skipped}{skipped_row_threshold}{threshold}{regression_threshold} · CASE UNCHANGED"
             )
         } else {
             self.status
@@ -2122,6 +2135,7 @@ impl App {
         self.sql_snapshot_index = snapshot_index_before;
         self.path_result = path_result_before;
         self.status = validation_message;
+        self.status.starts_with("SQL QUERY VALID · ")
     }
 
     fn edit_automation_job(&mut self, id: Uuid) {
@@ -2277,13 +2291,14 @@ impl App {
                 self.status,
                 automation_regression_summary(&self.case, &source_key)
             );
-            success = count >= job.minimum_connections
-                && job
-                    .maximum_regressions
-                    .is_none_or(|maximum| regression_count <= maximum);
-            success &= job
-                .maximum_skipped_rows
-                .is_none_or(|maximum| skipped_rows <= maximum);
+            success = automation_limits_pass(
+                count,
+                regression_count,
+                skipped_rows,
+                job.minimum_connections,
+                job.maximum_regressions,
+                job.maximum_skipped_rows,
+            );
         }
         let message = self.status.clone();
         self.record_automation_run(job, started_at, success, message.clone(), snapshot_index);
@@ -4053,6 +4068,19 @@ fn automation_regression_count(case: &CaseFile, source_key: &str) -> usize {
                 .any(|kind| matches!(kind, DeltaKind::Removed | DeltaKind::ConfidenceDeclined))
         })
         .count()
+}
+
+fn automation_limits_pass(
+    connections: usize,
+    regressions: usize,
+    skipped_rows: usize,
+    minimum_connections: usize,
+    maximum_regressions: Option<usize>,
+    maximum_skipped_rows: Option<usize>,
+) -> bool {
+    connections >= minimum_connections
+        && maximum_regressions.is_none_or(|maximum| regressions <= maximum)
+        && maximum_skipped_rows.is_none_or(|maximum| skipped_rows <= maximum)
 }
 
 fn automation_regression_summary(case: &CaseFile, source_key: &str) -> String {
@@ -6549,13 +6577,9 @@ fn validate_enabled_automation_jobs_cli(
         app.automation_maximum_regressions = job.maximum_regressions;
         app.automation_maximum_skipped_rows = job.maximum_skipped_rows;
         let snapshot_count_before = app.case.snapshots.len();
-        app.validate_sql_query_for_batch();
+        let success = app.validate_sql_query_for_batch();
         let message = app.status.clone();
         let snapshot = app.case.snapshots.get(snapshot_count_before);
-        let success = message.starts_with("SQL QUERY VALID")
-            && message.contains("MINIMUM MET")
-            && !message.contains("REGRESSION LIMIT EXCEEDED")
-            && !message.contains("SKIPPED ROW LIMIT EXCEEDED");
         if !success {
             failures += 1;
         }
