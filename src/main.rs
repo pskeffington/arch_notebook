@@ -4178,6 +4178,7 @@ fn snapshot_delta_json(
                 .collect();
             let fact = |connection: &ConnectionFact| {
                 serde_json::json!({
+                    "key": connection.key,
                     "connection_id": connection.connection_id,
                     "source": connection.source,
                     "source_type": connection.source_type,
