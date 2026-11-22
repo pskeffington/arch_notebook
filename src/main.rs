@@ -216,6 +216,7 @@ struct App {
     chart_fit_path: Option<Vec<Uuid>>,
     chart_focus_group: Option<HashSet<Uuid>>,
     network_groups: Option<std::sync::Arc<Vec<Vec<Uuid>>>>,
+    chart_navigator_dragging: bool,
     new_link_from: Option<Uuid>,
     new_link_to: Option<Uuid>,
     import_path: String,
@@ -504,6 +505,7 @@ impl Default for App {
             chart_fit_path: None,
             chart_focus_group: None,
             network_groups: None,
+            chart_navigator_dragging: false,
             new_link_from: None,
             new_link_to: None,
             import_path: data_dir.join("sample_relationships.csv").to_string_lossy().into_owned(),
@@ -770,6 +772,7 @@ impl App {
             chart_fit_path: None,
             chart_focus_group: None,
             network_groups: None,
+            chart_navigator_dragging: false,
             new_link_from: None,
             new_link_to: None,
             import_path: String::new(),
@@ -6114,7 +6117,9 @@ impl eframe::App for App {
                         p.rect_filled(rect,4.0,egui::Color32::from_rgb(14,23,32));
                         for i in 0..20 { let x=rect.left()+i as f32*48.0; p.line_segment([egui::pos2(x,rect.top()),egui::pos2(x,rect.bottom())],(1.0,egui::Color32::from_rgb(24,38,49))); }
                         for i in 0..14 { let y=rect.top()+i as f32*48.0; p.line_segment([egui::pos2(rect.left(),y),egui::pos2(rect.right(),y)],(1.0,egui::Color32::from_rgb(24,38,49))); }
-                        let center=|e:&Entity|{let base=egui::pos2(rect.left()+e.x*rect.width(),rect.top()+e.y*rect.height());rect.center()+(base-rect.center())*self.chart_zoom+self.chart_pan};
+                        let chart_zoom = self.chart_zoom;
+                        let chart_pan = self.chart_pan;
+                        let center=|e:&Entity|{let base=egui::pos2(rect.left()+e.x*rect.width(),rect.top()+e.y*rect.height());rect.center()+(base-rect.center())*chart_zoom+chart_pan};
                         let link_lanes = link_lane_offsets(&self.case.links);
                         let entity_indices: HashMap<Uuid, usize> = self
                             .case
@@ -6181,15 +6186,181 @@ impl eframe::App for App {
                             p.text(c+egui::vec2(-44.0,-8.0)*self.chart_zoom,egui::Align2::LEFT_CENTER,&e.name,egui::FontId::proportional(12.0*self.chart_zoom),if dimmed{egui::Color32::from_rgb(81,95,103)}else{egui::Color32::WHITE});
                             p.text(c+egui::vec2(-44.0,11.0)*self.chart_zoom,egui::Align2::LEFT_CENTER,&e.kind,egui::FontId::proportional(8.0*self.chart_zoom),if dimmed{egui::Color32::from_rgb(68,82,90)}else{muted});
                         }
-                        if response.clicked() { if let Some(pos)=response.interact_pointer_pos(){
-                            if self.show_timeline && pos.y >= rect.bottom()-105.0 {
-                                let timeline_rect=egui::Rect::from_min_size(rect.left_bottom()-egui::vec2(0.0,105.0),egui::vec2(rect.width(),105.0));
-                                let nearest=timeline_event_positions(&self.case.links,timeline_rect).into_iter().map(|(index,point)|(index,point.distance(pos))).min_by(|a,b|a.1.total_cmp(&b.1)).filter(|(_,distance)|*distance<20.0).map(|(index,_)|index);
-                                self.selected=None;self.selected_link=nearest;
-                            } else {let lanes=link_lane_offsets(&self.case.links);let nearest=self.case.links.iter().enumerate().filter_map(|(i,l)|{let a=self.case.entities.get(*entity_indices.get(&l.from)?)?;let b=self.case.entities.get(*entity_indices.get(&l.to)?)?;let points=connection_curve_points(center(a),center(b),lanes[i]*self.chart_zoom);Some((i,polyline_distance(pos,&points)))}).filter(|(_,d)|*d<10.0*self.chart_zoom).min_by(|a,b|a.1.total_cmp(&b.1)).filter(|(_,distance)|*distance<22.0*self.chart_zoom).map(|(i,_)|i);let entity=self.case.entities.iter().find(|e|center(e).distance(pos)<75.0*self.chart_zoom).map(|entity|entity.id);if let Some(index)=nearest{self.selected=None;self.selected_link=Some(index);}else if let Some(entity)=entity{self.selected=Some(entity);self.selected_link=None;}else{self.selected=None;self.selected_link=None;}}
-                        } }
-                        if response.drag_started() { if let Some(pos)=response.interact_pointer_pos(){if let Some(entity)=self.case.entities.iter().find(|e|center(e).distance(pos)<75.0*self.chart_zoom){self.selected=Some(entity.id);self.selected_link=None;}else{self.selected=None;self.chart_pan_origin=self.chart_pan;}} }
-                        if response.dragged() { if let Some(pos)=response.interact_pointer_pos(){if let Some(id)=self.selected{if let Some(e)=self.case.entities.iter_mut().find(|e|e.id==id){let local=(pos-rect.center()-self.chart_pan)/self.chart_zoom+rect.size()*0.5;e.x=(local.x/rect.width()).clamp(0.05,0.95);e.y=(local.y/rect.height()).clamp(0.08,0.92);}}else{self.chart_pan=self.chart_pan_origin+response.drag_delta();}} }
+                        let navigator_rect = egui::Rect::from_min_size(
+                            rect.right_top() + egui::vec2(-166.0, 12.0),
+                            egui::vec2(154.0, 116.0),
+                        );
+                        let navigator_map = egui::Rect::from_min_max(
+                            navigator_rect.min + egui::vec2(8.0, 26.0),
+                            navigator_rect.max - egui::vec2(8.0, 8.0),
+                        );
+                        p.rect_filled(
+                            navigator_rect,
+                            6.0,
+                            egui::Color32::from_rgba_unmultiplied(15, 25, 34, 238),
+                        );
+                        p.rect_stroke(
+                            navigator_rect,
+                            6.0,
+                            egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(57, 83, 98)),
+                            egui::StrokeKind::Inside,
+                        );
+                        p.text(
+                            navigator_rect.left_top() + egui::vec2(9.0, 8.0),
+                            egui::Align2::LEFT_TOP,
+                            "NAVIGATOR · CLICK TO JUMP",
+                            egui::FontId::proportional(8.0),
+                            muted,
+                        );
+                        let map_point = |entity: &Entity| {
+                            egui::pos2(
+                                navigator_map.left() + entity.x * navigator_map.width(),
+                                navigator_map.top() + entity.y * navigator_map.height(),
+                            )
+                        };
+                        for link in &self.case.links {
+                            if let (Some(from), Some(to)) = (
+                                entity_indices
+                                    .get(&link.from)
+                                    .and_then(|index| self.case.entities.get(*index)),
+                                entity_indices
+                                    .get(&link.to)
+                                    .and_then(|index| self.case.entities.get(*index)),
+                            ) {
+                                p.line_segment(
+                                    [map_point(from), map_point(to)],
+                                    (0.7, egui::Color32::from_rgba_unmultiplied(87, 112, 129, 120)),
+                                );
+                            }
+                        }
+                        for entity in &self.case.entities {
+                            let in_group = self
+                                .chart_focus_group
+                                .as_ref()
+                                .is_some_and(|group| group.contains(&entity.id));
+                            p.circle_filled(
+                                map_point(entity),
+                                if self.selected == Some(entity.id) { 3.2 } else { 2.2 },
+                                if in_group {
+                                    egui::Color32::from_rgb(184, 151, 232)
+                                } else if self.selected == Some(entity.id) {
+                                    cyan
+                                } else {
+                                    egui::Color32::from_rgb(
+                                        entity.color[0],
+                                        entity.color[1],
+                                        entity.color[2],
+                                    )
+                                },
+                            );
+                        }
+                        let visible_min = rect.center()
+                            + (rect.min - rect.center() - self.chart_pan) / self.chart_zoom;
+                        let visible_max = rect.center()
+                            + (rect.max - rect.center() - self.chart_pan) / self.chart_zoom;
+                        let viewport_point = |point: egui::Pos2| {
+                            egui::pos2(
+                                navigator_map.left()
+                                    + ((point.x - rect.left()) / rect.width()) * navigator_map.width(),
+                                navigator_map.top()
+                                    + ((point.y - rect.top()) / rect.height()) * navigator_map.height(),
+                            )
+                        };
+                        let viewport = egui::Rect::from_two_pos(
+                            viewport_point(visible_min),
+                            viewport_point(visible_max),
+                        )
+                        .intersect(navigator_map);
+                        p.rect_stroke(
+                            viewport,
+                            1.0,
+                            egui::Stroke::new(1.2_f32, cyan),
+                            egui::StrokeKind::Inside,
+                        );
+                        if response.clicked()
+                            && let Some(pos) = response.interact_pointer_pos()
+                        {
+                            if navigator_rect.contains(pos) {
+                                if navigator_map.contains(pos) {
+                                    let x = ((pos.x - navigator_map.left())
+                                        / navigator_map.width())
+                                    .clamp(0.0, 1.0);
+                                    let y = ((pos.y - navigator_map.top())
+                                        / navigator_map.height())
+                                    .clamp(0.0, 1.0);
+                                    let target = egui::pos2(
+                                        rect.left() + x * rect.width(),
+                                        rect.top() + y * rect.height(),
+                                    );
+                                    self.chart_pan = -(target - rect.center()) * self.chart_zoom;
+                                    self.chart_focus = None;
+                                    self.chart_focus_link = None;
+                                }
+                            } else if self.show_timeline && pos.y >= rect.bottom() - 105.0 {
+                                let timeline_rect = egui::Rect::from_min_size(
+                                    rect.left_bottom() - egui::vec2(0.0, 105.0),
+                                    egui::vec2(rect.width(), 105.0),
+                                );
+                                self.selected_link = timeline_event_positions(
+                                    &self.case.links,
+                                    timeline_rect,
+                                )
+                                .into_iter()
+                                .map(|(index, point)| (index, point.distance(pos)))
+                                .min_by(|a, b| a.1.total_cmp(&b.1))
+                                .filter(|(_, distance)| *distance < 20.0)
+                                .map(|(index, _)| index);
+                                self.selected = None;
+                            } else {
+                                let lanes = link_lane_offsets(&self.case.links);
+                                let nearest_link = self
+                                    .case
+                                    .links
+                                    .iter()
+                                    .enumerate()
+                                    .filter_map(|(index, link)| {
+                                        let from = self
+                                            .case
+                                            .entities
+                                            .get(*entity_indices.get(&link.from)?)?;
+                                        let to = self
+                                            .case
+                                            .entities
+                                            .get(*entity_indices.get(&link.to)?)?;
+                                        let points = connection_curve_points(
+                                            center(from),
+                                            center(to),
+                                            lanes[index] * self.chart_zoom,
+                                        );
+                                        Some((index, polyline_distance(pos, &points)))
+                                    })
+                                    .filter(|(_, distance)| *distance < 10.0 * self.chart_zoom)
+                                    .min_by(|a, b| a.1.total_cmp(&b.1))
+                                    .filter(|(_, distance)| *distance < 22.0 * self.chart_zoom)
+                                    .map(|(index, _)| index);
+                                let entity = self
+                                    .case
+                                    .entities
+                                    .iter()
+                                    .find(|entity| center(entity).distance(pos) < 75.0 * self.chart_zoom)
+                                    .map(|entity| entity.id);
+                                if let Some(index) = nearest_link {
+                                    self.selected = None;
+                                    self.selected_link = Some(index);
+                                } else if let Some(entity) = entity {
+                                    self.selected = Some(entity);
+                                    self.selected_link = None;
+                                } else {
+                                    self.selected = None;
+                                    self.selected_link = None;
+                                }
+                            }
+                        }
+                        if response.drag_started() { if let Some(pos)=response.interact_pointer_pos(){self.chart_navigator_dragging=navigator_rect.contains(pos);if !self.chart_navigator_dragging{if let Some(entity)=self.case.entities.iter().find(|e|center(e).distance(pos)<75.0*self.chart_zoom){self.selected=Some(entity.id);self.selected_link=None;}else{self.selected=None;self.chart_pan_origin=self.chart_pan;}}} }
+                        if response.dragged() && !self.chart_navigator_dragging { if let Some(pos)=response.interact_pointer_pos(){if let Some(id)=self.selected{if let Some(e)=self.case.entities.iter_mut().find(|e|e.id==id){let local=(pos-rect.center()-self.chart_pan)/self.chart_zoom+rect.size()*0.5;e.x=(local.x/rect.width()).clamp(0.05,0.95);e.y=(local.y/rect.height()).clamp(0.08,0.92);}}else{self.chart_pan=self.chart_pan_origin+response.drag_delta();}} }
+                        if self.chart_navigator_dragging && !ctx.input(|input| input.pointer.any_down()) {
+                            self.chart_navigator_dragging = false;
+                        }
                         if self.show_timeline {
                             let tr=egui::Rect::from_min_size(rect.left_bottom()-egui::vec2(0.0,105.0),egui::vec2(rect.width(),105.0));
                             p.rect_filled(tr,4.0,egui::Color32::from_rgb(20,32,43));p.text(tr.left_top()+egui::vec2(14.0,14.0),egui::Align2::LEFT_TOP,"EVENT TIMELINE",egui::FontId::proportional(10.0),cyan);
