@@ -155,6 +155,8 @@ struct AutomationRun {
     snapshot_index: Option<usize>,
     #[serde(default)]
     snapshot_id: Option<Uuid>,
+    #[serde(default)]
+    rerun_of: Option<Uuid>,
 }
 
 struct SqlValidationPreview {
@@ -2444,6 +2446,9 @@ impl App {
             }
         };
         let (passed, _) = self.execute_automation_job(&job);
+        if let Some(run) = self.case.automation_runs.last_mut() {
+            run.rerun_of = Some(run_id);
+        }
         self.save_automation_results(&format!(
             "AUTOMATION REPLAY {} · {}",
             if passed { "PASSED" } else { "FAILED" },
@@ -2588,6 +2593,7 @@ impl App {
             message,
             snapshot_index,
             snapshot_id,
+            rerun_of: None,
         });
         if self.case.automation_runs.len() > 200 {
             self.case
@@ -5113,6 +5119,9 @@ impl eframe::App for App {
                                         .id_salt(("automation_run", run.id))
                                         .show(ui, |ui| {
                                             ui.label(format!("Finished {}", run.finished_at));
+                                            if let Some(source_run) = run.rerun_of {
+                                                ui.label(format!("Replayed from run {source_run}"));
+                                            }
                                             if let Some(duration_ms) = run.duration_ms {
                                                 ui.label(format!("Query and validation time: {duration_ms} ms"));
                                             }
@@ -7513,6 +7522,9 @@ fn rerun_saved_automation_configuration_cli(
     let mut app = App::automation_context(case, case_path);
     normalize_snapshot_database_paths(&mut app.case, &app.case_path);
     let (success, message) = app.run_automation_job_cli(&job);
+    if let Some(run) = app.case.automation_runs.last_mut() {
+        run.rerun_of = Some(run_id);
+    }
     let new_run = app
         .case
         .automation_runs
@@ -7988,6 +8000,7 @@ fn list_automation_runs_cli(
             outcome["duration_ms"] = serde_json::json!(run.duration_ms);
             outcome["enabled"] = serde_json::json!(run.enabled);
             outcome["configuration_recorded"] = serde_json::json!(run.configuration_recorded);
+            outcome["rerun_of"] = serde_json::json!(run.rerun_of);
             if !run.configuration_recorded {
                 outcome["limits"] = serde_json::Value::Null;
                 outcome["parameters"] = serde_json::Value::Null;

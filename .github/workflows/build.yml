@@ -63,6 +63,8 @@ jobs:
             libsqlite3-dev libwayland-dev libx11-dev libxcb1-dev libxcursor-dev libxkbcommon-dev
       - name: Check formatting
         run: cargo fmt --all -- --check
+      - name: Check packaging script syntax
+        run: bash -n scripts/install-linux-user.sh scripts/install-macos-automation.sh scripts/package-macos.sh
       - name: Fetch locked dependencies
         run: cargo fetch --locked
       - name: Check and build
