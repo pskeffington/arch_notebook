@@ -45,6 +45,8 @@ When endpoint IDs have declared foreign keys to entity tables, generated queries
 
 If a schema has no declared foreign keys, the builder infers an ID join only when one unambiguous entity-like table has a single primary key and a recognizable name column. Ambiguous schemas keep the endpoint IDs for manual query editing. Generated results retain endpoint IDs alongside display names so same-named source entities stay distinct and snapshots can match those identities over time.
 
+SQL can return stable endpoint IDs as `source_entity_id`/`target_entity_id`, `source_external_id`/`target_external_id`, or common endpoint names such as `from_id`/`to_id`, `entity_a_id`/`entity_b_id`, and `source_node_id`/`target_node_id`. The `source_id` column name remains available for evidence references. These IDs preserve entity identity across captures when an entity’s display name changes.
+
 When multiple tables or views match, the editor offers a source picker so you can choose which generated query to use. The CLI’s `query_template` is the first matching option; the full schema remains available in `objects`.
 
 Applying a generated template clears the parameter editor because the draft contains no named placeholders; add any required `WHERE` clause and parameters before validation.

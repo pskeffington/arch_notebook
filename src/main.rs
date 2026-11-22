@@ -1890,11 +1890,28 @@ impl App {
                 .ok_or("SQL result needs a target column")?;
             let source_entity_id = col(
                 "source entity ID",
-                &["source_entity_id", "source_external_id", "from_entity_id"],
+                &[
+                    "source_entity_id",
+                    "source_external_id",
+                    "from_entity_id",
+                    "from_id",
+                    "entity_a_id",
+                    "source_person_id",
+                    "source_node_id",
+                ],
             )?;
             let target_entity_id = col(
                 "target entity ID",
-                &["target_entity_id", "target_external_id", "to_entity_id"],
+                &[
+                    "target_entity_id",
+                    "target_external_id",
+                    "target_id",
+                    "to_entity_id",
+                    "to_id",
+                    "entity_b_id",
+                    "target_person_id",
+                    "target_node_id",
+                ],
             )?;
             let connection_id = col(
                 "connection ID",
