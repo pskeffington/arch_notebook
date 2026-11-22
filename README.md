@@ -48,7 +48,7 @@ Desktop batch runs save an atomic checkpoint after each job, then save the final
 cargo run --offline -- --run-enabled-jobs harbor-light.case.json
 ```
 
-Supply repeated `--job <name-or-id>` selectors to validate or run a subset of enabled jobs. Name matching ignores case; UUIDs remain stable across renames, and selected jobs execute in case-file order. A selected disabled or unknown job is an error. Use `--run-job` to run one named job even when it is disabled:
+Supply repeated `--job <name-or-id>` selectors to validate or run a subset of enabled jobs. Name matching ignores case; UUIDs remain stable across renames, and selected jobs execute in case-file order. A selected disabled or unknown job is an error. Use `--run-job` to run one named or UUID-selected job even when it is disabled:
 
 ```sh
 cargo run --offline -- --validate-enabled-jobs harbor-light.case.json --job "Harbor Light baseline" --json
@@ -59,6 +59,8 @@ Run one named job, including a disabled job, with:
 
 ```sh
 cargo run --offline -- --run-job harbor-light.case.json "Harbor Light baseline"
+# A UUID selector continues to work if the job is renamed.
+cargo run --offline -- --run-job harbor-light.case.json 6f20f078-0dd4-4df3-b81a-e646aaaf4412 --json
 ```
 
 List configured jobs as JSON without changing the case file:

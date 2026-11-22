@@ -6633,11 +6633,13 @@ fn run_automation_cli(
         let matches: Vec<AutomationJob> = case
             .automation_jobs
             .iter()
-            .filter(|job| job.name == name)
+            .filter(|job| {
+                job.name.eq_ignore_ascii_case(name) || job.id.to_string().eq_ignore_ascii_case(name)
+            })
             .cloned()
             .collect();
         if matches.len() > 1 {
-            return Err(format!("job name is ambiguous: {name}"));
+            return Err(format!("job selector is ambiguous: {name}"));
         }
         vec![
             matches
@@ -7155,7 +7157,7 @@ fn main() -> eframe::Result<()> {
         .is_some_and(|arg| arg == "--help" || arg == "-h")
     {
         println!(
-            "Arch Notebook\n\nUsage:\n  arch-notebook\n  arch-notebook --export-graphml <case.json> <output.graphml> [--json]\n  arch-notebook --export-sql-comparison <case.json> <baseline-snapshot-id> <current-snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --list-jobs <case.json> [--json]\n  arch-notebook --list-runs <case.json> [--json] [--job <name-or-id>] [--offset <count>] [--limit <count>]\n  arch-notebook --validate-enabled-jobs <case.json> [--json] [--job <name-or-id> ...]\n  arch-notebook --run-enabled-jobs <case.json> [--json] [--job <name-or-id> ...]\n  arch-notebook --run-job <case.json> <job-name> [--json]\n\nJob and run listing and validation do not change the case. Run history is newest first and can be filtered or paged. SQL comparisons can be exported from saved snapshots for downstream tools. Batch runs save snapshots and run history to the case file. JSON output is available for scheduler integration."
+            "Arch Notebook\n\nUsage:\n  arch-notebook\n  arch-notebook --export-graphml <case.json> <output.graphml> [--json]\n  arch-notebook --export-sql-comparison <case.json> <baseline-snapshot-id> <current-snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --list-jobs <case.json> [--json]\n  arch-notebook --list-runs <case.json> [--json] [--job <name-or-id>] [--offset <count>] [--limit <count>]\n  arch-notebook --validate-enabled-jobs <case.json> [--json] [--job <name-or-id> ...]\n  arch-notebook --run-enabled-jobs <case.json> [--json] [--job <name-or-id> ...]\n  arch-notebook --run-job <case.json> <job-name-or-id> [--json]\n\nJob and run listing and validation do not change the case. Run history is newest first and can be filtered or paged. SQL comparisons can be exported from saved snapshots for downstream tools. Batch runs save snapshots and run history to the case file. JSON output is available for scheduler integration."
         );
         return Ok(());
     }
@@ -7342,13 +7344,13 @@ fn main() -> eframe::Result<()> {
         let json_output = args.iter().any(|arg| arg == "--json");
         let (Some(case_path), Some(job_name)) = (args.get(1), args.get(2)) else {
             report_cli_usage_error(
-                "usage: arch-notebook --run-job <case.json> <job-name> [--json]",
+                "usage: arch-notebook --run-job <case.json> <job-name-or-id> [--json]",
                 json_output,
             );
         };
         if args.len() > 4 || args.get(3).is_some_and(|arg| arg != "--json") {
             report_cli_usage_error(
-                "usage: arch-notebook --run-job <case.json> <job-name> [--json]",
+                "usage: arch-notebook --run-job <case.json> <job-name-or-id> [--json]",
                 json_output,
             );
         }
