@@ -186,6 +186,7 @@ struct App {
     selected_import_spec: Option<Uuid>,
     show_import_wizard: bool,
     export_path: String,
+    graphml_export_path: String,
     selected_link: Option<usize>,
     page: WorkspacePage,
     entity_sort: EntitySort,
@@ -200,6 +201,7 @@ struct App {
     case_path: String,
     case_path_input: String,
     saved_case_json: Option<String>,
+    disk_case_json: Option<String>,
     pending_case_action: Option<PendingCaseAction>,
     data_mode: DataMode,
     merge_candidate: Option<(Uuid, Uuid)>,
@@ -296,7 +298,7 @@ struct ImportAttributeMapping {
     source: bool,
 }
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Clone, Copy)]
 enum WorkspacePage {
     Chart,
     Data,
@@ -373,18 +375,21 @@ impl Default for App {
         let default_case_path = data_dir.join("harbor-light.case.json");
         let mut case = demo_case();
         let mut case_path = default_case_path.to_string_lossy().into_owned();
+        let mut disk_case_json = None;
         let status = match initialize_user_data(&data_dir) {
             Ok(()) => {
                 if default_case_path.exists() {
                     match fs::read_to_string(&default_case_path)
                         .map_err(|error| error.to_string())
                         .and_then(|contents| {
-                            serde_json::from_str::<CaseFile>(&contents)
-                                .map_err(|error| error.to_string())
+                            let saved_case = serde_json::from_str::<CaseFile>(&contents)
+                                .map_err(|error| error.to_string())?;
+                            Ok((saved_case, contents))
                         }) {
-                        Ok(mut saved_case) => {
+                        Ok((mut saved_case, contents)) => {
                             normalize_snapshot_database_paths(&mut saved_case, &case_path);
                             case = saved_case;
+                            disk_case_json = Some(contents);
                             "SAVED CASE RESTORED".into()
                         }
                         Err(error) => {
@@ -424,6 +429,10 @@ impl Default for App {
             selected_import_spec: None,
             show_import_wizard: false,
             export_path: data_dir.join("chart-export.csv").to_string_lossy().into_owned(),
+            graphml_export_path: data_dir
+                .join("chart-export.graphml")
+                .to_string_lossy()
+                .into_owned(),
             selected_link: None,
             page: WorkspacePage::Chart,
             entity_sort: EntitySort::Name,
@@ -438,6 +447,7 @@ impl Default for App {
             case_path: case_path.clone(),
             case_path_input: case_path,
             saved_case_json,
+            disk_case_json,
             pending_case_action: None,
             data_mode: DataMode::Relationships,
             merge_candidate: None,
@@ -666,6 +676,7 @@ impl App {
             selected_import_spec: None,
             show_import_wizard: false,
             export_path: String::new(),
+            graphml_export_path: String::new(),
             selected_link: None,
             page: WorkspacePage::Chart,
             entity_sort: EntitySort::Name,
@@ -680,6 +691,7 @@ impl App {
             case_path: case_path.to_owned(),
             case_path_input: case_path.to_owned(),
             saved_case_json,
+            disk_case_json: None,
             pending_case_action: None,
             data_mode: DataMode::Relationships,
             merge_candidate: None,
@@ -730,10 +742,11 @@ impl App {
         let result = if path.as_os_str().is_empty() {
             Err("case path cannot be empty".to_string())
         } else {
-            save_case_atomically(path, &self.case)
+            save_case_atomically_if_unchanged(path, &self.case, self.disk_case_json.as_deref())
         };
         match result {
-            Ok(()) => {
+            Ok(disk_case_json) => {
+                self.disk_case_json = Some(disk_case_json);
                 self.saved_case_json = self.current_case_json();
                 self.case_path_input = self.case_path.clone();
                 self.status = format!("CASE SAVED · {}", self.case_path);
@@ -746,12 +759,15 @@ impl App {
         let path = Path::new(self.case_path_input.trim());
         let result = if path.as_os_str().is_empty() {
             Err("case path cannot be empty".to_string())
+        } else if path == Path::new(self.case_path.trim()) {
+            save_case_atomically_if_unchanged(path, &self.case, self.disk_case_json.as_deref())
         } else {
-            save_case_atomically(path, &self.case)
+            save_case_atomically_with_lock(path, &self.case)
         };
         match result {
-            Ok(()) => {
+            Ok(disk_case_json) => {
                 self.case_path = self.case_path_input.trim().to_string();
+                self.disk_case_json = Some(disk_case_json);
                 self.saved_case_json = self.current_case_json();
                 self.status = format!("CASE SAVED · {}", self.case_path);
             }
@@ -767,13 +783,17 @@ impl App {
         }
         match fs::read_to_string(&requested_path)
             .map_err(|e| e.to_string())
-            .and_then(|s| serde_json::from_str::<CaseFile>(&s).map_err(|e| e.to_string()))
-        {
-            Ok(mut c) => {
+            .and_then(|contents| {
+                serde_json::from_str::<CaseFile>(&contents)
+                    .map(|case| (case, contents))
+                    .map_err(|error| error.to_string())
+            }) {
+            Ok((mut c, disk_case_json)) => {
                 normalize_snapshot_database_paths(&mut c, &requested_path);
                 self.case = c;
                 self.case_path = requested_path.clone();
                 self.case_path_input = requested_path;
+                self.disk_case_json = Some(disk_case_json);
                 self.saved_case_json = self.current_case_json();
                 self.sql_snapshot_source = None;
                 self.sql_snapshot_index = None;
@@ -2261,10 +2281,11 @@ impl App {
         let result = if path.as_os_str().is_empty() {
             Err("case path cannot be empty".to_string())
         } else {
-            save_case_atomically(path, &self.case)
+            save_case_atomically_if_unchanged(path, &self.case, self.disk_case_json.as_deref())
         };
         self.status = match result {
-            Ok(()) => {
+            Ok(disk_case_json) => {
+                self.disk_case_json = Some(disk_case_json);
                 self.saved_case_json = self.current_case_json();
                 format!("{summary} · CASE SAVED")
             }
@@ -2557,6 +2578,166 @@ impl App {
         };
     }
 
+    fn export_graphml(&mut self) {
+        let output_path = self.graphml_export_path.trim().to_owned();
+        let temporary_path = (!output_path.is_empty()).then(|| {
+            let mut name = output_path.clone();
+            name.push_str(&format!(".tmp-{}", Uuid::new_v4()));
+            PathBuf::from(name)
+        });
+        let result = (|| -> Result<(), String> {
+            if output_path.is_empty() {
+                return Err("GraphML export path cannot be empty".into());
+            }
+            self.ensure_path_is_not_sql_source(&output_path)?;
+            let valid_entities: HashSet<Uuid> =
+                self.case.entities.iter().map(|entity| entity.id).collect();
+            if valid_entities.len() != self.case.entities.len() {
+                return Err(
+                    "cannot export GraphML because the case contains duplicate entity IDs".into(),
+                );
+            }
+            for (index, link) in self.case.links.iter().enumerate() {
+                if !valid_entities.contains(&link.from) || !valid_entities.contains(&link.to) {
+                    return Err(format!(
+                        "cannot export relationship {} because an endpoint entity is missing",
+                        index + 1
+                    ));
+                }
+            }
+
+            let mut xml = String::from(
+                "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<graphml xmlns=\"http://graphml.graphdrawing.org/xmlns\">\n",
+            );
+            for (id, scope, name, kind) in [
+                ("graph_title", "graph", "title", "string"),
+                ("graph_description", "graph", "description", "string"),
+                ("node_uuid", "node", "arch_notebook_uuid", "string"),
+                ("node_name", "node", "name", "string"),
+                ("node_type", "node", "entity_type", "string"),
+                ("node_detail", "node", "detail", "string"),
+                ("node_aliases", "node", "aliases_json", "string"),
+                ("node_attributes", "node", "attributes_json", "string"),
+                (
+                    "node_merged_records",
+                    "node",
+                    "merged_records_json",
+                    "string",
+                ),
+                ("node_color", "node", "color", "string"),
+                ("node_x", "node", "x", "double"),
+                ("node_y", "node", "y", "double"),
+                ("node_position_locked", "node", "position_locked", "boolean"),
+                ("edge_connection_id", "edge", "connection_id", "string"),
+                ("edge_relationship", "edge", "relationship", "string"),
+                ("edge_date", "edge", "date", "string"),
+                ("edge_confidence", "edge", "confidence", "int"),
+                (
+                    "edge_source_reference",
+                    "edge",
+                    "source_reference",
+                    "string",
+                ),
+                ("edge_source_notes", "edge", "source_notes", "string"),
+                ("edge_analyst_notes", "edge", "analyst_notes", "string"),
+                ("edge_ingest_source", "edge", "ingest_source", "string"),
+            ] {
+                xml.push_str(&format!(
+                    "  <key id=\"{id}\" for=\"{scope}\" attr.name=\"{name}\" attr.type=\"{kind}\"/>\n"
+                ));
+            }
+            xml.push_str("  <graph id=\"arch_notebook\" edgedefault=\"undirected\">\n");
+            graphml_data(&mut xml, "graph_title", &self.case.title);
+            graphml_data(&mut xml, "graph_description", &self.case.description);
+            for entity in &self.case.entities {
+                xml.push_str(&format!("    <node id=\"n_{}\">\n", entity.id));
+                graphml_data(&mut xml, "node_uuid", &entity.id.to_string());
+                graphml_data(&mut xml, "node_name", &entity.name);
+                graphml_data(&mut xml, "node_type", &entity.kind);
+                graphml_data(&mut xml, "node_detail", &entity.detail);
+                graphml_data(
+                    &mut xml,
+                    "node_aliases",
+                    &serde_json::to_string(&entity.aliases).map_err(|error| error.to_string())?,
+                );
+                graphml_data(
+                    &mut xml,
+                    "node_attributes",
+                    &serde_json::to_string(&entity.attributes)
+                        .map_err(|error| error.to_string())?,
+                );
+                graphml_data(
+                    &mut xml,
+                    "node_merged_records",
+                    &serde_json::to_string(&entity.merged_records)
+                        .map_err(|error| error.to_string())?,
+                );
+                graphml_data(
+                    &mut xml,
+                    "node_color",
+                    &format!(
+                        "#{:02X}{:02X}{:02X}",
+                        entity.color[0], entity.color[1], entity.color[2]
+                    ),
+                );
+                graphml_data(&mut xml, "node_x", &entity.x.to_string());
+                graphml_data(&mut xml, "node_y", &entity.y.to_string());
+                graphml_data(
+                    &mut xml,
+                    "node_position_locked",
+                    if entity.position_locked {
+                        "true"
+                    } else {
+                        "false"
+                    },
+                );
+                xml.push_str("    </node>\n");
+            }
+            for (index, link) in self.case.links.iter().enumerate() {
+                xml.push_str(&format!(
+                    "    <edge id=\"e{}\" source=\"n_{}\" target=\"n_{}\" directed=\"{}\">\n",
+                    index + 1,
+                    link.from,
+                    link.to,
+                    link.directed
+                ));
+                graphml_data(&mut xml, "edge_connection_id", &link.connection_id);
+                graphml_data(&mut xml, "edge_relationship", &link.label);
+                graphml_data(&mut xml, "edge_date", &link.date);
+                graphml_data(&mut xml, "edge_confidence", &link.confidence.to_string());
+                graphml_data(&mut xml, "edge_source_reference", &link.source_reference);
+                graphml_data(&mut xml, "edge_source_notes", &link.source_notes);
+                graphml_data(&mut xml, "edge_analyst_notes", &link.notes);
+                graphml_data(
+                    &mut xml,
+                    "edge_ingest_source",
+                    link.ingest_source.as_deref().unwrap_or_default(),
+                );
+                xml.push_str("    </edge>\n");
+            }
+            xml.push_str("  </graph>\n</graphml>\n");
+            let temporary_path = temporary_path.as_ref().expect("non-empty GraphML path");
+            fs::write(temporary_path, xml).map_err(|error| {
+                format!(
+                    "cannot write temporary GraphML file {}: {error}",
+                    temporary_path.display()
+                )
+            })?;
+            fs::rename(temporary_path, &output_path)
+                .map_err(|error| format!("cannot replace GraphML export: {error}"))?;
+            Ok(())
+        })();
+        if result.is_err()
+            && let Some(temporary_path) = temporary_path
+        {
+            let _ = fs::remove_file(temporary_path);
+        }
+        self.status = match result {
+            Ok(()) => format!("GRAPHML EXPORTED · {output_path}"),
+            Err(error) => format!("GRAPHML EXPORT FAILED · {error}"),
+        };
+    }
+
     fn export_sql_comparison(
         &mut self,
         baseline: &ConnectionSnapshot,
@@ -2715,7 +2896,11 @@ impl App {
     }
 
     fn ensure_export_path_is_not_sql_source(&self) -> Result<(), String> {
-        let output_path = Path::new(self.export_path.trim());
+        self.ensure_path_is_not_sql_source(self.export_path.trim())
+    }
+
+    fn ensure_path_is_not_sql_source(&self, path: &str) -> Result<(), String> {
+        let output_path = Path::new(path);
         let Ok(output_path) = fs::canonicalize(output_path) else {
             return Ok(());
         };
@@ -2953,6 +3138,7 @@ impl App {
             .to_string_lossy()
             .into_owned();
         self.case_path_input = self.case_path.clone();
+        self.disk_case_json = fs::read_to_string(&self.case_path).ok();
         self.selected = None;
         self.selected_link = None;
         self.path_start = None;
@@ -3889,18 +4075,33 @@ fn shortest_path(case: &CaseFile, start: Uuid, goal: Uuid) -> Option<Vec<Uuid>> 
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
-        let (save, save_as, delete, escape) = ctx.input(|input| {
+        let (save, save_as, delete, escape, workspace_shortcut) = ctx.input(|input| {
             (
                 input.key_pressed(egui::Key::S) && input.modifiers.command,
                 input.key_pressed(egui::Key::S) && input.modifiers.command && input.modifiers.shift,
                 input.key_pressed(egui::Key::Delete),
                 input.key_pressed(egui::Key::Escape),
+                if input.modifiers.command && input.key_pressed(egui::Key::Num1) {
+                    Some((WorkspacePage::Chart, false))
+                } else if input.modifiers.command && input.key_pressed(egui::Key::Num2) {
+                    Some((WorkspacePage::Chart, true))
+                } else if input.modifiers.command && input.key_pressed(egui::Key::Num3) {
+                    Some((WorkspacePage::Data, false))
+                } else {
+                    None
+                },
             )
         });
         if save_as {
             self.save_as();
         } else if save {
             self.save();
+        }
+        if !ctx.wants_keyboard_input()
+            && let Some((page, show_timeline)) = workspace_shortcut
+        {
+            self.page = page;
+            self.show_timeline = show_timeline;
         }
         if delete && self.pending_case_action.is_none() && !ctx.wants_keyboard_input() {
             self.delete_selected();
@@ -4033,6 +4234,7 @@ impl eframe::App for App {
                     });
                     if ui.button("Import CSV/TSV").clicked(){self.inspect_delimited_import();}
                     if ui.button("Export CSV/TSV").clicked(){self.export_delimited();}
+                    if ui.button("Export GraphML").clicked(){self.export_graphml();}
                     egui::ComboBox::from_id_salt("layout_mode")
                         .selected_text(match self.layout_mode {
                             LayoutMode::Connectivity => "Connectivity layout",
@@ -4098,7 +4300,7 @@ impl eframe::App for App {
                         if self.page==WorkspacePage::Data {
                             ui.horizontal(|ui|{ui.label(egui::RichText::new("CASE RECORDS").strong().color(cyan));ui.selectable_value(&mut self.data_mode,DataMode::Entities,"Entities");ui.selectable_value(&mut self.data_mode,DataMode::Relationships,"Connections");ui.selectable_value(&mut self.data_mode,DataMode::SqlRegressions,"SQL regressions");ui.selectable_value(&mut self.data_mode,DataMode::Automation,"Automation");if self.data_mode==DataMode::Entities||self.data_mode==DataMode::Relationships{ui.label(egui::RichText::new("CSV/TSV carries connection identity, provenance, entity properties and colors").small().color(muted));}});
                             ui.horizontal(|ui|{ui.label("Case file");ui.add(egui::TextEdit::singleline(&mut self.case_path_input).desired_width(260.0));ui.label("Description");ui.add(egui::TextEdit::singleline(&mut self.case.description).desired_width(260.0));});
-                            ui.horizontal(|ui|{ui.label("Import path");ui.add(egui::TextEdit::singleline(&mut self.import_path).desired_width(180.0));ui.label("Export path");ui.add(egui::TextEdit::singleline(&mut self.export_path).desired_width(180.0));});
+                            ui.horizontal(|ui|{ui.label("Import path");ui.add(egui::TextEdit::singleline(&mut self.import_path).desired_width(180.0));ui.label("Export path");ui.add(egui::TextEdit::singleline(&mut self.export_path).desired_width(180.0));ui.label("GraphML");ui.add(egui::TextEdit::singleline(&mut self.graphml_export_path).desired_width(180.0));});
                             if self.data_mode==DataMode::Automation {
                                 ui.label(egui::RichText::new("REPEATABLE SQL INGESTION JOBS").strong().color(cyan));
                                 ui.label(egui::RichText::new("Jobs are saved in this case file. Run them here or from a script with the command-line runner.").small().color(muted));
@@ -4927,6 +5129,38 @@ fn save_case_atomically(path: &Path, case: &CaseFile) -> Result<(), String> {
     Ok(())
 }
 
+fn save_case_atomically_with_lock(path: &Path, case: &CaseFile) -> Result<String, String> {
+    let _case_lock = lock_automation_case(path)?;
+    let serialized = serde_json::to_string_pretty(case).map_err(|error| error.to_string())?;
+    save_case_atomically(path, case)?;
+    Ok(serialized)
+}
+
+fn save_case_atomically_if_unchanged(
+    path: &Path,
+    case: &CaseFile,
+    expected_disk_json: Option<&str>,
+) -> Result<String, String> {
+    let _case_lock = lock_automation_case(path)?;
+    match fs::read_to_string(path) {
+        Ok(current_disk_json) if Some(current_disk_json.as_str()) == expected_disk_json => {}
+        Ok(_) => {
+            return Err(
+                "case file changed outside this app; reload it before saving to prevent overwriting newer data".into(),
+            );
+        }
+        Err(error)
+            if error.kind() == std::io::ErrorKind::NotFound && expected_disk_json.is_none() => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Err("case file was removed outside this app; reload or use Save as".into());
+        }
+        Err(error) => return Err(format!("cannot check case file before saving: {error}")),
+    }
+    let serialized = serde_json::to_string_pretty(case).map_err(|error| error.to_string())?;
+    save_case_atomically(path, case)?;
+    Ok(serialized)
+}
+
 fn delimited_text_delimiter(path: &str) -> u8 {
     match Path::new(path)
         .extension()
@@ -5028,6 +5262,37 @@ fn delimited_text_format(path: &str) -> &'static str {
     } else {
         "CSV"
     }
+}
+
+fn graphml_data(xml: &mut String, key: &str, value: &str) {
+    xml.push_str("      <data key=\"");
+    xml.push_str(key);
+    xml.push_str("\">");
+    xml.push_str(&escape_xml_text(value));
+    xml.push_str("</data>\n");
+}
+
+fn escape_xml_text(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for character in value.chars() {
+        match character {
+            '&' => escaped.push_str("&amp;"),
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            '"' => escaped.push_str("&quot;"),
+            '\'' => escaped.push_str("&apos;"),
+            '\u{9}' | '\u{A}' | '\u{D}' => escaped.push(character),
+            character
+                if ('\u{20}'..='\u{D7FF}').contains(&character)
+                    || ('\u{E000}'..='\u{FFFD}').contains(&character)
+                    || ('\u{10000}'..='\u{10FFFF}').contains(&character) =>
+            {
+                escaped.push(character);
+            }
+            _ => escaped.push('\u{FFFD}'),
+        }
+    }
+    escaped
 }
 
 fn parse_entity_color(value: &str) -> Result<[u8; 3], String> {
@@ -5226,7 +5491,7 @@ fn run_automation_cli(
     job_name: Option<&str>,
     json_output: bool,
 ) -> Result<bool, String> {
-    let _case_lock = lock_automation_case(case_path)?;
+    let _case_lock = lock_automation_case(Path::new(case_path))?;
     let content =
         fs::read_to_string(case_path).map_err(|error| format!("cannot read case: {error}"))?;
     let case = serde_json::from_str::<CaseFile>(&content)
@@ -5301,8 +5566,7 @@ fn run_automation_cli(
     Ok(failures == 0)
 }
 
-fn lock_automation_case(case_path: &str) -> Result<fs::File, String> {
-    let path = Path::new(case_path);
+fn lock_automation_case(path: &Path) -> Result<fs::File, String> {
     if path.as_os_str().is_empty() {
         return Err("case path cannot be empty".into());
     }
