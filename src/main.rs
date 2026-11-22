@@ -8257,7 +8257,7 @@ fn main() -> eframe::Result<()> {
     }
     if args.first().is_some_and(|arg| arg == "--inspect-sqlite") {
         let json_output = args.iter().any(|arg| arg == "--json");
-        let Some(database_path) = args.get(1) else {
+        let Some(database_path) = args.get(1).filter(|path| !path.starts_with("--")) else {
             report_cli_usage_error(
                 "usage: arch-notebook --inspect-sqlite <database.sqlite> [--json]",
                 json_output,

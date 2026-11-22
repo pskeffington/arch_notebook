@@ -93,6 +93,10 @@ Read saved automation outcomes without opening the desktop app:
 cargo run --offline -- --list-runs harbor-light.case.json --json
 ```
 
+The result uses schema version 1 and lists newest runs first with status, job identity, timestamps, elapsed query and validation duration in milliseconds, database/series, the captured query and bound parameters, thresholds, enabled state, outcome message, linked snapshot ID, capture time, connection count, and skipped-row count when a snapshot was produced. It also returns the structured limit checks and typed snapshot delta with stable connection keys and prior/current facts, matching run and preflight outcomes. Older runs without recorded configuration return `limits: null` rather than implying their default fields were saved settings; runs from older case files report a null duration. Listing run history does not modify the case.
+
+Filter by job name or UUID and page through newest-first history with `--job <name-or-id>`, `--offset <count>` (default `0`), and `--limit <count>` (positive integer). JSON responses include the active filter, total matches, returned count, and `next_offset` when another page exists. The selection is applied before snapshot deltas are computed.
+
 Inspect a SQLite source before writing an ingestion query. This command opens the database read-only and lists its tables, views, column names, declared types, and key/required-column markers:
 
 ```sh
@@ -100,10 +104,6 @@ cargo run --offline -- --inspect-sqlite source.sqlite --json
 ```
 
 The schema response uses version 1 and can be consumed by query-authoring tools. It reports structure only; it does not read table rows or modify the source.
-
-The result uses schema version 1 and lists newest runs first with status, job identity, timestamps, elapsed query and validation duration in milliseconds, database/series, the captured query and bound parameters, thresholds, enabled state, outcome message, linked snapshot ID, capture time, connection count, and skipped-row count when a snapshot was produced. It also returns the structured limit checks and typed snapshot delta with stable connection keys and prior/current facts, matching run and preflight outcomes. Older runs without recorded configuration return `limits: null` rather than implying their default fields were saved settings; runs from older case files report a null duration. Listing run history does not modify the case.
-
-Filter by job name or UUID and page through newest-first history with `--job <name-or-id>`, `--offset <count>` (default `0`), and `--limit <count>` (positive integer). JSON responses include the active filter, total matches, returned count, and `next_offset` when another page exists. The selection is applied before snapshot deltas are computed.
 
 Preflight every enabled SQL job before scheduling a batch. Validation runs each query read-only, checks minimum and optional regression limits, and evaluates jobs in run order with a temporary snapshot chain. It does not save snapshots or change the case file:
 
