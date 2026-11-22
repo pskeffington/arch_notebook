@@ -2,7 +2,10 @@ use eframe::egui;
 use quick_xml::{
     Reader as XmlReader, escape::resolve_predefined_entity, events::Event as XmlEvent,
 };
-use rusqlite::{Connection, OpenFlags, TransactionBehavior, params_from_iter, types::ValueRef};
+use rusqlite::{
+    Connection, OpenFlags, TransactionBehavior, params_from_iter,
+    types::{Value, ValueRef},
+};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet, VecDeque},
@@ -4553,10 +4556,46 @@ fn format_sql_parameters(parameters: &[(String, String)]) -> String {
         .join("\n")
 }
 
+fn sql_parameter_value(name: &str, value: &str) -> Result<Value, String> {
+    if let Some(text) = value.strip_prefix("text:") {
+        return Ok(Value::Text(text.to_owned()));
+    }
+    if let Some(integer) = value.strip_prefix("int:") {
+        return integer
+            .parse::<i64>()
+            .map(Value::Integer)
+            .map_err(|_| format!("SQL parameter {name} must use int:<64-bit integer>"));
+    }
+    if let Some(real) = value.strip_prefix("real:") {
+        let number = real
+            .parse::<f64>()
+            .map_err(|_| format!("SQL parameter {name} must use real:<finite number>"))?;
+        if !number.is_finite() {
+            return Err(format!(
+                "SQL parameter {name} must use real:<finite number>"
+            ));
+        }
+        return Ok(Value::Real(number));
+    }
+    if let Some(boolean) = value.strip_prefix("bool:") {
+        return match boolean.trim().to_ascii_lowercase().as_str() {
+            "true" | "1" => Ok(Value::Integer(1)),
+            "false" | "0" => Ok(Value::Integer(0)),
+            _ => Err(format!(
+                "SQL parameter {name} must use bool:true or bool:false"
+            )),
+        };
+    }
+    if value == "null:" {
+        return Ok(Value::Null);
+    }
+    Ok(Value::Text(value.to_owned()))
+}
+
 fn sql_parameter_values(
     statement: &rusqlite::Statement<'_>,
     parameters: &[(String, String)],
-) -> Result<Vec<String>, String> {
+) -> Result<Vec<Value>, String> {
     let configured: HashMap<&str, &str> = parameters
         .iter()
         .map(|(name, value)| (name.as_str(), value.as_str()))
@@ -4574,8 +4613,8 @@ fn sql_parameter_values(
         let Some(value) = configured.get(name.as_str()) else {
             return Err(format!("missing SQL parameter value: {name}"));
         };
-        used.insert(name);
-        values.push((*value).to_owned());
+        used.insert(name.clone());
+        values.push(sql_parameter_value(&name, value)?);
     }
     if let Some((name, _)) = parameters.iter().find(|(name, _)| !used.contains(name)) {
         return Err(format!("SQL parameter is not used by the query: {name}"));
