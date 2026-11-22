@@ -1897,7 +1897,9 @@ impl App {
                     "from_id",
                     "entity_a_id",
                     "source_person_id",
+                    "from_person_id",
                     "source_node_id",
+                    "from_node_id",
                 ],
             )?;
             let target_entity_id = col(
@@ -1910,7 +1912,9 @@ impl App {
                     "to_id",
                     "entity_b_id",
                     "target_person_id",
+                    "to_person_id",
                     "target_node_id",
+                    "to_node_id",
                 ],
             )?;
             let connection_id = col(
@@ -8326,6 +8330,10 @@ fn sqlite_endpoint_expression(
             ));
         }
         let identity_expression = schema_column(link_object, id_aliases)
+            .filter(|id| {
+                !id.eq_ignore_ascii_case("source_id")
+                    || sqlite_foreign_key_for_column(link_object, id).is_some()
+            })
             .map(|id| format!("{link_alias}.{}", quote_sql_identifier(id)));
         return Some((direct_expression, None, None, identity_expression));
     }
@@ -8387,15 +8395,16 @@ fn sqlite_query_templates(schema: &[serde_json::Value]) -> Vec<(String, String)>
         "origin",
     ];
     let source_id_aliases = [
-        "source_id",
+        "source_entity_id",
+        "source_external_id",
+        "from_entity_id",
         "from_id",
         "entity_a_id",
-        "source_entity_id",
-        "from_entity_id",
         "source_person_id",
         "from_person_id",
         "source_node_id",
         "from_node_id",
+        "source_id",
     ];
     let target_aliases = [
         "target",
@@ -8411,11 +8420,12 @@ fn sqlite_query_templates(schema: &[serde_json::Value]) -> Vec<(String, String)>
         "destination",
     ];
     let target_id_aliases = [
-        "target_id",
+        "target_entity_id",
+        "target_external_id",
+        "to_entity_id",
         "to_id",
         "entity_b_id",
-        "target_entity_id",
-        "to_entity_id",
+        "target_id",
         "target_person_id",
         "to_person_id",
         "target_node_id",
@@ -8445,6 +8455,7 @@ fn sqlite_query_templates(schema: &[serde_json::Value]) -> Vec<(String, String)>
                 "reference",
                 "source_document_id",
                 "evidence_id",
+                "source_id",
             ],
         ),
         ("notes", &["notes", "description"]),
@@ -8476,11 +8487,15 @@ fn sqlite_query_templates(schema: &[serde_json::Value]) -> Vec<(String, String)>
         else {
             continue;
         };
+        let source_id_is_identity = schema_column(object, &["source_id"]).is_some_and(|column| {
+            source_identity.as_deref()
+                == Some(format!("\"link_row\".{}", quote_sql_identifier(column)).as_str())
+        });
         let mut selected = vec![
             format!("{source_expression} AS \"source\""),
             format!("{target_expression} AS \"target\""),
         ];
-        if let Some(identity) = source_identity {
+        if let Some(identity) = source_identity.as_ref() {
             selected.push(format!("{identity} AS \"source_entity_id\""));
         }
         if let Some(identity) = target_identity {
@@ -8488,6 +8503,12 @@ fn sqlite_query_templates(schema: &[serde_json::Value]) -> Vec<(String, String)>
         }
         for (canonical, aliases) in fields {
             if let Some(column) = schema_column(object, aliases) {
+                if canonical == "source_reference"
+                    && column.eq_ignore_ascii_case("source_id")
+                    && source_id_is_identity
+                {
+                    continue;
+                }
                 selected.push(format!(
                     "\"link_row\".{} AS \"{canonical}\"",
                     quote_sql_identifier(column)
