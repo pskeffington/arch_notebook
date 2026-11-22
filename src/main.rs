@@ -1406,7 +1406,7 @@ impl App {
                         source_name, relationship, target_name
                     ));
                 }
-                let imported = Link {
+                let mut imported = Link {
                     from: a,
                     to: b,
                     connection_id: external_id.clone(),
@@ -1469,6 +1469,11 @@ impl App {
                 } else {
                     Vec::new()
                 };
+                if source_notes.is_none()
+                    && let [index] = existing.as_slice()
+                {
+                    imported.source_notes = links[*index].source_notes.clone();
+                }
                 if ingest_source
                     .as_ref()
                     .is_some_and(|source| immutable_sources.contains(source))
