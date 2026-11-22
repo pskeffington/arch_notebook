@@ -29,7 +29,11 @@ jobs:
             package: macos
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Select stable Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup component add rustfmt
       - name: Install Linux build libraries
         if: runner.os == 'Linux'
         run: |
