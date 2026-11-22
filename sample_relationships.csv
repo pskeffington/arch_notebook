@@ -1,0 +1,6 @@
+source,source_type,relationship,target,target_type,date,confidence,directed,notes,source_reference
+Mara Voss,PERSON,DIRECTOR OF,Northstar Imports,ORGANIZATION,2025-01-06,3,true,Corporate registry filing,REG-1193 · Corporate registry
+Northstar Imports,ORGANIZATION,LEASES,Pier 19 Warehouse,LOCATION,2025-01-28,2,false,Property record,LOC-81 · Property record
+Mara Voss,PERSON,USES NUMBER,Signal 7,PHONE,2025-02-11,3,false,,SIG-14 · Communications report
+Signal 7,PHONE,CONTACTED,Grey Transit LLC,ORGANIZATION,2025-02-14,1,true,Uncorroborated source report,HUM-203 · Uncorroborated report
+Grey Transit LLC,ORGANIZATION,DELIVERS TO,Pier 19 Warehouse,LOCATION,2025-02-14,2,true,,LOG-77 · Delivery log
