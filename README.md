@@ -46,6 +46,8 @@ For the sample comparison, ingest once with the parameter `snapshot_id=baseline`
 
 ## Automate repeatable ingestion
 
+The validated query preview shows up to eight rows with endpoint names and source IDs, relationship, direction, date, confidence, evidence, and SQL supplied source notes. The preview is horizontally scrollable for wide schemas.
+
 In both the automation editor and one-off SQL snapshot panel, **Build query from schema** inspects the configured SQLite file read-only and generates an editable `SELECT` from the first table or view with recognizable source and target columns. Review and adjust the selected columns before validating or saving the query.
 
 When endpoint IDs have declared foreign keys to entity tables, generated queries join those tables and select a recognizable name column (and entity type when available). Without a usable foreign key, the template falls back to direct endpoint columns or the endpoint IDs themselves.

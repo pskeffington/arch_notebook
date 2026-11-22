@@ -2530,40 +2530,56 @@ impl App {
                     )
                 }
             ));
-            egui::Grid::new("sql_validation_preview_rows")
-                .striped(true)
-                .show(ui, |ui| {
-                    for heading in [
-                        "Connection ID",
-                        "Source",
-                        "Relationship",
-                        "Target",
-                        "Date",
-                        "Confidence",
-                    ] {
-                        ui.strong(heading);
-                    }
-                    ui.end_row();
-                    for connection in &preview.connections {
-                        ui.label(if connection.connection_id.is_empty() {
-                            "(natural key)"
-                        } else {
-                            &connection.connection_id
-                        });
-                        ui.label(format!(
-                            "{} · {}",
-                            connection.source, connection.source_type
-                        ));
-                        ui.label(&connection.relationship);
-                        ui.label(format!(
-                            "{} · {}",
-                            connection.target, connection.target_type
-                        ));
-                        ui.label(&connection.date);
-                        ui.label(connection.confidence.to_string());
+            egui::ScrollArea::horizontal().show(ui, |ui| {
+                egui::Grid::new("sql_validation_preview_rows")
+                    .striped(true)
+                    .show(ui, |ui| {
+                        for heading in [
+                            "Connection ID",
+                            "Source",
+                            "Source ID",
+                            "Relationship",
+                            "Target",
+                            "Target ID",
+                            "Direction",
+                            "Date",
+                            "Confidence",
+                            "Evidence",
+                            "Source notes",
+                        ] {
+                            ui.strong(heading);
+                        }
                         ui.end_row();
-                    }
-                });
+                        for connection in &preview.connections {
+                            ui.label(if connection.connection_id.is_empty() {
+                                "(natural key)"
+                            } else {
+                                &connection.connection_id
+                            });
+                            ui.label(format!(
+                                "{} · {}",
+                                connection.source, connection.source_type
+                            ));
+                            ui.label(&connection.source_entity_id);
+                            ui.label(&connection.relationship);
+                            ui.label(format!(
+                                "{} · {}",
+                                connection.target, connection.target_type
+                            ));
+                            ui.label(&connection.target_entity_id);
+                            ui.label(if connection.directed {
+                                "Directed →"
+                            } else {
+                                "Undirected ↔"
+                            });
+                            ui.label(&connection.date);
+                            ui.label(connection.confidence.to_string());
+                            ui.label(&connection.source_reference);
+                            ui.label(&connection.notes);
+                            ui.end_row();
+                        }
+                    });
+            });
         });
     }
 
@@ -2628,6 +2644,15 @@ impl App {
     }
 
     fn start_automation_jobs(&mut self, job_ids: Vec<Uuid>, batch: bool) {
+        self.start_automation_work(job_ids, None, batch);
+    }
+
+    fn start_automation_work(
+        &mut self,
+        job_ids: Vec<Uuid>,
+        replay_run_id: Option<Uuid>,
+        batch: bool,
+    ) {
         if self.automation_worker.is_some() {
             self.status = "AUTOMATION ALREADY RUNNING".into();
             return;
@@ -2658,19 +2683,42 @@ impl App {
                         .map_err(|error| format!("cannot parse case: {error}"))?;
                     normalize_snapshot_database_paths(&mut case, &case_path);
                     let mut worker = App::automation_context(case, &case_path);
-                    let jobs: Vec<_> = job_ids
+                    let mut jobs: Vec<_> = job_ids
                         .iter()
-                        .filter_map(|id| worker.case.automation_jobs.iter().find(|job| job.id == *id).cloned())
+                        .filter_map(|id| {
+                            worker
+                                .case
+                                .automation_jobs
+                                .iter()
+                                .find(|job| job.id == *id)
+                                .cloned()
+                                .map(|job| (job, None))
+                        })
                         .collect();
                     if jobs.len() != job_ids.len() {
                         return Err("one or more automation jobs no longer exist; reload the case".into());
                     }
+                    if let Some(run_id) = replay_run_id {
+                        let prior_run = worker
+                            .case
+                            .automation_runs
+                            .iter()
+                            .find(|run| run.id == run_id)
+                            .cloned()
+                            .ok_or_else(|| "saved automation run no longer exists; reload the case".to_string())?;
+                        jobs.push((automation_job_from_run(&prior_run)?, Some(run_id)));
+                    }
                     let job_count = jobs.len();
-                    let job_names: Vec<_> = jobs.iter().map(|job| job.name.clone()).collect();
+                    let job_names: Vec<_> = jobs.iter().map(|(job, _)| job.name.clone()).collect();
                     let mut passed = 0;
-                    for job in jobs {
+                    for (job, rerun_of) in jobs {
                         if worker.run_automation_job_cli(&job).0 {
                             passed += 1;
+                        }
+                        if let Some(run_id) = rerun_of
+                            && let Some(run) = worker.case.automation_runs.last_mut()
+                        {
+                            run.rerun_of = Some(run_id);
                         }
                         let serialized = serde_json::to_string_pretty(&worker.case)
                             .map_err(|error| error.to_string())?;
@@ -2681,6 +2729,12 @@ impl App {
                         format!(
                             "AUTOMATION RUN COMPLETE · {passed} PASSED · {} FAILED · {job_count} JOBS · CASE SAVED",
                             job_count - passed
+                        )
+                    } else if replay_run_id.is_some() {
+                        format!(
+                            "AUTOMATION REPLAY · {} · {} · CASE SAVED",
+                            job_names.first().map(String::as_str).unwrap_or("(unnamed)"),
+                            if passed == 1 { "PASSED" } else { "FAILED" },
                         )
                     } else {
                         format!(
@@ -2761,32 +2815,7 @@ impl App {
     }
 
     fn replay_saved_automation_run(&mut self, run_id: Uuid) {
-        let Some(prior_run) = self
-            .case
-            .automation_runs
-            .iter()
-            .find(|run| run.id == run_id)
-            .cloned()
-        else {
-            self.status = "SAVED AUTOMATION RUN NOT FOUND".into();
-            return;
-        };
-        let job = match automation_job_from_run(&prior_run) {
-            Ok(job) => job,
-            Err(error) => {
-                self.status = format!("AUTOMATION REPLAY FAILED · {error}");
-                return;
-            }
-        };
-        let (passed, _) = self.execute_automation_job(&job);
-        if let Some(run) = self.case.automation_runs.last_mut() {
-            run.rerun_of = Some(run_id);
-        }
-        self.save_automation_results(&format!(
-            "AUTOMATION REPLAY {} · {}",
-            if passed { "PASSED" } else { "FAILED" },
-            prior_run.job_name
-        ));
+        self.start_automation_work(Vec::new(), Some(run_id), false);
     }
 
     fn execute_automation_job(&mut self, job: &AutomationJob) -> (bool, String) {
@@ -2943,23 +2972,6 @@ impl App {
                 .automation_runs
                 .drain(..self.case.automation_runs.len() - 200);
         }
-    }
-
-    fn save_automation_results(&mut self, summary: &str) {
-        let path = Path::new(self.case_path.trim());
-        let result = if path.as_os_str().is_empty() {
-            Err("case path cannot be empty".to_string())
-        } else {
-            save_case_atomically_if_unchanged(path, &self.case, self.disk_case_json.as_deref())
-        };
-        self.status = match result {
-            Ok(disk_case_json) => {
-                self.disk_case_json = Some(disk_case_json);
-                self.saved_case_json = self.current_case_json();
-                format!("{summary} · CASE SAVED")
-            }
-            Err(error) => format!("{summary} · CASE SAVE FAILED · {error}"),
-        };
     }
 
     fn start_enabled_automation_jobs(&mut self) {
