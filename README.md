@@ -44,6 +44,14 @@ cargo run --offline -- --list-jobs harbor-light.case.json
 
 Add `--json` to get a stable object containing the case path and job list. The default list output remains a JSON array for compatibility.
 
+Read saved automation outcomes without opening the desktop app:
+
+```sh
+cargo run --offline -- --list-runs harbor-light.case.json --json
+```
+
+The result lists newest runs first with status, job identity, timestamps, database/series, outcome message, and linked snapshot ID. Listing run history does not modify the case.
+
 Preflight every enabled SQL job before scheduling a batch. Validation runs each query read-only, checks minimum and optional regression limits, and evaluates jobs in run order with a temporary snapshot chain. It does not save snapshots or change the case file:
 
 ```sh

@@ -4935,6 +4935,51 @@ fn list_automation_jobs_cli(case_path: &str, json_output: bool) -> Result<(), St
     Ok(())
 }
 
+fn list_automation_runs_cli(case_path: &str, json_output: bool) -> Result<(), String> {
+    let content =
+        fs::read_to_string(case_path).map_err(|error| format!("cannot read case: {error}"))?;
+    let case = serde_json::from_str::<CaseFile>(&content)
+        .map_err(|error| format!("cannot parse case: {error}"))?;
+    let runs: Vec<serde_json::Value> = case
+        .automation_runs
+        .iter()
+        .rev()
+        .map(|run| {
+            serde_json::json!({
+                "id": run.id,
+                "job_id": run.job_id,
+                "job": run.job_name,
+                "status": if run.success { "PASS" } else { "FAIL" },
+                "started_at": run.started_at,
+                "finished_at": run.finished_at,
+                "database_path": run.database_path,
+                "series": run.series,
+                "snapshot_id": run.snapshot_id,
+                "message": run.message,
+                "configuration_recorded": run.configuration_recorded,
+            })
+        })
+        .collect();
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({"case":case_path,"runs":runs}))
+                .map_err(|error| error.to_string())?
+        );
+    } else {
+        for run in runs {
+            println!(
+                "{} · {} · {} · {}",
+                run["status"].as_str().unwrap_or("UNKNOWN"),
+                run["job"].as_str().unwrap_or("(unknown job)"),
+                run["started_at"].as_str().unwrap_or("(unknown time)"),
+                run["message"].as_str().unwrap_or_default()
+            );
+        }
+    }
+    Ok(())
+}
+
 fn report_cli_error(action: &str, error: String, json_output: bool) -> ! {
     if json_output {
         println!(
@@ -4968,7 +5013,7 @@ fn main() -> eframe::Result<()> {
         .is_some_and(|arg| arg == "--help" || arg == "-h")
     {
         println!(
-            "Arch Notebook\n\nUsage:\n  arch-notebook\n  arch-notebook --list-jobs <case.json> [--json]\n  arch-notebook --validate-enabled-jobs <case.json> [--json]\n  arch-notebook --run-enabled-jobs <case.json> [--json]\n  arch-notebook --run-job <case.json> <job-name> [--json]\n\nJob listing and validation do not change the case. Batch runs save snapshots and run history to the case file. JSON output is available for scheduler integration."
+            "Arch Notebook\n\nUsage:\n  arch-notebook\n  arch-notebook --list-jobs <case.json> [--json]\n  arch-notebook --list-runs <case.json> [--json]\n  arch-notebook --validate-enabled-jobs <case.json> [--json]\n  arch-notebook --run-enabled-jobs <case.json> [--json]\n  arch-notebook --run-job <case.json> <job-name> [--json]\n\nJob and run listing and validation do not change the case. Batch runs save snapshots and run history to the case file. JSON output is available for scheduler integration."
         );
         return Ok(());
     }
@@ -4988,6 +5033,25 @@ fn main() -> eframe::Result<()> {
         }
         if let Err(error) = list_automation_jobs_cli(case_path, json_output) {
             report_cli_error("job listing failed", error, json_output);
+        }
+        return Ok(());
+    }
+    if args.first().is_some_and(|arg| arg == "--list-runs") {
+        let json_output = args.iter().any(|arg| arg == "--json");
+        let Some(case_path) = args.get(1) else {
+            report_cli_usage_error(
+                "usage: arch-notebook --list-runs <case.json> [--json]",
+                json_output,
+            );
+        };
+        if args.len() > 3 || args.get(2).is_some_and(|arg| arg != "--json") {
+            report_cli_usage_error(
+                "usage: arch-notebook --list-runs <case.json> [--json]",
+                json_output,
+            );
+        }
+        if let Err(error) = list_automation_runs_cli(case_path, json_output) {
+            report_cli_error("run history listing failed", error, json_output);
         }
         return Ok(());
     }
