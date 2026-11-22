@@ -190,7 +190,13 @@ cd arch_notebook/packaging/arch
 makepkg -si
 ```
 
-The package includes the desktop menu entry and declares its shared-library dependencies. `makepkg` downloads the locked Cargo dependencies and builds the release binary for the host architecture.
+The package includes the desktop menu entry and declares its shared-library dependencies. `makepkg` downloads the locked Cargo dependencies and builds the release binary for the host architecture. After opening the app and configuring enabled automation jobs, install the hourly user timer with:
+
+```sh
+arch-notebook-install-automation
+```
+
+Pass a case file as the first argument to schedule a different case. The installer writes user-owned systemd units under `${XDG_CONFIG_HOME:-~/.config}/systemd/user`, enables the timer, and validates the case before installation.
 
 ### Generic Linux desktop archive
 
@@ -204,10 +210,20 @@ case "$(uname -m)" in
 esac
 archive_dir=arch-notebook-linux-$archive_arch
 tar -xzf "$archive_dir.tar.gz"
-scripts/install-linux-user.sh "$archive_dir"
+"$archive_dir/install-linux-user.sh" "$archive_dir"
 ```
 
 The installer puts the executable in `~/.local/bin` and the desktop launcher under `${XDG_DATA_HOME:-~/.local/share}/applications`. Add `~/.local/bin` to `PATH` to launch it from a terminal. To remove this user installation, delete `~/.local/bin/arch-notebook` and `${XDG_DATA_HOME:-$HOME/.local/share}/applications/arch-notebook.desktop`; case files and SQL databases are kept separately.
+
+To schedule hourly SQL ingestion, first launch the app and enable the desired jobs in the case. Then run the bundled installer with the case path and binary path if `~/.local/bin` is not on `PATH`:
+
+```sh
+"$archive_dir/install-linux-automation.sh" \
+  "${XDG_DATA_HOME:-$HOME/.local/share}/arch-notebook/harbor-light.case.json" \
+  "$HOME/.local/bin/arch-notebook"
+```
+
+The installer creates and enables a user-level systemd timer. Inspect it with `systemctl --user status arch-notebook-automation.timer`; job output is available through `journalctl --user -u arch-notebook-automation.service`.
 
 ### macOS
 

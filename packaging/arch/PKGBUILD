@@ -33,5 +33,6 @@ package() {
   install -Dm644 packaging/arch/arch-notebook.desktop "$pkgdir/usr/share/applications/arch-notebook.desktop"
   install -Dm644 packaging/systemd/arch-notebook-automation.service "$pkgdir/usr/share/arch-notebook/systemd/arch-notebook-automation.service"
   install -Dm644 packaging/systemd/arch-notebook-automation.timer "$pkgdir/usr/share/arch-notebook/systemd/arch-notebook-automation.timer"
+  install -Dm755 scripts/install-linux-automation.sh "$pkgdir/usr/bin/arch-notebook-install-automation"
   install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }

@@ -65,7 +65,7 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Check packaging script syntax
         run: |
-          for script in scripts/install-linux-user.sh scripts/install-macos-automation.sh scripts/package-macos.sh; do
+          for script in scripts/install-linux-user.sh scripts/install-linux-automation.sh scripts/install-macos-automation.sh scripts/package-macos.sh; do
             bash -n "$script"
           done
       - name: Fetch locked dependencies
@@ -81,6 +81,8 @@ jobs:
           mkdir -p "dist/${{ matrix.archive_dir }}"
           install -Dm755 "target/${{ matrix.target }}/release/arch-notebook" "dist/${{ matrix.archive_dir }}/arch-notebook"
           install -Dm644 packaging/arch/arch-notebook.desktop "dist/${{ matrix.archive_dir }}/arch-notebook.desktop"
+          install -Dm755 scripts/install-linux-user.sh "dist/${{ matrix.archive_dir }}/install-linux-user.sh"
+          install -Dm755 scripts/install-linux-automation.sh "dist/${{ matrix.archive_dir }}/install-linux-automation.sh"
           install -Dm644 LICENSE "dist/${{ matrix.archive_dir }}/LICENSE"
           tar -C dist -czf "dist/${{ matrix.archive_name }}" "${{ matrix.archive_dir }}"
       - name: Package macOS application bundle
