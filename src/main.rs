@@ -166,6 +166,7 @@ struct App {
     chart_pan_origin: egui::Vec2,
     chart_focus: Option<Uuid>,
     chart_focus_link: Option<usize>,
+    chart_fit_path: Option<Vec<Uuid>>,
     new_link_from: Option<Uuid>,
     new_link_to: Option<Uuid>,
     import_path: String,
@@ -390,6 +391,7 @@ impl Default for App {
             chart_pan_origin: egui::Vec2::ZERO,
             chart_focus: None,
             chart_focus_link: None,
+            chart_fit_path: None,
             new_link_from: None,
             new_link_to: None,
             import_path: data_dir.join("sample_relationships.csv").to_string_lossy().into_owned(),
@@ -630,6 +632,7 @@ impl App {
             chart_pan_origin: egui::Vec2::ZERO,
             chart_focus: None,
             chart_focus_link: None,
+            chart_fit_path: None,
             new_link_from: None,
             new_link_to: None,
             import_path: String::new(),
@@ -761,6 +764,7 @@ impl App {
                 self.chart_pan_origin = egui::Vec2::ZERO;
                 self.chart_focus = None;
                 self.chart_focus_link = None;
+                self.chart_fit_path = None;
                 self.selected = None;
                 self.selected_link = None;
                 self.path_result.clear();
@@ -2440,6 +2444,7 @@ impl App {
         self.chart_pan = egui::Vec2::ZERO;
         self.chart_focus = None;
         self.chart_focus_link = None;
+        self.chart_fit_path = None;
         let layout_label = match self.layout_mode {
             LayoutMode::Connectivity => "LAYOUT ARRANGED BY CONNECTIVITY",
             LayoutMode::Hierarchy => "LAYOUT ARRANGED BY CONNECTION DEPTH",
@@ -2497,6 +2502,7 @@ impl App {
         self.chart_pan_origin = egui::Vec2::ZERO;
         self.chart_focus = None;
         self.chart_focus_link = None;
+        self.chart_fit_path = None;
         self.case_path = app_data_dir()
             .join("untitled.case.json")
             .to_string_lossy()
@@ -3411,6 +3417,7 @@ impl eframe::App for App {
                 self.selected_link = None;
                 self.chart_focus = None;
                 self.chart_focus_link = None;
+                self.chart_fit_path = None;
             }
         }
 
@@ -3550,7 +3557,7 @@ impl eframe::App for App {
                             ui.selectable_value(&mut self.layout_mode, LayoutMode::Grid, "Grid");
                         });
                     if ui.button("Arrange chart").clicked(){self.auto_layout();}
-                    if self.page==WorkspacePage::Chart {if ui.small_button("−").clicked(){self.chart_zoom=(self.chart_zoom/1.2).clamp(0.4,3.0);}ui.label(format!("{:.0}%",self.chart_zoom*100.0));if ui.small_button("＋").clicked(){self.chart_zoom=(self.chart_zoom*1.2).clamp(0.4,3.0);}if ui.small_button("Reset view").clicked(){self.chart_zoom=1.0;self.chart_pan=egui::Vec2::ZERO;self.chart_focus=None;self.chart_focus_link=None;}}
+                    if self.page==WorkspacePage::Chart {if ui.small_button("−").clicked(){self.chart_zoom=(self.chart_zoom/1.2).clamp(0.25,3.0);}ui.label(format!("{:.0}%",self.chart_zoom*100.0));if ui.small_button("＋").clicked(){self.chart_zoom=(self.chart_zoom*1.2).clamp(0.25,3.0);}if ui.small_button("Reset view").clicked(){self.chart_zoom=1.0;self.chart_pan=egui::Vec2::ZERO;self.chart_focus=None;self.chart_focus_link=None;self.chart_fit_path=None;}}
                     if self.page==WorkspacePage::Data && (self.selected.is_some() || self.selected_link.is_some()) && ui.button("View on chart").clicked(){self.chart_focus=self.selected;self.chart_focus_link=self.selected_link;self.page=WorkspacePage::Chart;self.show_timeline=false;}
                     if self.selected.is_some() || self.selected_link.is_some() {if ui.button("Delete selected").clicked(){self.delete_selected();}}
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| { ui.label(egui::RichText::new(&self.status).small().color(muted)); });
@@ -3849,12 +3856,23 @@ impl eframe::App for App {
                                 let pointer=response.hover_pos().unwrap_or_else(||rect.center());
                                 let from_center=pointer-rect.center();
                                 let old_zoom=self.chart_zoom;
-                                let new_zoom=(old_zoom*(1.0+scroll*0.001)).clamp(0.4,3.0);
+                                let new_zoom=(old_zoom*(1.0+scroll*0.001)).clamp(0.25,3.0);
                                 self.chart_pan=from_center-(from_center-self.chart_pan)*(new_zoom/old_zoom);
                                 self.chart_zoom=new_zoom;
                             }
                         }
-                        if let Some(id)=self.chart_focus.take(){
+                        if let Some(path)=self.chart_fit_path.take(){
+                            let mut points=path.iter().filter_map(|id|self.case.entities.iter().find(|entity|entity.id==*id).map(|entity|egui::pos2(rect.left()+entity.x*rect.width(),rect.top()+entity.y*rect.height())));
+                            if let Some(first)=points.next(){
+                                let (min,max)=points.fold((first,first),|(min,max),point|(egui::pos2(min.x.min(point.x),min.y.min(point.y)),egui::pos2(max.x.max(point.x),max.y.max(point.y))));
+                                let content_width=(max.x-min.x+142.0).max(142.0);
+                                let content_height=(max.y-min.y+56.0).max(56.0);
+                                self.chart_zoom=((rect.width()-48.0)/content_width).min((rect.height()-48.0)/content_height).clamp(0.25,3.0);
+                                self.chart_pan=-(min.lerp(max,0.5)-rect.center())*self.chart_zoom;
+                            }
+                            self.chart_focus=None;
+                            self.chart_focus_link=None;
+                        } else if let Some(id)=self.chart_focus.take(){
                             if let Some(entity)=self.case.entities.iter().find(|e|e.id==id){
                                 let base=egui::pos2(rect.left()+entity.x*rect.width(),rect.top()+entity.y*rect.height());
                                 self.chart_pan=-(base-rect.center())*self.chart_zoom;
@@ -3938,7 +3956,7 @@ impl eframe::App for App {
                         egui::ComboBox::from_id_salt("path_start").selected_text(self.path_start.and_then(|id|self.case.entities.iter().find(|e|e.id==id).map(|e|format!("{} · {}",e.name,e.kind))).unwrap_or_else(||"Start entity".into())).show_ui(ui,|ui|{for e in &self.case.entities{ui.selectable_value(&mut self.path_start,Some(e.id),format!("{} · {}",e.name,e.kind));}});
                         egui::ComboBox::from_id_salt("path_end").selected_text(self.path_end.and_then(|id|self.case.entities.iter().find(|e|e.id==id).map(|e|format!("{} · {}",e.name,e.kind))).unwrap_or_else(||"End entity".into())).show_ui(ui,|ui|{for e in &self.case.entities{ui.selectable_value(&mut self.path_end,Some(e.id),format!("{} · {}",e.name,e.kind));}});
                         if ui.button("Analyze path").clicked(){self.analyze_path();}
-                        if !self.path_result.is_empty(){let labels:Vec<_>=self.path_result.iter().filter_map(|id|self.case.entities.iter().find(|e|e.id==*id).map(|e|format!("{} · {}",e.name,e.kind))).collect();ui.label(egui::RichText::new(labels.join(" → ")).small().color(egui::Color32::from_rgb(236,174,83)));ui.horizontal(|ui|{if ui.small_button("Show path on chart").clicked(){self.chart_focus=self.path_result.first().copied();self.page=WorkspacePage::Chart;self.show_timeline=false;self.selected=self.path_result.first().copied();self.selected_link=None;}if ui.small_button("Clear path").clicked(){self.path_result.clear();}});}
+                        if !self.path_result.is_empty(){let labels:Vec<_>=self.path_result.iter().filter_map(|id|self.case.entities.iter().find(|e|e.id==*id).map(|e|format!("{} · {}",e.name,e.kind))).collect();ui.label(egui::RichText::new(labels.join(" → ")).small().color(egui::Color32::from_rgb(236,174,83)));ui.horizontal(|ui|{if ui.small_button("Show path on chart").clicked(){self.chart_fit_path=Some(self.path_result.clone());self.chart_focus=None;self.chart_focus_link=None;self.page=WorkspacePage::Chart;self.show_timeline=false;self.selected=self.path_result.first().copied();self.selected_link=None;}if ui.small_button("Clear path").clicked(){self.path_result.clear();self.chart_fit_path=None;}});}
                         ui.add_space(16.0);ui.label(egui::RichText::new("POSSIBLE DUPLICATES").size(9.0).strong().color(cyan));
                         if ui.button("Find likely matches").clicked(){self.find_duplicates();}
                         for (a,b) in self.duplicate_candidates.clone().iter().take(5){let an=self.case.entities.iter().find(|e|e.id==*a).map(|e|format!("{} · {}",e.name,e.kind)).unwrap_or_else(||"(missing)".into());let bn=self.case.entities.iter().find(|e|e.id==*b).map(|e|format!("{} · {}",e.name,e.kind)).unwrap_or_else(||"(missing)".into());if ui.selectable_label(self.merge_candidate==Some((*a,*b)),format!("{an}  ↔  {bn}")).clicked(){self.merge_candidate=Some((*a,*b));}}
