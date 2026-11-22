@@ -237,6 +237,9 @@ struct App {
     sql_query: String,
     sql_parameter_text: String,
     sql_validation_preview: Option<SqlValidationPreview>,
+    sql_schema_templates: Vec<(String, String)>,
+    sql_schema_template_index: usize,
+    sql_schema_template_source: Option<(String, String)>,
     automation_job_filter: String,
     sql_snapshot_source: Option<String>,
     sql_snapshot_index: Option<usize>,
@@ -519,6 +522,9 @@ impl Default for App {
             sql_query: "SELECT connection_id, source, source_type, target, target_type, relationship, event_date AS date, confidence, directed, source_reference, notes FROM connection_observations WHERE snapshot_id = :snapshot_id ORDER BY connection_id;".into(),
             sql_parameter_text: "snapshot_id=baseline".into(),
             sql_validation_preview: None,
+            sql_schema_templates: Vec::new(),
+            sql_schema_template_index: 0,
+            sql_schema_template_source: None,
             automation_job_filter: String::new(),
             sql_snapshot_source: None,
             sql_snapshot_index: None,
@@ -770,6 +776,9 @@ impl App {
             sql_query: String::new(),
             sql_parameter_text: String::new(),
             sql_validation_preview: None,
+            sql_schema_templates: Vec::new(),
+            sql_schema_template_index: 0,
+            sql_schema_template_source: None,
             automation_job_filter: String::new(),
             sql_snapshot_source: None,
             sql_snapshot_index: None,
@@ -2015,22 +2024,75 @@ impl App {
     }
 
     fn build_sql_query_from_schema(&mut self) {
-        let result = (|| -> Result<(String, String), String> {
+        let result = (|| -> Result<Vec<(String, String)>, String> {
             if self.sql_path.trim().is_empty() {
                 return Err("database path cannot be empty".into());
             }
             let path = resolve_sqlite_database_path(&self.sql_path, &self.case_path)?;
             let schema = read_sqlite_schema(&path.to_string_lossy())?;
-            sqlite_query_template(&schema)
-                .ok_or_else(|| "no table or view has recognizable source and target columns".into())
+            let templates = sqlite_query_templates(&schema);
+            if templates.is_empty() {
+                return Err("no table or view has recognizable source and target columns".into());
+            }
+            Ok(templates)
         })();
         match result {
-            Ok((object_name, query)) => {
-                self.sql_query = query;
-                self.sql_validation_preview = None;
-                self.status = format!("SQL QUERY BUILT FROM {object_name}");
+            Ok(templates) => {
+                self.sql_schema_templates = templates;
+                self.sql_schema_template_index = 0;
+                self.sql_schema_template_source =
+                    Some((self.sql_path.clone(), self.case_path.clone()));
+                self.apply_sql_schema_template();
             }
-            Err(error) => self.status = format!("SQL SCHEMA INSPECTION FAILED · {error}"),
+            Err(error) => {
+                self.sql_schema_templates.clear();
+                self.sql_schema_template_index = 0;
+                self.sql_schema_template_source = None;
+                self.status = format!("SQL SCHEMA INSPECTION FAILED · {error}");
+            }
+        }
+    }
+
+    fn apply_sql_schema_template(&mut self) {
+        let Some((object_name, query)) = self
+            .sql_schema_templates
+            .get(self.sql_schema_template_index)
+            .cloned()
+        else {
+            return;
+        };
+        self.sql_query = query;
+        self.sql_validation_preview = None;
+        self.status = format!("SQL QUERY BUILT FROM {object_name}");
+    }
+
+    fn show_sql_schema_template_picker(&mut self, ui: &mut egui::Ui) {
+        let current_source = (self.sql_path.clone(), self.case_path.clone());
+        if self.sql_schema_template_source.as_ref() != Some(&current_source) {
+            self.sql_schema_templates.clear();
+            self.sql_schema_template_index = 0;
+            self.sql_schema_template_source = None;
+            return;
+        }
+        if self.sql_schema_templates.len() < 2 {
+            return;
+        }
+        let selected_text = self
+            .sql_schema_templates
+            .get(self.sql_schema_template_index)
+            .map(|(table, _)| table.as_str())
+            .unwrap_or("Choose table or view");
+        let mut selected_index = self.sql_schema_template_index;
+        egui::ComboBox::from_id_salt("sql_schema_template")
+            .selected_text(selected_text)
+            .show_ui(ui, |ui| {
+                for (index, (table, _)) in self.sql_schema_templates.iter().enumerate() {
+                    ui.selectable_value(&mut selected_index, index, table);
+                }
+            });
+        if selected_index != self.sql_schema_template_index {
+            self.sql_schema_template_index = selected_index;
+            self.apply_sql_schema_template();
         }
     }
 
@@ -5002,6 +5064,12 @@ impl eframe::App for App {
                                     }
                                 });
                                 ui.horizontal(|ui|{let mut limit_regressions=self.automation_maximum_regressions.is_some();if ui.checkbox(&mut limit_regressions,"Limit regressions").changed(){self.automation_maximum_regressions=limit_regressions.then_some(0);}if let Some(maximum)=self.automation_maximum_regressions.as_mut(){ui.label("Maximum removals/confidence declines");ui.add(egui::DragValue::new(maximum).range(0..=1_000_000));}if ui.button("Build query from schema").clicked(){self.build_sql_query_from_schema();}if ui.button("Validate query").clicked(){self.validate_sql_query();}if ui.button(if self.editing_automation_job.is_some(){"Save job changes"}else{"Add job"}).clicked(){self.save_automation_job();}if self.editing_automation_job.is_some()&&ui.button("Cancel edit").clicked(){self.cancel_automation_job_edit();}});
+                                if self.sql_schema_templates.len() > 1 {
+                                    ui.horizontal(|ui| {
+                                        ui.label("Query source table or view");
+                                        self.show_sql_schema_template_picker(ui);
+                                    });
+                                }
                                 ui.label(egui::RichText::new("A regression is a removed connection or confidence decline. Runs over either configured limit are saved as failed, with their snapshots retained.").small().color(muted));
                                 ui.add(egui::TextEdit::multiline(&mut self.sql_query).desired_width(canvas_w-20.0).desired_rows(5).code_editor());
                                 ui.label(egui::RichText::new("Named SQL parameters · name=value per line; bind as text with :name, @name, or $name").small().color(muted));
@@ -5286,6 +5354,12 @@ impl eframe::App for App {
                                 ui.label(egui::RichText::new("Named SQL parameters · name=value per line; bind as text with :name, @name, or $name").small().color(muted));
                                 ui.add(egui::TextEdit::multiline(&mut self.sql_parameter_text).desired_width(canvas_w-20.0).desired_rows(2).code_editor());
                                 ui.horizontal(|ui|{if ui.button("Build query from schema").clicked(){self.build_sql_query_from_schema();}if ui.button("Validate query").clicked(){self.validate_sql_query();}if ui.button("Ingest SQL snapshot").clicked(){self.ingest_sqlite_snapshot();}});
+                                if self.sql_schema_templates.len() > 1 {
+                                    ui.horizontal(|ui| {
+                                        ui.label("Query source table or view");
+                                        self.show_sql_schema_template_picker(ui);
+                                    });
+                                }
                                 Self::show_sql_validation_preview(ui, self.sql_validation_preview.as_ref(), &self.sql_path, &self.sql_series, &self.sql_query, &self.sql_parameter_text);
                                 if let Some(current)=latest {
                                     let capture_label=if selected_index==latest_index{"Latest snapshot"}else{"Selected historical snapshot"};
@@ -7720,7 +7794,7 @@ fn read_sqlite_schema(database_path: &str) -> Result<Vec<serde_json::Value>, Str
     Ok(schema)
 }
 
-fn sqlite_query_template(schema: &[serde_json::Value]) -> Option<(String, String)> {
+fn sqlite_query_templates(schema: &[serde_json::Value]) -> Vec<(String, String)> {
     let fields: [(&str, &[&str]); 11] = [
         (
             "source",
@@ -7777,9 +7851,14 @@ fn sqlite_query_template(schema: &[serde_json::Value]) -> Option<(String, String
         ),
         ("notes", &["notes", "description"]),
     ];
+    let mut templates = Vec::new();
     for object in schema {
-        let object_name = object["name"].as_str()?;
-        let columns = object["columns"].as_array()?;
+        let Some(object_name) = object["name"].as_str() else {
+            continue;
+        };
+        let Some(columns) = object["columns"].as_array() else {
+            continue;
+        };
         let matching_column = |aliases: &[&str]| {
             aliases.iter().find_map(|alias| {
                 columns.iter().find_map(|column| {
@@ -7800,7 +7879,7 @@ fn sqlite_query_template(schema: &[serde_json::Value]) -> Option<(String, String
                 ));
             }
         }
-        return Some((
+        templates.push((
             object_name.to_owned(),
             format!(
                 "SELECT {}\nFROM \"{}\";",
@@ -7809,7 +7888,11 @@ fn sqlite_query_template(schema: &[serde_json::Value]) -> Option<(String, String
             ),
         ));
     }
-    None
+    templates
+}
+
+fn sqlite_query_template(schema: &[serde_json::Value]) -> Option<(String, String)> {
+    sqlite_query_templates(schema).into_iter().next()
 }
 
 fn inspect_sqlite_schema_cli(database_path: &str, json_output: bool) -> Result<(), String> {
