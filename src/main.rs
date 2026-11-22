@@ -12,6 +12,8 @@ use std::{
     env, fs,
     io::Write,
     path::{Path, PathBuf},
+    sync::mpsc::{self, Receiver},
+    thread,
     time::{Duration, Instant},
 };
 use uuid::Uuid;
@@ -279,6 +281,13 @@ struct App {
         Option<usize>,
         Option<usize>,
     )>,
+    automation_worker: Option<Receiver<Result<AutomationWorkerResult, String>>>,
+}
+
+struct AutomationWorkerResult {
+    case: CaseFile,
+    disk_case_json: String,
+    status: String,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -561,6 +570,7 @@ impl Default for App {
             automation_maximum_skipped_rows: None,
             editing_automation_job: None,
             automation_editor_before_edit: None,
+            automation_worker: None,
         }
     }
 }
@@ -825,6 +835,7 @@ impl App {
             automation_maximum_skipped_rows: None,
             editing_automation_job: None,
             automation_editor_before_edit: None,
+            automation_worker: None,
         }
     }
 
@@ -2616,32 +2627,87 @@ impl App {
         self.status = "JOB EDIT CANCELED".into();
     }
 
-    fn run_automation_job(&mut self, id: Uuid) -> bool {
-        let Some(job) = self
-            .case
-            .automation_jobs
-            .iter()
-            .find(|job| job.id == id)
-            .cloned()
-        else {
-            self.status = "JOB RUN FAILED · job not found".into();
-            return false;
-        };
-        let editor_state = (
-            self.sql_path.clone(),
-            self.sql_series.clone(),
-            self.sql_query.clone(),
-            self.sql_parameter_text.clone(),
-        );
-        let (success, message) = self.execute_automation_job(&job);
-        (
-            self.sql_path,
-            self.sql_series,
-            self.sql_query,
-            self.sql_parameter_text,
-        ) = editor_state;
-        self.status = message;
-        success
+    fn start_automation_jobs(&mut self, job_ids: Vec<Uuid>, batch: bool) {
+        if self.automation_worker.is_some() {
+            self.status = "AUTOMATION ALREADY RUNNING".into();
+            return;
+        }
+        if self.has_unsaved_changes() || self.disk_case_json.is_none() {
+            self.status = "SAVE CASE AND JOB CHANGES BEFORE RUNNING AUTOMATION".into();
+            return;
+        }
+        if job_ids.is_empty() {
+            self.status = "NO AUTOMATION JOBS TO RUN".into();
+            return;
+        }
+        let case_path = self.case_path.clone();
+        let expected_disk_json = self.disk_case_json.clone().unwrap_or_default();
+        let (sender, receiver) = mpsc::channel();
+        let spawn_result = thread::Builder::new()
+            .name("arch-notebook-automation".into())
+            .spawn(move || {
+                let result = (|| -> Result<AutomationWorkerResult, String> {
+                    let path = Path::new(&case_path);
+                    let _case_lock = lock_automation_case(path)?;
+                    let disk_json = fs::read_to_string(path)
+                        .map_err(|error| format!("cannot read case: {error}"))?;
+                    if disk_json != expected_disk_json {
+                        return Err("case file changed outside this app; reload it before running automation".into());
+                    }
+                    let mut case = serde_json::from_str::<CaseFile>(&disk_json)
+                        .map_err(|error| format!("cannot parse case: {error}"))?;
+                    normalize_snapshot_database_paths(&mut case, &case_path);
+                    let mut worker = App::automation_context(case, &case_path);
+                    let jobs: Vec<_> = job_ids
+                        .iter()
+                        .filter_map(|id| worker.case.automation_jobs.iter().find(|job| job.id == *id).cloned())
+                        .collect();
+                    if jobs.len() != job_ids.len() {
+                        return Err("one or more automation jobs no longer exist; reload the case".into());
+                    }
+                    let job_count = jobs.len();
+                    let job_names: Vec<_> = jobs.iter().map(|job| job.name.clone()).collect();
+                    let mut passed = 0;
+                    for job in jobs {
+                        if worker.run_automation_job_cli(&job).0 {
+                            passed += 1;
+                        }
+                        let serialized = serde_json::to_string_pretty(&worker.case)
+                            .map_err(|error| error.to_string())?;
+                        save_case_atomically(path, &worker.case)?;
+                        worker.disk_case_json = Some(serialized.clone());
+                    }
+                    let status = if batch {
+                        format!(
+                            "AUTOMATION RUN COMPLETE · {passed} PASSED · {} FAILED · {job_count} JOBS · CASE SAVED",
+                            job_count - passed
+                        )
+                    } else {
+                        format!(
+                            "JOB RUN · {} · {} · CASE SAVED",
+                            job_names.first().map(String::as_str).unwrap_or("(unnamed)"),
+                            if passed == 1 { "PASSED" } else { "FAILED" },
+                        )
+                    };
+                    let disk_case_json = worker
+                        .disk_case_json
+                        .unwrap_or(serde_json::to_string(&worker.case).map_err(|error| error.to_string())?);
+                    Ok(AutomationWorkerResult {
+                        case: worker.case,
+                        disk_case_json,
+                        status,
+                    })
+                })();
+                let _ = sender.send(result);
+            });
+        match spawn_result {
+            Ok(_) => {
+                self.automation_worker = Some(receiver);
+                self.status =
+                    "AUTOMATION RUNNING · CASE LOCKED · CHECKPOINTS SAVED AFTER EACH JOB".into();
+            }
+            Err(error) => self.status = format!("AUTOMATION START FAILED · {error}"),
+        }
     }
 
     fn validate_automation_job(&mut self, id: Uuid) -> bool {
@@ -2896,7 +2962,7 @@ impl App {
         };
     }
 
-    fn run_enabled_automation_jobs(&mut self) {
+    fn start_enabled_automation_jobs(&mut self) {
         let jobs: Vec<Uuid> = self
             .case
             .automation_jobs
@@ -2908,24 +2974,7 @@ impl App {
             self.status = "NO ENABLED AUTOMATION JOBS".into();
             return;
         }
-        let count = jobs.len();
-        let mut passed = 0;
-        let editor_state = (
-            self.sql_path.clone(),
-            self.sql_series.clone(),
-            self.sql_query.clone(),
-        );
-        for id in jobs {
-            if self.run_automation_job(id) {
-                passed += 1;
-            }
-            self.save_automation_results("AUTOMATION JOB CHECKPOINT");
-        }
-        (self.sql_path, self.sql_series, self.sql_query) = editor_state;
-        let failed = count - passed;
-        let summary =
-            format!("AUTOMATION RUN COMPLETE · {passed} PASSED · {failed} FAILED · {count} JOBS");
-        self.save_automation_results(&summary);
+        self.start_automation_jobs(jobs, true);
     }
 
     fn export_delimited(&mut self) {
@@ -4984,6 +5033,56 @@ fn comparison_key(connection: &ConnectionFact) -> String {
     format!("natural:{key}")
 }
 
+fn snapshot_case_link_index(
+    case: &CaseFile,
+    snapshot: &ConnectionSnapshot,
+    fact: &ConnectionFact,
+) -> Option<usize> {
+    let find_endpoint = |name: &str, kind: &str, external_id: &str| {
+        let matches: Vec<Uuid> =
+            case.entities
+                .iter()
+                .filter(|entity| {
+                    if !external_id.trim().is_empty() {
+                        entity.external_ids.iter().any(|(source, id)| {
+                            source == &snapshot.database_path && id == external_id
+                        })
+                    } else {
+                        (entity.name.eq_ignore_ascii_case(name)
+                            || entity
+                                .aliases
+                                .iter()
+                                .any(|alias| alias.eq_ignore_ascii_case(name)))
+                            && compatible_entity_types(&entity.kind, kind)
+                    }
+                })
+                .map(|entity| entity.id)
+                .collect();
+        (matches.len() == 1).then(|| matches[0])
+    };
+    let source = find_endpoint(&fact.source, &fact.source_type, &fact.source_entity_id)?;
+    let target = find_endpoint(&fact.target, &fact.target_type, &fact.target_entity_id)?;
+    let matches: Vec<usize> = case
+        .links
+        .iter()
+        .enumerate()
+        .filter(|(_, link)| {
+            link.ingest_source.as_deref() == Some(snapshot.source_key.as_str())
+                && if !fact.connection_id.is_empty() {
+                    link.connection_id == fact.connection_id
+                } else {
+                    link.connection_id.is_empty()
+                        && link.label.eq_ignore_ascii_case(&fact.relationship)
+                        && link.directed == fact.directed
+                        && ((link.from == source && link.to == target)
+                            || (!fact.directed && link.from == target && link.to == source))
+                }
+        })
+        .map(|(index, _)| index)
+        .collect();
+    (matches.len() == 1).then(|| matches[0])
+}
+
 fn delta_order(kinds: &[DeltaKind]) -> u8 {
     [
         DeltaKind::Removed,
@@ -5290,6 +5389,44 @@ fn shortest_path(case: &CaseFile, start: Uuid, goal: Uuid) -> Option<Vec<Uuid>> 
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
+        if let Some(worker_state) = self.automation_worker.as_ref().map(Receiver::try_recv) {
+            match worker_state {
+                Ok(Ok(result)) => {
+                    self.automation_worker = None;
+                    self.case = result.case;
+                    self.disk_case_json = Some(result.disk_case_json);
+                    self.saved_case_json = self.current_case_json();
+                    self.invalidate_network_groups();
+                    self.status = result.status;
+                }
+                Ok(Err(error)) => {
+                    self.automation_worker = None;
+                    self.status = format!("AUTOMATION FAILED · {error}");
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.automation_worker = None;
+                    self.status =
+                        "AUTOMATION FAILED · background worker stopped unexpectedly".into();
+                }
+                Err(mpsc::TryRecvError::Empty) => {
+                    ctx.request_repaint_after(Duration::from_millis(250));
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        ui.vertical_centered(|ui| {
+                            ui.add_space(ui.available_height() * 0.35);
+                            ui.heading("SQL automation is running");
+                            ui.add_space(10.0);
+                            ui.add(egui::Spinner::new());
+                            ui.add_space(10.0);
+                            ui.label("The window remains responsive. Case editing is paused while the run owns the case lock.");
+                            ui.label("Each job result is saved as a checkpoint.");
+                            ui.add_space(12.0);
+                            ui.label(&self.status);
+                        });
+                    });
+                    return;
+                }
+            }
+        }
         let (save, save_as, delete, escape, workspace_shortcut) = ctx.input(|input| {
             (
                 input.key_pressed(egui::Key::S) && input.modifiers.command,
@@ -5581,7 +5718,7 @@ impl eframe::App for App {
                                         )
                                         .clicked()
                                     {
-                                        self.run_enabled_automation_jobs();
+                                        self.start_enabled_automation_jobs();
                                     }
                                 });
                                 ui.add_space(8.0);
@@ -5684,7 +5821,7 @@ impl eframe::App for App {
                                             );
                                         });
                                 }
-                                if let Some((verb,id))=action {match verb.as_str(){"validate"=>{self.validate_automation_job(id);},"edit"=>self.edit_automation_job(id),"run"=>{let job_name=self.case.automation_jobs.iter().find(|job|job.id==id).map(|job|job.name.clone()).unwrap_or_else(||"(missing job)".into());let passed=self.run_automation_job(id);let summary=format!("JOB RUN {} · {job_name}",if passed{"PASSED"}else{"FAILED"});self.save_automation_results(&summary);},"delete"=>{if self.editing_automation_job==Some(id){self.cancel_automation_job_edit();}self.case.automation_jobs.retain(|job|job.id!=id);self.status="AUTOMATION JOB DELETED".into();},_=>{}}}
+                                if let Some((verb,id))=action {match verb.as_str(){"validate"=>{self.validate_automation_job(id);},"edit"=>self.edit_automation_job(id),"run"=>self.start_automation_jobs(vec![id],false),"delete"=>{if self.editing_automation_job==Some(id){self.cancel_automation_job_edit();}self.case.automation_jobs.retain(|job|job.id!=id);self.status="AUTOMATION JOB DELETED".into();},_=>{}}}
                                 ui.add_space(8.0);ui.label(egui::RichText::new("RUN HISTORY · newest first").small().strong().color(cyan));
                                 let mut review_snapshot = None;
                                 let mut replay_run = None;
