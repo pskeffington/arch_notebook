@@ -147,21 +147,19 @@ To resume the same batch after an interruption, add `--skip-recent-success` to `
 
 Run history is bounded to the latest 200 records. Each run retains the job configuration and SQL query used, including failures, so later job edits or deletion do not erase the run context; expand a row in the desktop history to inspect it. Select **Replay saved configuration** to run that exact saved SQL, parameters, and thresholds against the current SQLite source; replay appends a new run and snapshot without changing the job definition. The new run records the ID of the run it replayed, in both desktop history and `--list-runs --json` output. Older runs that predate this configuration capture are labeled as such rather than showing default values as if they were recorded settings. Successful runs include a comparison with the previous snapshot in the same database and series; the history records removed connections, confidence declines, date changes, additions, confidence increases, and other updates. Each snapshot has a stable ID, and automation run records link directly to it; older cases migrate those links from their saved snapshot indices when loaded. In the desktop app, use **Review snapshot #N** beside a run or select any numbered capture in **Snapshot history** to compare it with the preceding capture in that series; the capture number disambiguates runs recorded within the same clock interval. Batch summaries report passed and failed job counts. The runner continues through the selected jobs if one fails, saves each outcome, and exits nonzero when any job fails.
 
-On Arch Linux with systemd, copy the example user units installed with the package and edit the case path in the service if needed. From a source checkout, use the corresponding files under `packaging/systemd/` instead:
+On Arch Linux with systemd, configure enabled jobs in the app, then install the hourly timer for the default case:
 
 ```sh
-mkdir -p ~/.config/systemd/user
-unit_dir=/usr/share/arch-notebook/systemd
-[ -d "$unit_dir" ] || unit_dir=packaging/systemd
-cp "$unit_dir/arch-notebook-automation.service" "$unit_dir/arch-notebook-automation.timer" ~/.config/systemd/user/
-systemctl --user daemon-reload
-systemctl --user enable --now arch-notebook-automation.timer
+arch-notebook-install-automation
 ```
 
-The timer runs hourly, catches up a missed run after the machine was offline, and adds up to five minutes of randomized delay. User timers run only while the user systemd manager is active; to keep it running after logout and start it at boot, enable lingering for the account with `loginctl enable-linger "$USER"`. The service allows a run up to one hour to finish; adjust `TimeoutStartSec` for longer queries. Run the service immediately with `systemctl --user start arch-notebook-automation.service`; inspect results and errors with `journalctl --user -u arch-notebook-automation.service`. The example case path assumes the default Linux data directory; change it to the case file you want scheduled. On macOS, install the LaunchAgent for a readable case file and app bundle:
+Pass a case-file path to schedule a different case. The installer writes user-owned units under `${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user`, validates the case, and enables the timer. It runs hourly, catches up a missed run after the machine was offline, and adds up to five minutes of randomized delay. User timers run only while the user systemd manager is active; to keep it running after logout and start it at boot, enable lingering for the account with `loginctl enable-linger "$USER"`. The service allows a run up to one hour to finish. Run it immediately with `systemctl --user start arch-notebook-automation.service`; inspect results with `journalctl --user -u arch-notebook-automation.service`. On macOS, first open the app and enable jobs, then install the bundled LaunchAgent for the case:
 
 ```sh
-scripts/install-macos-automation.sh "$HOME/Library/Application Support/Arch Notebook/harbor-light.case.json" "/Applications/Arch Notebook.app"
+app_bundle="/Applications/Arch Notebook.app"
+bash "$app_bundle/Contents/Resources/install-macos-automation.sh" \
+  "$HOME/Library/Application Support/Arch Notebook/harbor-light.case.json" \
+  "$app_bundle"
 ```
 
 The installer writes and validates a per-user LaunchAgent plist, then loads it for the current login session. It runs once when loaded and hourly afterward; inspect `~/Library/Logs/arch-notebook-automation.log` and `~/Library/Logs/arch-notebook-automation-error.log`. To remove the schedule, run `launchctl bootout "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.archnotebook.automation.plist"` and remove that plist. Keep the SQLite source available at the configured path when automation runs.
