@@ -117,7 +117,13 @@ Replay a recorded automation run by its run UUID, including its saved query, par
 cargo run --offline -- --rerun-run harbor-light.case.json <run-id> --json
 ```
 
-The command saves a new run and snapshot, leaves the job definition unchanged, and reports `rerun_of` in JSON. It works even if the original job was edited or removed, but rejects older run records that did not preserve their configuration. Get the UUID from `--list-runs --json`.
+To check the same saved configuration against the current SQLite source without saving a snapshot or run, use `--validate-run` first:
+
+```sh
+cargo run --offline -- --validate-run harbor-light.case.json <run-id> --json
+```
+
+Validation leaves the case unchanged. Rerun saves a new run and snapshot, leaves the job definition unchanged, and reports `rerun_of` in JSON. Both commands work even if the original job was edited or removed, but reject older run records that did not preserve their configuration. Get the UUID from `--list-runs --json`.
 
 To resume the same batch after an interruption, add `--skip-recent-success` to `--run-enabled-jobs`. A job is skipped only when its newest recorded run for the exact current database path, series, SQL query, parameters, and limits succeeded. A changed configuration, missing historical configuration, or latest failure runs again. Skips are reported separately in JSON (`skipped_jobs`) with their effective SQL configuration, prior run ID, and duration; they do not add snapshots, run history, or rewrite the case when every selected job is skipped. Omit this flag for regular scheduled captures so each invocation reads fresh source data.
 
@@ -134,7 +140,13 @@ systemctl --user daemon-reload
 systemctl --user enable --now arch-notebook-automation.timer
 ```
 
-The timer runs hourly, catches up a missed run after the machine was offline, and adds up to five minutes of randomized delay. User timers run only while the user systemd manager is active; to keep it running after logout and start it at boot, enable lingering for the account with `loginctl enable-linger "$USER"`. The service allows a run up to one hour to finish; adjust `TimeoutStartSec` for longer queries. Run the service immediately with `systemctl --user start arch-notebook-automation.service`; inspect results and errors with `journalctl --user -u arch-notebook-automation.service`. The example case path assumes the default Linux data directory; change it to the case file you want scheduled. On macOS, edit `packaging/macos/com.archnotebook.automation.plist` to point to your installed app and case, copy it into `~/Library/LaunchAgents`, then load it with `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.archnotebook.automation.plist`; it runs at login and hourly. Validate the edited file with `plutil -lint` and inspect the configured output logs after a run. Keep the SQLite source available at the configured path when automation runs.
+The timer runs hourly, catches up a missed run after the machine was offline, and adds up to five minutes of randomized delay. User timers run only while the user systemd manager is active; to keep it running after logout and start it at boot, enable lingering for the account with `loginctl enable-linger "$USER"`. The service allows a run up to one hour to finish; adjust `TimeoutStartSec` for longer queries. Run the service immediately with `systemctl --user start arch-notebook-automation.service`; inspect results and errors with `journalctl --user -u arch-notebook-automation.service`. The example case path assumes the default Linux data directory; change it to the case file you want scheduled. On macOS, install the LaunchAgent for a readable case file and app bundle:
+
+```sh
+scripts/install-macos-automation.sh "$HOME/Library/Application Support/Arch Notebook/harbor-light.case.json" "/Applications/Arch Notebook.app"
+```
+
+The installer writes and validates a per-user LaunchAgent plist, then loads it for the current login session. It runs once when loaded and hourly afterward; inspect `~/Library/Logs/arch-notebook-automation.log` and `~/Library/Logs/arch-notebook-automation-error.log`. To remove the schedule, run `launchctl bootout "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.archnotebook.automation.plist"` and remove that plist. Keep the SQLite source available at the configured path when automation runs.
 
 ## Other notebook workflows
 

@@ -7376,6 +7376,89 @@ fn apply_sql_parameter_overrides(
     Ok(())
 }
 
+fn automation_job_from_run(prior_run: &AutomationRun) -> Result<AutomationJob, String> {
+    if !prior_run.configuration_recorded {
+        return Err(format!(
+            "automation run {} does not contain a saved configuration",
+            prior_run.id
+        ));
+    }
+    Ok(AutomationJob {
+        id: prior_run.job_id,
+        name: prior_run.job_name.clone(),
+        database_path: prior_run.database_path.clone(),
+        series: prior_run.series.clone(),
+        query: prior_run.query.clone(),
+        parameters: prior_run.parameters.clone(),
+        enabled: prior_run.enabled,
+        minimum_connections: prior_run.minimum_connections,
+        maximum_regressions: prior_run.maximum_regressions,
+        maximum_skipped_rows: prior_run.maximum_skipped_rows,
+    })
+}
+
+fn validate_saved_automation_configuration_cli(
+    case_path: &str,
+    run_id: Uuid,
+    json_output: bool,
+) -> Result<bool, String> {
+    let content =
+        fs::read_to_string(case_path).map_err(|error| format!("cannot read case: {error}"))?;
+    let case = serde_json::from_str::<CaseFile>(&content)
+        .map_err(|error| format!("cannot parse case: {error}"))?;
+    let prior_run = case
+        .automation_runs
+        .iter()
+        .find(|run| run.id == run_id)
+        .ok_or_else(|| format!("automation run not found: {run_id}"))?;
+    let job = automation_job_from_run(prior_run)?;
+    let mut app = App::automation_context(case, case_path);
+    normalize_snapshot_database_paths(&mut app.case, &app.case_path);
+    app.sql_path = job.database_path.clone();
+    app.sql_series = job.series.clone();
+    app.sql_query = job.query.clone();
+    app.sql_parameter_text = format_sql_parameters(&job.parameters);
+    app.automation_minimum_connections = job.minimum_connections;
+    app.automation_maximum_regressions = job.maximum_regressions;
+    app.automation_maximum_skipped_rows = job.maximum_skipped_rows;
+    let started = Instant::now();
+    let snapshot_count_before = app.case.snapshots.len();
+    let success = app.validate_sql_query_for_batch();
+    let message = app.status.clone();
+    let snapshot = app.case.snapshots.get(snapshot_count_before);
+    let previous = snapshot
+        .and_then(|_| previous_snapshot_index(&app.case, snapshot_count_before))
+        .and_then(|index| app.case.snapshots.get(index));
+    let duration_ms = started.elapsed().as_millis() as u64;
+    if json_output {
+        let mut outcome =
+            automation_outcome_json(&job, success, &message, None, snapshot, previous);
+        outcome["duration_ms"] = serde_json::json!(duration_ms);
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "schema_version": 1,
+                "ok": success,
+                "saved": false,
+                "case": case_path,
+                "validated_run_id": run_id,
+                "passed": usize::from(success),
+                "failed": usize::from(!success),
+                "outcomes": [outcome],
+            }))
+            .map_err(|error| error.to_string())?
+        );
+    } else {
+        println!(
+            "{} · {} · {}",
+            if success { "PASS" } else { "FAIL" },
+            job.name,
+            message
+        );
+    }
+    Ok(success)
+}
+
 fn rerun_saved_automation_configuration_cli(
     case_path: &str,
     run_id: Uuid,
@@ -7391,23 +7474,7 @@ fn rerun_saved_automation_configuration_cli(
         .iter()
         .find(|run| run.id == run_id)
         .ok_or_else(|| format!("automation run not found: {run_id}"))?;
-    if !prior_run.configuration_recorded {
-        return Err(format!(
-            "automation run {run_id} does not contain a saved configuration"
-        ));
-    }
-    let job = AutomationJob {
-        id: prior_run.job_id,
-        name: prior_run.job_name.clone(),
-        database_path: prior_run.database_path.clone(),
-        series: prior_run.series.clone(),
-        query: prior_run.query.clone(),
-        parameters: prior_run.parameters.clone(),
-        enabled: prior_run.enabled,
-        minimum_connections: prior_run.minimum_connections,
-        maximum_regressions: prior_run.maximum_regressions,
-        maximum_skipped_rows: prior_run.maximum_skipped_rows,
-    };
+    let job = automation_job_from_run(prior_run)?;
     let mut app = App::automation_context(case, case_path);
     normalize_snapshot_database_paths(&mut app.case, &app.case_path);
     let (success, message) = app.run_automation_job_cli(&job);
@@ -8056,7 +8123,7 @@ fn main() -> eframe::Result<()> {
         .is_some_and(|arg| arg == "--help" || arg == "-h")
     {
         println!(
-            "Arch Notebook\n\nUsage:\n  arch-notebook\n  arch-notebook --export-graphml <case.json> <output.graphml> [--json]\n  arch-notebook --export-sql-comparison <case.json> <baseline-snapshot-id> <current-snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --list-jobs <case.json> [--enabled-only] [--json]\n  arch-notebook --list-runs <case.json> [--json] [--job <name-or-id>] [--offset <count>] [--limit <count>]\n  arch-notebook --validate-enabled-jobs <case.json> [--json] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --run-enabled-jobs <case.json> [--json] [--skip-recent-success] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --run-job <case.json> <job-name-or-id> [--param name=value ...] [--json]\n  arch-notebook --rerun-run <case.json> <run-id> [--json]\n\nJob and run listing and validation do not change the case. Run history is newest first and can be filtered or paged. SQL comparisons can be exported from saved snapshots for downstream tools. Batch runs save snapshots and run history to the case file. JSON output is available for scheduler integration."
+            "Arch Notebook\n\nUsage:\n  arch-notebook\n  arch-notebook --export-graphml <case.json> <output.graphml> [--json]\n  arch-notebook --export-sql-comparison <case.json> <baseline-snapshot-id> <current-snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --list-jobs <case.json> [--enabled-only] [--json]\n  arch-notebook --list-runs <case.json> [--json] [--job <name-or-id>] [--offset <count>] [--limit <count>]\n  arch-notebook --validate-enabled-jobs <case.json> [--json] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --validate-run <case.json> <run-id> [--json]\n  arch-notebook --run-enabled-jobs <case.json> [--json] [--skip-recent-success] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --run-job <case.json> <job-name-or-id> [--param name=value ...] [--json]\n  arch-notebook --rerun-run <case.json> <run-id> [--json]\n\nJob and run listing and validation do not change the case. Run history is newest first and can be filtered or paged. SQL comparisons can be exported from saved snapshots for downstream tools. Batch runs save snapshots and run history to the case file. JSON output is available for scheduler integration."
         );
         return Ok(());
     }
@@ -8303,6 +8370,27 @@ fn main() -> eframe::Result<()> {
             Err(error) => report_cli_error("automation failed", error, json_output),
             Ok(false) => {
                 eprintln!("automation failed; run history saved");
+                std::process::exit(1);
+            }
+            Ok(true) => {}
+        }
+        return Ok(());
+    }
+    if args.first().is_some_and(|arg| arg == "--validate-run") {
+        let json_output = args.iter().any(|arg| arg == "--json");
+        let usage = "usage: arch-notebook --validate-run <case.json> <run-id> [--json]";
+        let (Some(case_path), Some(run_id)) = (args.get(1), args.get(2)) else {
+            report_cli_usage_error(usage, json_output);
+        };
+        if args.len() > 4 || args.get(3).is_some_and(|arg| arg != "--json") {
+            report_cli_usage_error(usage, json_output);
+        }
+        let run_id = Uuid::parse_str(run_id)
+            .unwrap_or_else(|_| report_cli_usage_error("invalid run UUID", json_output));
+        match validate_saved_automation_configuration_cli(case_path, run_id, json_output) {
+            Err(error) => report_cli_error("automation validation failed", error, json_output),
+            Ok(false) => {
+                eprintln!("automation validation failed; case file was not changed");
                 std::process::exit(1);
             }
             Ok(true) => {}
