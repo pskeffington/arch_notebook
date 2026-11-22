@@ -8,7 +8,7 @@ use std::{
 };
 use uuid::Uuid;
 
-const CURRENT_CASE_FORMAT_VERSION: u32 = 7;
+const CURRENT_CASE_FORMAT_VERSION: u32 = 8;
 
 #[derive(Clone, Serialize, Deserialize)]
 struct Entity {
@@ -92,6 +92,8 @@ struct ConnectionSnapshot {
     query: String,
     captured_at: String,
     connections: Vec<ConnectionFact>,
+    #[serde(default)]
+    skipped_rows: usize,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -1641,6 +1643,7 @@ impl App {
             let notes = col("notes", &["notes", "description"])?;
             let mut facts = Vec::new();
             let mut explicit_ids = HashSet::new();
+            let mut skipped_rows = 0;
             let mut rows = statement.query([]).map_err(|e| e.to_string())?;
             while let Some(row) = rows.next().map_err(|e| e.to_string())? {
                 let source_name = sql_value(row, Some(source))
@@ -1652,6 +1655,7 @@ impl App {
                     .trim()
                     .to_string();
                 if source_name.is_empty() || target_name.is_empty() {
+                    skipped_rows += 1;
                     continue;
                 }
                 let source_kind = sql_value(row, source_type).map_err(|e| e.to_string())?;
@@ -1784,12 +1788,14 @@ impl App {
                 query,
                 captured_at,
                 connections: facts,
+                skipped_rows,
             };
             Ok((entities, links, snapshot))
         })();
         match result {
             Ok((entities, links, snapshot)) => {
                 let count = snapshot.connections.len();
+                let skipped_rows = snapshot.skipped_rows;
                 self.sql_snapshot_source = Some(snapshot.source_key.clone());
                 self.selected_link = previously_selected
                     .as_ref()
@@ -1799,7 +1805,13 @@ impl App {
                 self.case.snapshots.push(snapshot);
                 self.sql_snapshot_index = Some(self.case.snapshots.len() - 1);
                 self.path_result.clear();
-                self.status = format!("SQL SNAPSHOT INGESTED · {count} CONNECTIONS");
+                self.status = if skipped_rows == 0 {
+                    format!("SQL SNAPSHOT INGESTED · {count} CONNECTIONS")
+                } else {
+                    format!(
+                        "SQL SNAPSHOT INGESTED · {count} CONNECTIONS · {skipped_rows} ROWS SKIPPED (EMPTY ENDPOINT)"
+                    )
+                };
             }
             Err(error) => self.status = format!("SQL INGEST FAILED · {error}"),
         }
@@ -1916,6 +1928,15 @@ impl App {
                 .as_ref()
                 .map(|snapshot| snapshot.connections.len())
                 .unwrap_or_default();
+            let skipped_rows = snapshot
+                .as_ref()
+                .map(|snapshot| snapshot.skipped_rows)
+                .unwrap_or_default();
+            let skipped = if skipped_rows == 0 {
+                String::new()
+            } else {
+                format!(" · {skipped_rows} ROWS SKIPPED (EMPTY ENDPOINT)")
+            };
             let threshold = if count < self.automation_minimum_connections {
                 format!(
                     " · BELOW MINIMUM ({} REQUIRED)",
@@ -1938,7 +1959,7 @@ impl App {
                 None => String::new(),
             };
             format!(
-                "SQL QUERY VALID · {count} CONNECTIONS{threshold}{regression_threshold} · CASE UNCHANGED"
+                "SQL QUERY VALID · {count} CONNECTIONS{skipped}{threshold}{regression_threshold} · CASE UNCHANGED"
             )
         } else {
             self.status
@@ -2416,6 +2437,11 @@ impl App {
         baseline: &ConnectionSnapshot,
         current: &ConnectionSnapshot,
     ) {
+        let temporary_path = (!self.export_path.trim().is_empty()).then(|| {
+            let mut path = self.export_path.trim().to_string();
+            path.push_str(&format!(".tmp-{}", Uuid::new_v4()));
+            PathBuf::from(path)
+        });
         let result = (|| -> Result<usize, String> {
             if self.export_path.trim().is_empty() {
                 return Err("export path cannot be empty".into());
@@ -2424,7 +2450,7 @@ impl App {
             let deltas = compare_snapshots(baseline, current);
             let mut writer = csv::WriterBuilder::new()
                 .delimiter(delimited_text_delimiter(&self.export_path))
-                .from_path(&self.export_path)
+                .from_path(temporary_path.as_ref().expect("non-empty export path"))
                 .map_err(|error| error.to_string())?;
             writer
                 .write_record([
@@ -2462,8 +2488,10 @@ impl App {
                     "series",
                     "baseline_snapshot_id",
                     "baseline_captured_at",
+                    "baseline_skipped_rows",
                     "current_snapshot_id",
                     "current_captured_at",
+                    "current_skipped_rows",
                 ])
                 .map_err(|error| error.to_string())?;
             for delta in &deltas {
@@ -2528,16 +2556,29 @@ impl App {
                     current.series.clone(),
                     baseline.id.to_string(),
                     baseline.captured_at.clone(),
+                    baseline.skipped_rows.to_string(),
                     current.id.to_string(),
                     current.captured_at.clone(),
+                    current.skipped_rows.to_string(),
                 ]);
                 writer
                     .write_record(record)
                     .map_err(|error| error.to_string())?;
             }
             writer.flush().map_err(|error| error.to_string())?;
+            drop(writer);
+            fs::rename(
+                temporary_path.as_ref().expect("non-empty export path"),
+                self.export_path.trim(),
+            )
+            .map_err(|error| format!("cannot replace export file: {error}"))?;
             Ok(deltas.len())
         })();
+        if result.is_err()
+            && let Some(temporary_path) = temporary_path
+        {
+            let _ = fs::remove_file(temporary_path);
+        }
         self.status = match result {
             Ok(count) => format!(
                 "SQL COMPARISON EXPORTED · {} · {count} CHANGES · {}",
@@ -4074,7 +4115,12 @@ impl eframe::App for App {
                                 ui.horizontal(|ui|{if ui.button("Validate query").clicked(){self.validate_sql_query();}if ui.button("Ingest SQL snapshot").clicked(){self.ingest_sqlite_snapshot();}});
                                 if let Some(current)=latest {
                                     let capture_label=if selected_index==latest_index{"Latest snapshot"}else{"Selected historical snapshot"};
-                                    ui.label(format!("{capture_label} #{}: {} · {} · {} connections",selected_index.map(|index|index+1).unwrap_or_default(),current.captured_at,current.series,current.connections.len()));
+                                    let skipped = if current.skipped_rows == 0 {
+                                        String::new()
+                                    } else {
+                                        format!(" · {} rows skipped", current.skipped_rows)
+                                    };
+                                    ui.label(format!("{capture_label} #{}: {} · {} · {} connections{skipped}",selected_index.map(|index|index+1).unwrap_or_default(),current.captured_at,current.series,current.connections.len()));
                                     if let Some(base)=baseline {
                                         let deltas=compare_snapshots(&base,&current);
                                         let count=|kind|deltas.iter().filter(|delta|delta.kinds.contains(&kind)).count();
@@ -4115,7 +4161,7 @@ impl eframe::App for App {
                                     } else {ui.label(egui::RichText::new("This is the baseline snapshot for its database and series. Ingest the next period with the same series to compare connections.").color(muted));}
                                 } else {ui.label(egui::RichText::new("No SQL snapshots yet. Ingest a baseline result, then ingest a later result using the same database and series label.").color(muted));}
                                 ui.add_space(8.0);ui.label(egui::RichText::new("SNAPSHOT HISTORY · select a capture to compare").small().strong().color(cyan));
-                                for (index,snapshot) in self.case.snapshots.iter().enumerate().rev(){if self.sql_snapshot_source.as_deref()==Some(snapshot.source_key.as_str())&&ui.selectable_label(selected_index==Some(index),format!("Snapshot #{} · {} · {} · {} connections · {}",index+1,snapshot.captured_at,snapshot.series,snapshot.connections.len(),snapshot.database_path)).clicked(){self.sql_snapshot_index=Some(index);}}
+                                for (index,snapshot) in self.case.snapshots.iter().enumerate().rev(){if self.sql_snapshot_source.as_deref()==Some(snapshot.source_key.as_str()){let skipped=if snapshot.skipped_rows==0{String::new()}else{format!(" · {} skipped",snapshot.skipped_rows)};if ui.selectable_label(selected_index==Some(index),format!("Snapshot #{} · {} · {} · {} connections{skipped} · {}",index+1,snapshot.captured_at,snapshot.series,snapshot.connections.len(),snapshot.database_path)).clicked(){self.sql_snapshot_index=Some(index);}}}
                                 return;
                             }
                             ui.horizontal(|ui|{ui.add(egui::TextEdit::singleline(&mut self.data_query).hint_text(if self.data_mode==DataMode::Entities{"Filter entities…"}else{"Filter connections…"}).desired_width(240.0));if self.data_mode==DataMode::Relationships{let selected_entity=self.selected.is_some_and(|id|self.case.entities.iter().any(|entity|entity.id==id));ui.add_enabled(selected_entity,egui::Checkbox::new(&mut self.connections_for_selected,"Selected entity connections"));egui::ComboBox::from_id_salt("link_sort").selected_text(match self.link_sort {LinkSort::RecordId=>"Sort: record ID",LinkSort::Source=>"Sort: source",LinkSort::Date=>"Sort: date",LinkSort::Relationship=>"Sort: relationship",LinkSort::Target=>"Sort: target",LinkSort::Confidence=>"Sort: confidence",LinkSort::SourceReference=>"Sort: source reference"}).show_ui(ui,|ui|{ui.selectable_value(&mut self.link_sort,LinkSort::RecordId,"Record ID");ui.selectable_value(&mut self.link_sort,LinkSort::Source,"Source");ui.selectable_value(&mut self.link_sort,LinkSort::Relationship,"Relationship");ui.selectable_value(&mut self.link_sort,LinkSort::Target,"Target");ui.selectable_value(&mut self.link_sort,LinkSort::Date,"Date");ui.selectable_value(&mut self.link_sort,LinkSort::Confidence,"Confidence");ui.selectable_value(&mut self.link_sort,LinkSort::SourceReference,"Source reference");});}});
@@ -5124,11 +5170,23 @@ fn list_automation_runs_cli(case_path: &str, json_output: bool) -> Result<(), St
         fs::read_to_string(case_path).map_err(|error| format!("cannot read case: {error}"))?;
     let case = serde_json::from_str::<CaseFile>(&content)
         .map_err(|error| format!("cannot parse case: {error}"))?;
+    let snapshots_by_id: HashMap<Uuid, &ConnectionSnapshot> = case
+        .snapshots
+        .iter()
+        .map(|snapshot| (snapshot.id, snapshot))
+        .collect();
     let runs: Vec<serde_json::Value> = case
         .automation_runs
         .iter()
         .rev()
         .map(|run| {
+            let snapshot = run
+                .snapshot_id
+                .and_then(|id| snapshots_by_id.get(&id).copied())
+                .or_else(|| {
+                    run.snapshot_index
+                        .and_then(|index| case.snapshots.get(index))
+                });
             serde_json::json!({
                 "id": run.id,
                 "job_id": run.job_id,
@@ -5139,6 +5197,8 @@ fn list_automation_runs_cli(case_path: &str, json_output: bool) -> Result<(), St
                 "database_path": run.database_path,
                 "series": run.series,
                 "snapshot_id": run.snapshot_id,
+                "connection_count": snapshot.map(|snapshot| snapshot.connections.len()),
+                "skipped_rows": snapshot.map(|snapshot| snapshot.skipped_rows),
                 "message": run.message,
                 "configuration_recorded": run.configuration_recorded,
             })
