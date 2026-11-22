@@ -234,6 +234,8 @@ struct ImportColumnMapping {
     source_reference: String,
     ingest_source: String,
     record_type: String,
+    source_entity_id: String,
+    target_entity_id: String,
     source_detail: String,
     target_detail: String,
     source_aliases: String,
@@ -837,6 +839,8 @@ impl App {
                     ]),
                     ingest_source: infer(&["ingest_source"]),
                     record_type: infer(&["record_type"]),
+                    source_entity_id: infer(&["source_entity_id"]),
+                    target_entity_id: infer(&["target_entity_id"]),
                     source_detail: infer(&["source_detail_json"]),
                     target_detail: infer(&["target_detail_json"]),
                     source_aliases: infer(&["source_aliases_json"]),
@@ -922,6 +926,8 @@ impl App {
                     "source_reference" => &mapping.source_reference,
                     "ingest_source" => &mapping.ingest_source,
                     "record_type" => &mapping.record_type,
+                    "source_entity_id" => &mapping.source_entity_id,
+                    "target_entity_id" => &mapping.target_entity_id,
                     "source_detail" => &mapping.source_detail,
                     "target_detail" => &mapping.target_detail,
                     "source_aliases" => &mapping.source_aliases,
@@ -945,6 +951,8 @@ impl App {
                 }
             };
             let record_type = col("record_type", &["record_type"]);
+            let source_entity_id = col("source_entity_id", &["source_entity_id"]);
+            let target_entity_id = col("target_entity_id", &["target_entity_id"]);
             let source = col("source", &["source", "from", "entity_a"])
                 .ok_or("CSV needs a source column")?;
             let target = col("target", &["target", "to", "entity_b"]);
@@ -1157,12 +1165,40 @@ impl App {
                 }
                 let source_type_value = source_type.and_then(|i| row.get(i)).unwrap_or("").trim();
                 let target_type_value = target_type.and_then(|i| row.get(i)).unwrap_or("").trim();
-                let a =
-                    entity_index.find_or_add_entity(source_name, source_type_value, &mut entities);
+                let parse_entity_id =
+                    |column: Option<usize>, side: &str| -> Result<Option<Uuid>, String> {
+                        column
+                            .and_then(|index| row.get(index))
+                            .map(str::trim)
+                            .filter(|value| !value.is_empty())
+                            .map(|value| {
+                                Uuid::parse_str(value).map_err(|error| {
+                                    format!("CSV {side}_entity_id is invalid: {error}")
+                                })
+                            })
+                            .transpose()
+                    };
+                let source_id = parse_entity_id(source_entity_id, "source")?;
+                let target_id = if entity_only {
+                    source_id
+                } else {
+                    parse_entity_id(target_entity_id, "target")?
+                };
+                let a = entity_index.find_or_add_entity_with_id(
+                    source_name,
+                    source_type_value,
+                    source_id,
+                    &mut entities,
+                )?;
                 let b = if entity_only {
                     a
                 } else {
-                    entity_index.find_or_add_entity(target_name, target_type_value, &mut entities)
+                    entity_index.find_or_add_entity_with_id(
+                        target_name,
+                        target_type_value,
+                        target_id,
+                        &mut entities,
+                    )?
                 };
                 for (entity_id, is_source) in [(a, true), (b, false)] {
                     let entity_position = entity_index.by_id[&entity_id];
@@ -2130,6 +2166,7 @@ impl App {
                 "record_type".to_string(),
                 "connection_id".to_string(),
                 "source".to_string(),
+                "source_entity_id".to_string(),
                 "source_type".to_string(),
                 "source_detail_json".to_string(),
                 "source_aliases_json".to_string(),
@@ -2138,6 +2175,7 @@ impl App {
                 "source_y".to_string(),
                 "relationship".to_string(),
                 "target".to_string(),
+                "target_entity_id".to_string(),
                 "target_type".to_string(),
                 "target_detail_json".to_string(),
                 "target_aliases_json".to_string(),
@@ -2166,6 +2204,8 @@ impl App {
                 let b = self.case.entities.iter().find(|e| e.id == link.to);
                 if let (Some(a), Some(b)) = (a, b) {
                     let conf = link.confidence.to_string();
+                    let source_entity_id = a.id.to_string();
+                    let target_entity_id = b.id.to_string();
                     let source_detail =
                         serde_json::to_string(&a.detail).map_err(|error| error.to_string())?;
                     let source_aliases =
@@ -2186,6 +2226,7 @@ impl App {
                         "connection",
                         link.connection_id.as_str(),
                         a.name.as_str(),
+                        source_entity_id.as_str(),
                         a.kind.as_str(),
                         source_detail.as_str(),
                         source_aliases.as_str(),
@@ -2194,6 +2235,7 @@ impl App {
                         source_y.as_str(),
                         link.label.as_str(),
                         b.name.as_str(),
+                        target_entity_id.as_str(),
                         b.kind.as_str(),
                         target_detail.as_str(),
                         target_aliases.as_str(),
@@ -2230,6 +2272,7 @@ impl App {
                 .iter()
                 .filter(|entity| !linked_entities.contains(&entity.id))
             {
+                let entity_id = entity.id.to_string();
                 let detail =
                     serde_json::to_string(&entity.detail).map_err(|error| error.to_string())?;
                 let aliases =
@@ -2242,12 +2285,14 @@ impl App {
                     "entity".to_string(),
                     String::new(),
                     entity.name.clone(),
+                    entity_id,
                     entity.kind.clone(),
                     detail,
                     aliases,
                     color,
                     entity.x.to_string(),
                     entity.y.to_string(),
+                    String::new(),
                     String::new(),
                     String::new(),
                     String::new(),
@@ -2873,6 +2918,57 @@ impl EntityIndex {
         if let Some(position) = self.by_id.get(&id).copied() {
             self.register_aliases(position, &entities[position]);
         }
+    }
+
+    fn find_or_add_entity_with_id(
+        &mut self,
+        name: &str,
+        kind: &str,
+        requested_id: Option<Uuid>,
+        entities: &mut Vec<Entity>,
+    ) -> Result<Uuid, String> {
+        let Some(id) = requested_id else {
+            return Ok(self.find_or_add_entity(name, kind, entities));
+        };
+        let is_generic =
+            |value: &str| value.trim().is_empty() || value.eq_ignore_ascii_case("ENTITY");
+        if let Some(position) = self.by_id.get(&id).copied() {
+            let existing = &mut entities[position];
+            if !existing.name.eq_ignore_ascii_case(name)
+                || !compatible_entity_types(&existing.kind, kind)
+            {
+                return Err(format!(
+                    "CSV entity ID {id} conflicts with existing entity {} [{}]",
+                    existing.name, existing.kind
+                ));
+            }
+            if is_generic(&existing.kind) && !is_generic(kind) {
+                existing.kind = kind.into();
+            }
+            return Ok(id);
+        }
+
+        let position = entities.len();
+        let entity = Entity {
+            id,
+            name: name.into(),
+            kind: if is_generic(kind) { "ENTITY" } else { kind }.into(),
+            detail: String::new(),
+            attributes: Vec::new(),
+            aliases: Vec::new(),
+            merged_records: Vec::new(),
+            x: 0.12 + (position % 4) as f32 * 0.23,
+            y: 0.15 + (position / 4) as f32 * 0.2,
+            position_locked: false,
+            color: [65, 125, 153],
+        };
+        self.by_name
+            .entry(name.to_lowercase())
+            .or_default()
+            .push(position);
+        self.by_id.insert(id, position);
+        entities.push(entity);
+        Ok(id)
     }
 
     fn find_or_add_entity(&mut self, name: &str, kind: &str, entities: &mut Vec<Entity>) -> Uuid {
@@ -4029,9 +4125,11 @@ impl eframe::App for App {
                             }
                         });
                     egui::ScrollArea::vertical().max_height(440.0).show(ui, |ui| {
-                        let fields: [(&str, &mut String); 26] = [
+                        let fields: [(&str, &mut String); 28] = [
                             ("Source entity", &mut self.import_column_mapping.source),
+                            ("Source entity ID", &mut self.import_column_mapping.source_entity_id),
                             ("Target entity", &mut self.import_column_mapping.target),
+                            ("Target entity ID", &mut self.import_column_mapping.target_entity_id),
                             ("Source type", &mut self.import_column_mapping.source_type),
                             ("Target type", &mut self.import_column_mapping.target_type),
                             ("Relationship", &mut self.import_column_mapping.relationship),
