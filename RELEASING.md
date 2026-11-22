@@ -1,0 +1,31 @@
+# Release process
+
+The build workflow creates native Linux x86_64, Arch Linux, macOS Apple Silicon, and macOS Intel packages. It does not create a public release from a branch push.
+
+## Publish a version
+
+1. Set the new semantic version in `Cargo.toml` and update user-facing release notes.
+2. Run the formatting, locked offline check/build, release build, Arch metadata, and macOS packaging-script syntax checks from `AGENTS.md`.
+3. Commit and push the version change to `main`. Confirm the branch workflow passes and local `main` matches `origin/main`.
+4. Create and push an annotated version tag, for example:
+
+   ```sh
+   git tag -a v0.1.1 -m "Arch Notebook v0.1.1"
+   git push origin v0.1.1
+   ```
+
+5. Wait for the tag build to pass. Create a draft GitHub Release for that tag and review the generated notes. Publishing the draft triggers a fresh build that attaches the Linux archive, Arch package, macOS zips, and `SHA256SUMS` to the release.
+6. Check the release page and verify its asset names, checksums, and workflow run before sharing it.
+
+The macOS bundles produced by CI are explicitly labeled `unsigned`. For direct distribution, sign and notarize a bundle on a Mac with the required Apple credentials, as described in `README.md`, then attach the additional archive and its checksum to the release:
+
+```sh
+gh release upload v0.1.1 \
+  "dist/Arch-Notebook-macos-$(uname -m)-notarized.zip" \
+  --clobber
+shasum -a 256 "dist/Arch-Notebook-macos-$(uname -m)-notarized.zip" \
+  > dist/SHA256SUMS-macos-notarized
+gh release upload v0.1.1 dist/SHA256SUMS-macos-notarized --clobber
+```
+
+Keep the unsigned artifact available when adding the signed archive so users can distinguish the two builds. Do not commit certificates, API keys, or notarization credentials.

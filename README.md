@@ -1,5 +1,7 @@
 # Arch Notebook
 
+[![Build](https://github.com/pskeffington/arch_notebook/actions/workflows/build.yml/badge.svg?branch=main)](https://github.com/pskeffington/arch_notebook/actions/workflows/build.yml)
+
 Arch Notebook is a local Rust desktop workbench for investigating relationship data and detecting connection regressions across SQL snapshots. It supports typed entity/link charts, evidence references, chronological analysis, shortest paths, duplicate review, and repeatable SQLite ingestion.
 
 ## SQL regression workflow
@@ -91,6 +93,8 @@ gh release upload v0.1.0 "dist/Arch-Notebook-macos-$(uname -m)-notarized.zip" --
 ```
 
 The CI runner labels follow [GitHub's current hosted runner reference](https://docs.github.com/en/actions/reference/runners/github-hosted-runners). Arch package metadata follows the [Arch package guidelines](https://wiki.archlinux.org/title/Arch_package_guidelines).
+
+See [RELEASING.md](RELEASING.md) for the version, tag, and signed macOS release process.
 
 ## Research basis
 

@@ -256,6 +256,7 @@ fn initialize_user_data(data_dir: &Path) -> std::io::Result<()> {
     ];
     for (name, bytes) in samples {
         let path = data_dir.join(name);
+        // Seed examples once; never replace analyst-edited files on a later launch.
         if !path.exists() {
             fs::write(path, bytes)?;
         }
@@ -545,6 +546,7 @@ impl App {
             if query.is_empty() {
                 return Err("SQL query cannot be empty".into());
             }
+            // Enforce read-only access at the SQLite open boundary for every configured job.
             let connection = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY)
                 .map_err(|e| e.to_string())?;
             let captured_at: String = connection
@@ -647,6 +649,7 @@ impl App {
                     notes,
                 });
             }
+            // Stable ordering gives duplicate natural keys repeatable occurrence suffixes.
             facts.sort_by(|a, b| {
                 a.key
                     .cmp(&b.key)
@@ -663,6 +666,7 @@ impl App {
                 *occurrence += 1;
                 fact.key = format!("{}#{}", fact.key, *occurrence);
             }
+            // Stage chart updates separately and swap them in only after the entire query succeeds.
             let source_key = format!("{}::{}", path, series);
             let mut entities = self.case.entities.clone();
             let mut links = self.case.links.clone();
@@ -818,6 +822,7 @@ impl App {
             message: message.clone(),
         });
         if self.case.automation_runs.len() > 200 {
+            // Keep case files bounded even when a scheduled job runs for long periods.
             self.case
                 .automation_runs
                 .drain(..self.case.automation_runs.len() - 200);
@@ -1659,6 +1664,7 @@ fn run_automation_cli(case_path: &str, job_name: Option<&str>) -> Result<(), Str
         }
     }
     let serialized = serde_json::to_string_pretty(&app.case).map_err(|error| error.to_string())?;
+    // Replace by rename so interruption cannot leave a truncated case file behind.
     let temporary_path = format!("{case_path}.tmp-{}", std::process::id());
     fs::write(&temporary_path, serialized)
         .map_err(|error| format!("cannot write temporary case file: {error}"))?;
