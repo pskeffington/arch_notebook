@@ -9,7 +9,7 @@ use std::{
 };
 use uuid::Uuid;
 
-const CURRENT_CASE_FORMAT_VERSION: u32 = 8;
+const CURRENT_CASE_FORMAT_VERSION: u32 = 9;
 
 #[derive(Clone, Serialize, Deserialize)]
 struct Entity {
@@ -231,6 +231,8 @@ struct ImportSpecification {
     name: String,
     #[serde(default)]
     mapping: ImportColumnMapping,
+    #[serde(default)]
+    header_signature: Vec<String>,
 }
 
 #[derive(Clone, Default, Serialize, Deserialize)]
@@ -819,8 +821,20 @@ impl App {
         })();
         match result {
             Ok((headers, preview)) => {
-                self.selected_import_spec = None;
-                self.import_spec_name.clear();
+                let signature = delimited_header_signature(&headers);
+                let matching_specs: Vec<ImportSpecification> = self
+                    .case
+                    .import_specifications
+                    .iter()
+                    .filter(|spec| spec.header_signature == signature)
+                    .cloned()
+                    .collect();
+                let matching_spec = (matching_specs.len() == 1).then(|| matching_specs[0].clone());
+                self.selected_import_spec = matching_spec.as_ref().map(|spec| spec.id);
+                self.import_spec_name = matching_spec
+                    .as_ref()
+                    .map(|spec| spec.name.clone())
+                    .unwrap_or_default();
                 let infer = |aliases: &[&str]| {
                     headers
                         .iter()
@@ -832,7 +846,7 @@ impl App {
                         .cloned()
                         .unwrap_or_default()
                 };
-                self.import_column_mapping = ImportColumnMapping {
+                let inferred_mapping = ImportColumnMapping {
                     trim_whitespace: false,
                     row_filters: Vec::new(),
                     source: infer(&["source", "from", "entity_a"]),
@@ -876,13 +890,32 @@ impl App {
                     target_position_locked: infer(&["target_position_locked"]),
                     entity_attributes: Vec::new(),
                 };
+                self.import_column_mapping = matching_spec
+                    .map(|spec| {
+                        let mut mapping = spec.mapping;
+                        remap_import_mapping_headers(&mut mapping, &headers);
+                        mapping
+                    })
+                    .unwrap_or(inferred_mapping);
                 self.import_headers = headers;
                 self.import_preview = preview;
                 self.show_import_wizard = true;
-                self.status = format!(
-                    "IMPORT DESIGN · {} COLUMNS DETECTED",
-                    self.import_headers.len()
-                );
+                self.status = if matching_specs.len() > 1 {
+                    format!(
+                        "IMPORT DESIGN · {} COLUMNS DETECTED · SELECT A SAVED DESIGN",
+                        self.import_headers.len()
+                    )
+                } else if self.selected_import_spec.is_some() {
+                    format!(
+                        "SAVED IMPORT DESIGN APPLIED · {} COLUMNS",
+                        self.import_headers.len()
+                    )
+                } else {
+                    format!(
+                        "IMPORT DESIGN · {} COLUMNS DETECTED",
+                        self.import_headers.len()
+                    )
+                };
             }
             Err(error) => self.status = format!("IMPORT INSPECTION FAILED · {error}"),
         }
@@ -908,12 +941,14 @@ impl App {
         }) {
             spec.name = name.to_owned();
             spec.mapping = self.import_column_mapping.clone();
+            spec.header_signature = delimited_header_signature(&self.import_headers);
             self.status = format!("IMPORT DESIGN UPDATED · {name}");
         } else {
             let spec = ImportSpecification {
                 id: Uuid::new_v4(),
                 name: name.to_owned(),
                 mapping: self.import_column_mapping.clone(),
+                header_signature: delimited_header_signature(&self.import_headers),
             };
             self.selected_import_spec = Some(spec.id);
             self.case.import_specifications.push(spec);
@@ -4505,6 +4540,10 @@ impl eframe::App for App {
                                         self.selected_import_spec = Some(spec.id);
                                         self.import_spec_name = spec.name.clone();
                                         self.import_column_mapping = spec.mapping.clone();
+                                        remap_import_mapping_headers(
+                                            &mut self.import_column_mapping,
+                                            &self.import_headers,
+                                        );
                                     }
                                 }
                             });
@@ -4918,6 +4957,69 @@ where
         }
     }
     Ok(())
+}
+
+fn delimited_header_signature(headers: &[String]) -> Vec<String> {
+    let mut signature: Vec<String> = headers
+        .iter()
+        .map(|header| header.trim().to_ascii_lowercase())
+        .collect();
+    signature.sort();
+    signature
+}
+
+fn remap_import_mapping_headers(mapping: &mut ImportColumnMapping, headers: &[String]) {
+    let columns = [
+        &mut mapping.source,
+        &mut mapping.target,
+        &mut mapping.source_type,
+        &mut mapping.target_type,
+        &mut mapping.relationship,
+        &mut mapping.date,
+        &mut mapping.confidence,
+        &mut mapping.direction,
+        &mut mapping.connection_id,
+        &mut mapping.notes,
+        &mut mapping.source_notes,
+        &mut mapping.source_reference,
+        &mut mapping.ingest_source,
+        &mut mapping.record_type,
+        &mut mapping.source_entity_id,
+        &mut mapping.target_entity_id,
+        &mut mapping.source_detail,
+        &mut mapping.target_detail,
+        &mut mapping.source_aliases,
+        &mut mapping.target_aliases,
+        &mut mapping.source_color,
+        &mut mapping.target_color,
+        &mut mapping.source_x,
+        &mut mapping.source_y,
+        &mut mapping.target_x,
+        &mut mapping.target_y,
+        &mut mapping.source_position_locked,
+        &mut mapping.target_position_locked,
+    ];
+    for column in columns {
+        remap_import_column(column, headers);
+    }
+    for attribute in &mut mapping.entity_attributes {
+        remap_import_column(&mut attribute.column, headers);
+    }
+    for filter in &mut mapping.row_filters {
+        remap_import_column(&mut filter.column, headers);
+    }
+}
+
+fn remap_import_column(column: &mut String, headers: &[String]) {
+    if column.is_empty() {
+        return;
+    }
+    if let Some(header) = headers
+        .iter()
+        .find(|header| header.trim().eq_ignore_ascii_case(column.trim()))
+    {
+        *column = header.clone();
+    }
 }
 
 fn delimited_text_format(path: &str) -> &'static str {
