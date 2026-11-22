@@ -5454,6 +5454,7 @@ mod tests {
             query: String::new(),
             captured_at: String::new(),
             connections: vec![fact(key)],
+            skipped_rows: 0,
         };
         let old = make_snapshot(
             "Northstar Imports|ORGANIZATION|LEASES|Pier 19 Warehouse|LOCATION|false#1".into(),
