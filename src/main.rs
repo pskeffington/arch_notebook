@@ -149,6 +149,16 @@ struct AutomationRun {
     snapshot_id: Option<Uuid>,
 }
 
+struct SqlValidationPreview {
+    configured_database_path: String,
+    series: String,
+    query: String,
+    captured_at: String,
+    connection_count: usize,
+    skipped_rows: usize,
+    connections: Vec<ConnectionFact>,
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 struct CaseFile {
     #[serde(default)]
@@ -213,6 +223,8 @@ struct App {
     sql_path: String,
     sql_series: String,
     sql_query: String,
+    sql_validation_preview: Option<SqlValidationPreview>,
+    automation_job_filter: String,
     sql_snapshot_source: Option<String>,
     sql_snapshot_index: Option<usize>,
     automation_job_name: String,
@@ -476,6 +488,8 @@ impl Default for App {
             sql_path: data_dir.join("sample_connections.sqlite").to_string_lossy().into_owned(),
             sql_series: "Harbor Light connection review".into(),
             sql_query: "SELECT connection_id, source, source_type, target, target_type, relationship, event_date AS date, confidence, directed, source_reference, notes FROM connection_observations WHERE snapshot_id = 'baseline' ORDER BY connection_id;".into(),
+            sql_validation_preview: None,
+            automation_job_filter: String::new(),
             sql_snapshot_source: None,
             sql_snapshot_index: None,
             automation_job_name: String::new(),
@@ -720,6 +734,8 @@ impl App {
             sql_path: String::new(),
             sql_series: String::new(),
             sql_query: String::new(),
+            sql_validation_preview: None,
+            automation_job_filter: String::new(),
             sql_snapshot_source: None,
             sql_snapshot_index: None,
             automation_job_name: String::new(),
@@ -1687,6 +1703,7 @@ impl App {
     }
 
     fn ingest_sqlite_snapshot(&mut self) {
+        self.sql_validation_preview = None;
         let configured_path = self.sql_path.trim().to_string();
         let case_path = self.case_path.clone();
         let series = self.sql_series.trim().to_string();
@@ -2058,6 +2075,17 @@ impl App {
 
         self.ingest_sqlite_snapshot();
         let candidate_snapshot = self.case.snapshots.get(snapshot_count_before).cloned();
+        let validation_preview = candidate_snapshot
+            .as_ref()
+            .map(|snapshot| SqlValidationPreview {
+                configured_database_path: snapshot.configured_database_path.clone(),
+                series: snapshot.series.clone(),
+                query: snapshot.query.clone(),
+                captured_at: snapshot.captured_at.clone(),
+                connection_count: snapshot.connections.len(),
+                skipped_rows: snapshot.skipped_rows,
+                connections: snapshot.connections.iter().take(8).cloned().collect(),
+            });
         let validation_message = if self.status.starts_with("SQL SNAPSHOT INGESTED") {
             let snapshot = candidate_snapshot.as_ref();
             let count = snapshot
@@ -2130,12 +2158,83 @@ impl App {
         if keep_candidate_snapshot && let Some(snapshot) = candidate_snapshot {
             self.case.snapshots.push(snapshot);
         }
+        self.sql_validation_preview = validation_preview;
         self.selected_link = selected_link_before;
         self.sql_snapshot_source = snapshot_source_before;
         self.sql_snapshot_index = snapshot_index_before;
         self.path_result = path_result_before;
         self.status = validation_message;
         self.status.starts_with("SQL QUERY VALID · ")
+    }
+
+    fn show_sql_validation_preview(
+        ui: &mut egui::Ui,
+        preview: Option<&SqlValidationPreview>,
+        database_path: &str,
+        series: &str,
+        query: &str,
+    ) {
+        let Some(preview) = preview.filter(|preview| {
+            preview.configured_database_path == database_path.trim()
+                && preview.series == series.trim()
+                && preview.query == query.trim()
+        }) else {
+            return;
+        };
+        egui::CollapsingHeader::new(format!(
+            "VALIDATED ROW PREVIEW · {} CONNECTIONS",
+            preview.connection_count
+        ))
+        .id_salt("sql_validation_preview")
+        .show(ui, |ui| {
+            ui.label(format!(
+                "Captured {} · showing up to {} rows{}",
+                preview.captured_at,
+                preview.connections.len(),
+                if preview.skipped_rows == 0 {
+                    String::new()
+                } else {
+                    format!(
+                        " · {} rows skipped for empty endpoints",
+                        preview.skipped_rows
+                    )
+                }
+            ));
+            egui::Grid::new("sql_validation_preview_rows")
+                .striped(true)
+                .show(ui, |ui| {
+                    for heading in [
+                        "Connection ID",
+                        "Source",
+                        "Relationship",
+                        "Target",
+                        "Date",
+                        "Confidence",
+                    ] {
+                        ui.strong(heading);
+                    }
+                    ui.end_row();
+                    for connection in &preview.connections {
+                        ui.label(if connection.connection_id.is_empty() {
+                            "(natural key)"
+                        } else {
+                            &connection.connection_id
+                        });
+                        ui.label(format!(
+                            "{} · {}",
+                            connection.source, connection.source_type
+                        ));
+                        ui.label(&connection.relationship);
+                        ui.label(format!(
+                            "{} · {}",
+                            connection.target, connection.target_type
+                        ));
+                        ui.label(&connection.date);
+                        ui.label(connection.confidence.to_string());
+                        ui.end_row();
+                    }
+                });
+        });
     }
 
     fn edit_automation_job(&mut self, id: Uuid) {
@@ -4614,10 +4713,66 @@ impl eframe::App for App {
                                 ui.horizontal(|ui|{let mut limit_regressions=self.automation_maximum_regressions.is_some();if ui.checkbox(&mut limit_regressions,"Limit regressions").changed(){self.automation_maximum_regressions=limit_regressions.then_some(0);}if let Some(maximum)=self.automation_maximum_regressions.as_mut(){ui.label("Maximum removals/confidence declines");ui.add(egui::DragValue::new(maximum).range(0..=1_000_000));}if ui.button("Validate query").clicked(){self.validate_sql_query();}if ui.button(if self.editing_automation_job.is_some(){"Save job changes"}else{"Add job"}).clicked(){self.save_automation_job();}if self.editing_automation_job.is_some()&&ui.button("Cancel edit").clicked(){self.cancel_automation_job_edit();}});
                                 ui.label(egui::RichText::new("A regression is a removed connection or confidence decline. Runs over either configured limit are saved as failed, with their snapshots retained.").small().color(muted));
                                 ui.add(egui::TextEdit::multiline(&mut self.sql_query).desired_width(canvas_w-20.0).desired_rows(5).code_editor());
-                                if ui.button("Run enabled jobs and save").clicked(){self.run_enabled_automation_jobs();}
-                                ui.add_space(8.0);ui.label(egui::RichText::new("JOBS").small().strong().color(cyan));
+                                Self::show_sql_validation_preview(ui, self.sql_validation_preview.as_ref(), &self.sql_path, &self.sql_series, &self.sql_query);
+                                let enabled_job_count = self
+                                    .case
+                                    .automation_jobs
+                                    .iter()
+                                    .filter(|job| job.enabled)
+                                    .count();
+                                ui.horizontal(|ui| {
+                                    ui.label(format!("Batch includes {enabled_job_count} enabled jobs"));
+                                    if ui
+                                        .add_enabled(
+                                            enabled_job_count > 0,
+                                            egui::Button::new("Run enabled jobs and save"),
+                                        )
+                                        .clicked()
+                                    {
+                                        self.run_enabled_automation_jobs();
+                                    }
+                                });
+                                ui.add_space(8.0);
+                                ui.horizontal(|ui| {
+                                    ui.label(egui::RichText::new("JOBS").small().strong().color(cyan));
+                                    ui.add(
+                                        egui::TextEdit::singleline(&mut self.automation_job_filter)
+                                            .hint_text("Find by job, database, series, or SQL")
+                                            .desired_width(280.0),
+                                    );
+                                    if ui.small_button("Clear").clicked() {
+                                        self.automation_job_filter.clear();
+                                    }
+                                });
+                                let job_filter = self.automation_job_filter.trim().to_lowercase();
+                                let visible_job_ids: HashSet<Uuid> = self
+                                    .case
+                                    .automation_jobs
+                                    .iter()
+                                    .filter(|job| {
+                                        job_filter.is_empty()
+                                            || format!(
+                                                "{} {} {} {}",
+                                                job.name,
+                                                job.database_path,
+                                                job.series,
+                                                job.query
+                                            )
+                                            .to_lowercase()
+                                            .contains(&job_filter)
+                                    })
+                                    .map(|job| job.id)
+                                    .collect();
+                                ui.label(egui::RichText::new(format!(
+                                    "{} OF {} JOBS",
+                                    visible_job_ids.len(),
+                                    self.case.automation_jobs.len()
+                                )).small().color(muted));
                                 let mut action: Option<(String,Uuid)> = None;
                                 for job in &mut self.case.automation_jobs {
+                                    if !visible_job_ids.contains(&job.id) {
+                                        continue;
+                                    }
                                     let latest_run = self
                                         .case
                                         .automation_runs
@@ -4659,6 +4814,13 @@ impl eframe::App for App {
                                                     .desired_rows(3)
                                                     .code_editor()
                                                     .interactive(false),
+                                            );
+                                            Self::show_sql_validation_preview(
+                                                ui,
+                                                self.sql_validation_preview.as_ref(),
+                                                &job.database_path,
+                                                &job.series,
+                                                &job.query,
                                             );
                                         });
                                 }
@@ -4782,6 +4944,7 @@ impl eframe::App for App {
                                 ui.label(egui::RichText::new("Read-only SQL query · required columns: source, target").small().color(muted));
                                 ui.add(egui::TextEdit::multiline(&mut self.sql_query).desired_width(canvas_w-20.0).desired_rows(4).code_editor());
                                 ui.horizontal(|ui|{if ui.button("Validate query").clicked(){self.validate_sql_query();}if ui.button("Ingest SQL snapshot").clicked(){self.ingest_sqlite_snapshot();}});
+                                Self::show_sql_validation_preview(ui, self.sql_validation_preview.as_ref(), &self.sql_path, &self.sql_series, &self.sql_query);
                                 if let Some(current)=latest {
                                     let capture_label=if selected_index==latest_index{"Latest snapshot"}else{"Selected historical snapshot"};
                                     let skipped = if current.skipped_rows == 0 {
@@ -6836,9 +6999,28 @@ fn lock_automation_case(path: &Path) -> Result<fs::File, String> {
     let file_name = path
         .file_name()
         .ok_or_else(|| format!("invalid case path: {}", path.display()))?;
+    // Resolve path aliases first so every scheduler targeting the same case
+    // file derives the same sibling lock file.
+    let case_path = fs::canonicalize(path)
+        .or_else(|_| {
+            let parent = path
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+                .unwrap_or_else(|| Path::new("."));
+            fs::canonicalize(parent).map(|parent| parent.join(file_name))
+        })
+        .map_err(|error| {
+            format!(
+                "cannot resolve case path {} for automation lock: {error}",
+                path.display()
+            )
+        })?;
+    let file_name = case_path
+        .file_name()
+        .ok_or_else(|| format!("invalid case path: {}", case_path.display()))?;
     let mut lock_name = file_name.to_os_string();
     lock_name.push(".automation.lock");
-    let mut lock_path = path.to_path_buf();
+    let mut lock_path = case_path;
     lock_path.set_file_name(lock_name);
     let lock_file = fs::OpenOptions::new()
         .read(true)
@@ -6945,14 +7127,21 @@ fn validate_enabled_automation_jobs_cli(
     Ok(failures == 0)
 }
 
-fn list_automation_jobs_cli(case_path: &str, json_output: bool) -> Result<(), String> {
+fn list_automation_jobs_cli(
+    case_path: &str,
+    json_output: bool,
+    enabled_only: bool,
+) -> Result<(), String> {
     let content =
         fs::read_to_string(case_path).map_err(|error| format!("cannot read case: {error}"))?;
     let case = serde_json::from_str::<CaseFile>(&content)
         .map_err(|error| format!("cannot parse case: {error}"))?;
+    let total = case.automation_jobs.len();
+    let enabled = case.automation_jobs.iter().filter(|job| job.enabled).count();
     let jobs: Vec<serde_json::Value> = case
         .automation_jobs
         .iter()
+        .filter(|job| !enabled_only || job.enabled)
         .map(|job| {
             serde_json::json!({
                 "id": job.id,
@@ -6960,6 +7149,7 @@ fn list_automation_jobs_cli(case_path: &str, json_output: bool) -> Result<(), St
                 "enabled": job.enabled,
                 "database_path": job.database_path,
                 "series": job.series,
+                "query": job.query,
                 "minimum_connections": job.minimum_connections,
                 "maximum_regressions": job.maximum_regressions,
                 "maximum_skipped_rows": job.maximum_skipped_rows,
@@ -6970,7 +7160,15 @@ fn list_automation_jobs_cli(case_path: &str, json_output: bool) -> Result<(), St
         println!(
             "{}",
             serde_json::to_string_pretty(
-                &serde_json::json!({"schema_version":1,"case":case_path,"jobs":jobs})
+                &serde_json::json!({
+                    "schema_version": 1,
+                    "case": case_path,
+                    "filter": {"enabled_only": enabled_only},
+                    "total": total,
+                    "enabled": enabled,
+                    "returned": jobs.len(),
+                    "jobs": jobs
+                })
             )
             .map_err(|error| error.to_string())?
         );
@@ -7157,7 +7355,7 @@ fn main() -> eframe::Result<()> {
         .is_some_and(|arg| arg == "--help" || arg == "-h")
     {
         println!(
-            "Arch Notebook\n\nUsage:\n  arch-notebook\n  arch-notebook --export-graphml <case.json> <output.graphml> [--json]\n  arch-notebook --export-sql-comparison <case.json> <baseline-snapshot-id> <current-snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --list-jobs <case.json> [--json]\n  arch-notebook --list-runs <case.json> [--json] [--job <name-or-id>] [--offset <count>] [--limit <count>]\n  arch-notebook --validate-enabled-jobs <case.json> [--json] [--job <name-or-id> ...]\n  arch-notebook --run-enabled-jobs <case.json> [--json] [--job <name-or-id> ...]\n  arch-notebook --run-job <case.json> <job-name-or-id> [--json]\n\nJob and run listing and validation do not change the case. Run history is newest first and can be filtered or paged. SQL comparisons can be exported from saved snapshots for downstream tools. Batch runs save snapshots and run history to the case file. JSON output is available for scheduler integration."
+            "Arch Notebook\n\nUsage:\n  arch-notebook\n  arch-notebook --export-graphml <case.json> <output.graphml> [--json]\n  arch-notebook --export-sql-comparison <case.json> <baseline-snapshot-id> <current-snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --list-jobs <case.json> [--enabled-only] [--json]\n  arch-notebook --list-runs <case.json> [--json] [--job <name-or-id>] [--offset <count>] [--limit <count>]\n  arch-notebook --validate-enabled-jobs <case.json> [--json] [--job <name-or-id> ...]\n  arch-notebook --run-enabled-jobs <case.json> [--json] [--job <name-or-id> ...]\n  arch-notebook --run-job <case.json> <job-name-or-id> [--json]\n\nJob and run listing and validation do not change the case. Run history is newest first and can be filtered or paged. SQL comparisons can be exported from saved snapshots for downstream tools. Batch runs save snapshots and run history to the case file. JSON output is available for scheduler integration."
         );
         return Ok(());
     }
@@ -7209,19 +7407,24 @@ fn main() -> eframe::Result<()> {
     }
     if args.first().is_some_and(|arg| arg == "--list-jobs") {
         let json_output = args.iter().any(|arg| arg == "--json");
+        let usage = "usage: arch-notebook --list-jobs <case.json> [--enabled-only] [--json]";
         let Some(case_path) = args.get(1) else {
-            report_cli_usage_error(
-                "usage: arch-notebook --list-jobs <case.json> [--json]",
-                json_output,
-            );
+            report_cli_usage_error(usage, json_output);
         };
-        if args.len() > 3 || args.get(2).is_some_and(|arg| arg != "--json") {
-            report_cli_usage_error(
-                "usage: arch-notebook --list-jobs <case.json> [--json]",
-                json_output,
-            );
+        let mut enabled_only = false;
+        let mut seen_json = false;
+        let mut seen_enabled_only = false;
+        for option in args.iter().skip(2) {
+            match option.as_str() {
+                "--json" if !seen_json => seen_json = true,
+                "--enabled-only" if !seen_enabled_only => {
+                    seen_enabled_only = true;
+                    enabled_only = true;
+                }
+                _ => report_cli_usage_error(usage, json_output),
+            }
         }
-        if let Err(error) = list_automation_jobs_cli(case_path, json_output) {
+        if let Err(error) = list_automation_jobs_cli(case_path, json_output, enabled_only) {
             report_cli_error("job listing failed", error, json_output);
         }
         return Ok(());
