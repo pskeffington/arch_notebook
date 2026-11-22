@@ -77,7 +77,7 @@ systemctl --user daemon-reload
 systemctl --user enable --now arch-notebook-automation.timer
 ```
 
-The timer runs hourly, catches up a missed run after the machine was offline, and adds up to five minutes of randomized delay. Run the service immediately with `systemctl --user start arch-notebook-automation.service`; inspect results and errors with `journalctl --user -u arch-notebook-automation.service`. The example case path assumes the default Linux data directory; change it to the case file you want scheduled. On macOS, edit `packaging/macos/com.archnotebook.automation.plist` to point to your installed app and case, copy it into `~/Library/LaunchAgents`, then load it with `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.archnotebook.automation.plist`; it runs at login and hourly. Validate the edited file with `plutil -lint` and inspect the configured output logs after a run. Keep the SQLite source available at the configured path when automation runs.
+The timer runs hourly, catches up a missed run after the machine was offline, and adds up to five minutes of randomized delay. The service allows a run up to one hour to finish; adjust `TimeoutStartSec` for longer queries. Run the service immediately with `systemctl --user start arch-notebook-automation.service`; inspect results and errors with `journalctl --user -u arch-notebook-automation.service`. The example case path assumes the default Linux data directory; change it to the case file you want scheduled. On macOS, edit `packaging/macos/com.archnotebook.automation.plist` to point to your installed app and case, copy it into `~/Library/LaunchAgents`, then load it with `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.archnotebook.automation.plist`; it runs at login and hourly. Validate the edited file with `plutil -lint` and inspect the configured output logs after a run. Keep the SQLite source available at the configured path when automation runs.
 
 ## Other notebook workflows
 
@@ -128,7 +128,7 @@ The profile is created with `xcrun notarytool store-credentials`; the signing id
 
 ### Continuous builds
 
-GitHub Actions checks formatting and builds release artifacts for Linux x86_64, macOS Apple Silicon, macOS Intel, and an Arch Linux package. Pull requests and pushes build without publishing a release; the generated workflow artifacts are available for 14 days. Publishing a GitHub Release triggers the workflow to attach the Linux archive, Arch package, macOS zips, and a `SHA256SUMS` file. macOS zip names state whether they are `unsigned`, `developer-id-signed`, or `notarized`; CI artifacts are unsigned because signing credentials are not stored in the repository.
+GitHub Actions checks formatting and builds release artifacts for Linux x86_64, macOS Apple Silicon, macOS Intel, and an Arch Linux package. Pull requests and pushes build without publishing a release; a newer push to `main` supersedes an older `main` build so CI prioritizes the latest commit. Generated workflow artifacts are available for 14 days. Publishing a GitHub Release triggers the workflow to attach the Linux archive, Arch package, macOS zips, and a `SHA256SUMS` file. macOS zip names state whether they are `unsigned`, `developer-id-signed`, or `notarized`; CI artifacts are unsigned because signing credentials are not stored in the repository.
 
 To attach a locally signed and notarized macOS archive to a published release, build it with the credentials described above and upload it with:
 
