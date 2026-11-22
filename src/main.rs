@@ -2169,6 +2169,7 @@ impl App {
             if self.run_automation_job(id) {
                 passed += 1;
             }
+            self.save_automation_results("AUTOMATION JOB CHECKPOINT");
         }
         (self.sql_path, self.sql_series, self.sql_query) = editor_state;
         let failed = count - passed;
@@ -3836,7 +3837,7 @@ impl eframe::App for App {
                             ui.selectable_value(&mut self.layout_mode, LayoutMode::Grid, "Grid");
                         });
                     if ui.button("Arrange chart").clicked(){self.auto_layout();}
-                    if self.page==WorkspacePage::Chart {if ui.small_button("−").clicked(){self.chart_zoom=(self.chart_zoom/1.2).clamp(0.25,3.0);}ui.label(format!("{:.0}%",self.chart_zoom*100.0));if ui.small_button("＋").clicked(){self.chart_zoom=(self.chart_zoom*1.2).clamp(0.25,3.0);}if ui.small_button("Reset view").clicked(){self.chart_zoom=1.0;self.chart_pan=egui::Vec2::ZERO;self.chart_focus=None;self.chart_focus_link=None;self.chart_fit_path=None;}}
+                    if self.page==WorkspacePage::Chart {if ui.add_enabled(!self.case.entities.is_empty(),egui::Button::new("Fit all")).clicked(){self.chart_fit_path=Some(self.case.entities.iter().map(|entity|entity.id).collect());self.chart_focus=None;self.chart_focus_link=None;}if ui.small_button("−").clicked(){self.chart_zoom=(self.chart_zoom/1.2).clamp(0.25,3.0);}ui.label(format!("{:.0}%",self.chart_zoom*100.0));if ui.small_button("＋").clicked(){self.chart_zoom=(self.chart_zoom*1.2).clamp(0.25,3.0);}if ui.button("Reset view").clicked(){self.chart_zoom=1.0;self.chart_pan=egui::Vec2::ZERO;self.chart_focus=None;self.chart_focus_link=None;self.chart_fit_path=None;}}
                     if self.page==WorkspacePage::Data && (self.selected.is_some() || self.selected_link.is_some()) && ui.button("View on chart").clicked(){self.chart_focus=self.selected;self.chart_focus_link=self.selected_link;self.page=WorkspacePage::Chart;self.show_timeline=false;}
                     if self.selected.is_some() || self.selected_link.is_some() {if ui.button("Delete selected").clicked(){self.delete_selected();}}
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| { ui.label(egui::RichText::new(&self.status).small().color(muted)); });
