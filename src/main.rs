@@ -2429,6 +2429,14 @@ impl App {
             writer
                 .write_record([
                     "change",
+                    "removed",
+                    "confidence_declined",
+                    "date_changed",
+                    "connection_details_changed",
+                    "evidence_changed",
+                    "source_notes_changed",
+                    "added",
+                    "confidence_increased",
                     "connection_id",
                     "source_before",
                     "source_type_before",
@@ -2477,7 +2485,22 @@ impl App {
                     })
                     .collect::<Vec<_>>()
                     .join(" · ");
-                let mut record = vec![changes, delta.connection.connection_id.clone()];
+                let mut record = vec![changes];
+                record.extend(
+                    [
+                        DeltaKind::Removed,
+                        DeltaKind::ConfidenceDeclined,
+                        DeltaKind::DateChanged,
+                        DeltaKind::Updated,
+                        DeltaKind::EvidenceChanged,
+                        DeltaKind::SourceNotesChanged,
+                        DeltaKind::Added,
+                        DeltaKind::ConfidenceIncreased,
+                    ]
+                    .iter()
+                    .map(|kind| delta.kinds.contains(kind).to_string()),
+                );
+                record.push(delta.connection.connection_id.clone());
                 let append_fact = |record: &mut Vec<String>, fact: Option<&ConnectionFact>| {
                     record.extend([
                         fact.map(|value| value.source.clone()).unwrap_or_default(),
@@ -4214,6 +4237,7 @@ impl eframe::App for App {
                             .windows(2)
                             .map(|pair| (pair[0], pair[1]))
                             .collect();
+                        let path_entities: HashSet<Uuid> = self.path_result.iter().copied().collect();
                         for (link_index, link) in self.case.links.iter().enumerate() {
                             if let (Some(&a_index), Some(&b_index)) =
                                 (entity_indices.get(&link.from), entity_indices.get(&link.to))
@@ -4250,7 +4274,7 @@ impl eframe::App for App {
                             let c=center(e); let fill=egui::Color32::from_rgb(e.color[0],e.color[1],e.color[2]);
                             let r=egui::Rect::from_center_size(c,egui::vec2(142.0,56.0)*self.chart_zoom);
                             let picked=self.selected==Some(e.id);
-                            let on_path=self.path_result.contains(&e.id);p.rect_filled(r,7.0,if on_path{egui::Color32::from_rgb(55,48,38)}else{egui::Color32::from_rgb(25,39,51)});p.rect_stroke(r,7.0,egui::Stroke::new(if picked{2.0_f32}else{1.0_f32},if picked{cyan}else if on_path{egui::Color32::from_rgb(236,174,83)}else{fill}),egui::StrokeKind::Inside);
+                            let on_path=path_entities.contains(&e.id);p.rect_filled(r,7.0,if on_path{egui::Color32::from_rgb(55,48,38)}else{egui::Color32::from_rgb(25,39,51)});p.rect_stroke(r,7.0,egui::Stroke::new(if picked{2.0_f32}else{1.0_f32},if picked{cyan}else if on_path{egui::Color32::from_rgb(236,174,83)}else{fill}),egui::StrokeKind::Inside);
                             p.circle_filled(c+egui::vec2(-58.0,0.0)*self.chart_zoom,6.0*self.chart_zoom,fill);
                             p.text(c+egui::vec2(-44.0,-8.0)*self.chart_zoom,egui::Align2::LEFT_CENTER,&e.name,egui::FontId::proportional(12.0*self.chart_zoom),egui::Color32::WHITE);
                             p.text(c+egui::vec2(-44.0,11.0)*self.chart_zoom,egui::Align2::LEFT_CENTER,&e.kind,egui::FontId::proportional(8.0*self.chart_zoom),muted);
