@@ -1821,6 +1821,22 @@ impl App {
             self.status = "JOB NOT SAVED · job names must be unique within the case".into();
             return;
         }
+        if let Some(existing) = self.case.automation_jobs.iter().find(|job| {
+            Some(job.id) != self.editing_automation_job
+                && same_sql_series(
+                    &job.database_path,
+                    &job.series,
+                    self.sql_path.trim(),
+                    self.sql_series.trim(),
+                    &self.case_path,
+                )
+        }) {
+            self.status = format!(
+                "JOB NOT SAVED · database and series already belong to {}",
+                existing.name
+            );
+            return;
+        }
         if let Some(id) = self.editing_automation_job {
             if let Some(job) = self
                 .case
@@ -1859,6 +1875,24 @@ impl App {
     }
 
     fn validate_sql_query(&mut self) {
+        if self.data_mode == DataMode::Automation
+            && let Some(existing) = self.case.automation_jobs.iter().find(|job| {
+                Some(job.id) != self.editing_automation_job
+                    && same_sql_series(
+                        &job.database_path,
+                        &job.series,
+                        self.sql_path.trim(),
+                        self.sql_series.trim(),
+                        &self.case_path,
+                    )
+            })
+        {
+            self.status = format!(
+                "SQL QUERY INVALID · database and series already belong to {}",
+                existing.name
+            );
+            return;
+        }
         self.validate_sql_query_with_snapshot_context(false);
     }
 
@@ -1994,6 +2028,23 @@ impl App {
 
     fn execute_automation_job(&mut self, job: &AutomationJob) -> (bool, String) {
         let started_at = epoch_timestamp();
+        if let Some(existing) = self.case.automation_jobs.iter().find(|existing| {
+            existing.id != job.id
+                && same_sql_series(
+                    &existing.database_path,
+                    &existing.series,
+                    &job.database_path,
+                    &job.series,
+                    &self.case_path,
+                )
+        }) {
+            let message = format!(
+                "JOB RUN FAILED · database and series are already assigned to {}",
+                existing.name
+            );
+            self.record_automation_run(job, started_at, false, message.clone(), None);
+            return (false, message);
+        }
         let snapshot_count_before = self.case.snapshots.len();
         self.sql_path = job.database_path.clone();
         self.sql_series = job.series.clone();
@@ -2003,9 +2054,6 @@ impl App {
         let ingestion_succeeded = self.status.starts_with("SQL SNAPSHOT INGESTED");
         let snapshot_index = (self.case.snapshots.len() > snapshot_count_before)
             .then_some(self.case.snapshots.len() - 1);
-        let snapshot_id = snapshot_index
-            .and_then(|index| self.case.snapshots.get(index))
-            .map(|snapshot| snapshot.id);
         let mut success = false;
         if ingestion_succeeded {
             let source_key = snapshot_index
@@ -2042,6 +2090,21 @@ impl App {
                     .is_none_or(|maximum| regression_count <= maximum);
         }
         let message = self.status.clone();
+        self.record_automation_run(job, started_at, success, message.clone(), snapshot_index);
+        (success, message)
+    }
+
+    fn record_automation_run(
+        &mut self,
+        job: &AutomationJob,
+        started_at: String,
+        success: bool,
+        message: String,
+        snapshot_index: Option<usize>,
+    ) {
+        let snapshot_id = snapshot_index
+            .and_then(|index| self.case.snapshots.get(index))
+            .map(|snapshot| snapshot.id);
         self.case.automation_runs.push(AutomationRun {
             id: Uuid::new_v4(),
             job_id: job.id,
@@ -2056,7 +2119,7 @@ impl App {
             started_at,
             finished_at: epoch_timestamp(),
             success,
-            message: message.clone(),
+            message,
             snapshot_index,
             snapshot_id,
         });
@@ -2065,7 +2128,6 @@ impl App {
                 .automation_runs
                 .drain(..self.case.automation_runs.len() - 200);
         }
-        (success, message)
     }
 
     fn save_automation_results(&mut self, summary: &str) {
@@ -4556,6 +4618,33 @@ fn resolve_sqlite_database_path(database_path: &str, case_path: &str) -> Result<
     })
 }
 
+fn same_sql_series(
+    first_database: &str,
+    first_series: &str,
+    second_database: &str,
+    second_series: &str,
+    case_path: &str,
+) -> bool {
+    if first_series.trim() != second_series.trim() {
+        return false;
+    }
+    let configured_path = |database: &str| {
+        resolve_sqlite_database_path(database, case_path).unwrap_or_else(|_| {
+            let path = Path::new(database);
+            if path.is_absolute() {
+                path.to_path_buf()
+            } else {
+                Path::new(case_path)
+                    .parent()
+                    .filter(|parent| !parent.as_os_str().is_empty())
+                    .unwrap_or_else(|| Path::new("."))
+                    .join(path)
+            }
+        })
+    };
+    configured_path(first_database) == configured_path(second_database)
+}
+
 fn sql_source_key(database_path: &str, series: &str) -> String {
     format!(
         "sqlite-v2:{}:{}{}",
@@ -4734,6 +4823,29 @@ fn validate_enabled_automation_jobs_cli(
     let mut failures = 0;
     let mut outcomes = Vec::new();
     for job in jobs {
+        if let Some(existing) = app.case.automation_jobs.iter().find(|existing| {
+            existing.id != job.id
+                && same_sql_series(
+                    &existing.database_path,
+                    &existing.series,
+                    &job.database_path,
+                    &job.series,
+                    &app.case_path,
+                )
+        }) {
+            let message = format!(
+                "SQL QUERY INVALID · database and series already belong to {}",
+                existing.name
+            );
+            failures += 1;
+            if json_output {
+                outcomes
+                    .push(serde_json::json!({"status":"FAIL","job":job.name,"message":message}));
+            } else {
+                println!("FAIL · {} · {}", job.name, message);
+            }
+            continue;
+        }
         app.sql_path = job.database_path.clone();
         app.sql_series = job.series.clone();
         app.sql_query = job.query.clone();

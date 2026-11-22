@@ -22,10 +22,20 @@ if [[ -n "${APPLE_NOTARY_PROFILE:-}" ]]; then
 fi
 archive="$repo_root/dist/Arch-Notebook-macos-$(uname -m)-$distribution_status.zip"
 
-cargo build --release --locked --target "$rust_target"
+binary_path="target/$rust_target/release/arch-notebook"
+if [[ "${ARCH_NOTEBOOK_SKIP_BUILD:-0}" != "1" ]]; then
+  cargo build --release --locked --target "$rust_target"
+fi
+if [[ ! -x "$binary_path" ]]; then
+  echo "Missing executable: $binary_path" >&2
+  echo 'Build the release target first or unset ARCH_NOTEBOOK_SKIP_BUILD.' >&2
+  exit 1
+fi
+
+mkdir -p "$repo_root/dist"
 rm -rf "$app_bundle"
 mkdir -p "$app_bundle/Contents/MacOS" "$app_bundle/Contents/Resources"
-install -m 755 "target/$rust_target/release/arch-notebook" "$app_bundle/Contents/MacOS/arch-notebook"
+install -m 755 "$binary_path" "$app_bundle/Contents/MacOS/arch-notebook"
 
 cat > "$app_bundle/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -44,7 +54,6 @@ cat > "$app_bundle/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-mkdir -p "$repo_root/dist"
 if [[ -n "${APPLE_SIGNING_IDENTITY:-}" ]]; then
   codesign --force --options runtime --timestamp --sign "$APPLE_SIGNING_IDENTITY" "$app_bundle"
   codesign --verify --deep --strict --verbose=2 "$app_bundle"
