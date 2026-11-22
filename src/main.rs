@@ -7595,7 +7595,11 @@ fn sql_source_key(database_path: &str, series: &str) -> String {
 
 fn normalize_snapshot_database_paths(case: &mut CaseFile, case_path: &str) {
     let mut source_key_rewrites = HashMap::new();
+    let mut database_path_rewrites = HashMap::new();
+    let mut ambiguous_database_paths = HashSet::new();
+    let mut ambiguous_source_keys = HashSet::new();
     for snapshot in &mut case.snapshots {
+        let old_database_path = snapshot.database_path.clone();
         let configured_path = (!snapshot.configured_database_path.trim().is_empty())
             .then(|| snapshot.configured_database_path.as_str());
         let path = configured_path
@@ -7604,8 +7608,36 @@ fn normalize_snapshot_database_paths(case: &mut CaseFile, case_path: &str) {
         if let Some(path) = path {
             let old_source_key = snapshot.source_key.clone();
             snapshot.database_path = path.to_string_lossy().into_owned();
-            snapshot.source_key = sql_source_key(&snapshot.database_path, &snapshot.series);
-            source_key_rewrites.insert(old_source_key, snapshot.source_key.clone());
+            let new_source_key = sql_source_key(&snapshot.database_path, &snapshot.series);
+            if old_database_path != snapshot.database_path {
+                if let Some(previous_path) = database_path_rewrites.get(&old_database_path) {
+                    if previous_path != &snapshot.database_path {
+                        database_path_rewrites.remove(&old_database_path);
+                        ambiguous_database_paths.insert(old_database_path);
+                    }
+                } else if !ambiguous_database_paths.contains(&old_database_path) {
+                    database_path_rewrites
+                        .insert(old_database_path, snapshot.database_path.clone());
+                }
+            }
+            if old_source_key != new_source_key {
+                if let Some(previous_key) = source_key_rewrites.get(&old_source_key) {
+                    if previous_key != &new_source_key {
+                        source_key_rewrites.remove(&old_source_key);
+                        ambiguous_source_keys.insert(old_source_key);
+                    }
+                } else if !ambiguous_source_keys.contains(&old_source_key) {
+                    source_key_rewrites.insert(old_source_key, new_source_key.clone());
+                }
+            }
+            snapshot.source_key = new_source_key;
+        }
+    }
+    for entity in &mut case.entities {
+        for (source, _) in &mut entity.external_ids {
+            if let Some(rewritten) = database_path_rewrites.get(source) {
+                *source = rewritten.clone();
+            }
         }
     }
     for link in &mut case.links {
