@@ -2409,6 +2409,119 @@ impl App {
         };
     }
 
+    fn export_sql_comparison(
+        &mut self,
+        baseline: &ConnectionSnapshot,
+        current: &ConnectionSnapshot,
+    ) {
+        let result = (|| -> Result<usize, String> {
+            if self.export_path.trim().is_empty() {
+                return Err("export path cannot be empty".into());
+            }
+            let deltas = compare_snapshots(baseline, current);
+            let mut writer = csv::WriterBuilder::new()
+                .delimiter(delimited_text_delimiter(&self.export_path))
+                .from_path(&self.export_path)
+                .map_err(|error| error.to_string())?;
+            writer
+                .write_record([
+                    "change",
+                    "connection_id",
+                    "source_before",
+                    "source_type_before",
+                    "relationship_before",
+                    "target_before",
+                    "target_type_before",
+                    "directed_before",
+                    "confidence_before",
+                    "date_before",
+                    "source_reference_before",
+                    "source_notes_before",
+                    "source",
+                    "source_type",
+                    "relationship",
+                    "target",
+                    "target_type",
+                    "directed",
+                    "confidence",
+                    "date",
+                    "source_reference",
+                    "source_notes",
+                    "database_path",
+                    "series",
+                    "baseline_snapshot_id",
+                    "baseline_captured_at",
+                    "current_snapshot_id",
+                    "current_captured_at",
+                ])
+                .map_err(|error| error.to_string())?;
+            for delta in &deltas {
+                let previous = delta.previous_connection.as_ref();
+                let current_fact =
+                    (!delta.kinds.contains(&DeltaKind::Removed)).then_some(&delta.connection);
+                let changes = delta
+                    .kinds
+                    .iter()
+                    .map(|kind| match kind {
+                        DeltaKind::Removed => "REMOVED",
+                        DeltaKind::ConfidenceDeclined => "CONFIDENCE DOWN",
+                        DeltaKind::DateChanged => "DATE CHANGED",
+                        DeltaKind::Updated => "CONNECTION DETAILS",
+                        DeltaKind::EvidenceChanged => "EVIDENCE CHANGED",
+                        DeltaKind::SourceNotesChanged => "SOURCE NOTES CHANGED",
+                        DeltaKind::Added => "ADDED",
+                        DeltaKind::ConfidenceIncreased => "CONFIDENCE UP",
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" · ");
+                let mut record = vec![changes, delta.connection.connection_id.clone()];
+                let append_fact = |record: &mut Vec<String>, fact: Option<&ConnectionFact>| {
+                    record.extend([
+                        fact.map(|value| value.source.clone()).unwrap_or_default(),
+                        fact.map(|value| value.source_type.clone())
+                            .unwrap_or_default(),
+                        fact.map(|value| value.relationship.clone())
+                            .unwrap_or_default(),
+                        fact.map(|value| value.target.clone()).unwrap_or_default(),
+                        fact.map(|value| value.target_type.clone())
+                            .unwrap_or_default(),
+                        fact.map(|value| value.directed.to_string())
+                            .unwrap_or_default(),
+                        fact.map(|value| value.confidence.to_string())
+                            .unwrap_or_default(),
+                        fact.map(|value| value.date.clone()).unwrap_or_default(),
+                        fact.map(|value| value.source_reference.clone())
+                            .unwrap_or_default(),
+                        fact.map(|value| value.notes.clone()).unwrap_or_default(),
+                    ]);
+                };
+                append_fact(&mut record, previous);
+                append_fact(&mut record, current_fact);
+                record.extend([
+                    current.database_path.clone(),
+                    current.series.clone(),
+                    baseline.id.to_string(),
+                    baseline.captured_at.clone(),
+                    current.id.to_string(),
+                    current.captured_at.clone(),
+                ]);
+                writer
+                    .write_record(record)
+                    .map_err(|error| error.to_string())?;
+            }
+            writer.flush().map_err(|error| error.to_string())?;
+            Ok(deltas.len())
+        })();
+        self.status = match result {
+            Ok(count) => format!(
+                "SQL COMPARISON EXPORTED · {} · {count} CHANGES · {}",
+                delimited_text_format(&self.export_path),
+                self.export_path
+            ),
+            Err(error) => format!("SQL COMPARISON EXPORT FAILED · {error}"),
+        };
+    }
+
     fn auto_layout(&mut self) {
         let n = self.case.entities.len();
         if n == 0 {
@@ -3922,7 +4035,12 @@ impl eframe::App for App {
                                         let source_notes=count(DeltaKind::SourceNotesChanged);
                                         let added=count(DeltaKind::Added);
                                         let increased=count(DeltaKind::ConfidenceIncreased);
-                                        ui.label(egui::RichText::new(format!("Baseline {} → current {} · {removed} removed · {declined} confidence declines · {dates} date changes · {updated} connection detail changes · {evidence} evidence changes · {source_notes} source note changes · {added} added · {increased} confidence increases",base.captured_at,current.captured_at)).strong().color(if removed+declined>0{egui::Color32::from_rgb(238,139,115)}else{cyan}));
+                                        ui.horizontal(|ui| {
+                                            ui.label(egui::RichText::new(format!("Baseline {} → current {} · {removed} removed · {declined} confidence declines · {dates} date changes · {updated} connection detail changes · {evidence} evidence changes · {source_notes} source note changes · {added} added · {increased} confidence increases",base.captured_at,current.captured_at)).strong().color(if removed+declined>0{egui::Color32::from_rgb(238,139,115)}else{cyan}));
+                                            if ui.button("Export comparison CSV/TSV").clicked() {
+                                                self.export_sql_comparison(&base, &current);
+                                            }
+                                        });
                                         egui::ScrollArea::both().show(ui,|ui|egui::Grid::new("sql_regression_table").striped(true).show(ui,|ui|{
                                             for heading in ["CHANGE","CONNECTION","CONFIDENCE","DATE","EVIDENCE","NOTES"]{ui.label(egui::RichText::new(heading).small().strong().color(cyan));}ui.end_row();
                                             for delta in deltas {
@@ -4806,6 +4924,7 @@ fn run_automation_cli(
         if !success {
             failures += 1;
         }
+        save_case_atomically(Path::new(case_path), &app.case)?;
         if json_output {
             outcomes.push(serde_json::json!({"status":if success{"PASS"}else{"FAIL"},"job":job.name,"message":message}));
         } else {
@@ -4817,7 +4936,6 @@ fn run_automation_cli(
             );
         }
     }
-    save_case_atomically(Path::new(case_path), &app.case)?;
     if json_output {
         println!("{}", serde_json::to_string_pretty(&serde_json::json!({"ok":failures==0,"saved":true,"case":case_path,"passed":outcomes.iter().filter(|outcome|outcome["status"]=="PASS").count(),"failed":failures,"outcomes":outcomes})).map_err(|error|error.to_string())?);
     }
