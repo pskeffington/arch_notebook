@@ -2014,6 +2014,26 @@ impl App {
         }
     }
 
+    fn build_sql_query_from_schema(&mut self) {
+        let result = (|| -> Result<(String, String), String> {
+            if self.sql_path.trim().is_empty() {
+                return Err("database path cannot be empty".into());
+            }
+            let path = resolve_sqlite_database_path(&self.sql_path, &self.case_path)?;
+            let schema = read_sqlite_schema(&path.to_string_lossy())?;
+            sqlite_query_template(&schema)
+                .ok_or_else(|| "no table or view has recognizable source and target columns".into())
+        })();
+        match result {
+            Ok((object_name, query)) => {
+                self.sql_query = query;
+                self.sql_validation_preview = None;
+                self.status = format!("SQL QUERY BUILT FROM {object_name}");
+            }
+            Err(error) => self.status = format!("SQL SCHEMA INSPECTION FAILED · {error}"),
+        }
+    }
+
     fn save_automation_job(&mut self) {
         let name = self.automation_job_name.trim().to_string();
         let parameters = match parse_sql_parameters(&self.sql_parameter_text) {
@@ -4981,7 +5001,7 @@ impl eframe::App for App {
                                         ui.add(egui::DragValue::new(maximum).range(0..=1_000_000));
                                     }
                                 });
-                                ui.horizontal(|ui|{let mut limit_regressions=self.automation_maximum_regressions.is_some();if ui.checkbox(&mut limit_regressions,"Limit regressions").changed(){self.automation_maximum_regressions=limit_regressions.then_some(0);}if let Some(maximum)=self.automation_maximum_regressions.as_mut(){ui.label("Maximum removals/confidence declines");ui.add(egui::DragValue::new(maximum).range(0..=1_000_000));}if ui.button("Validate query").clicked(){self.validate_sql_query();}if ui.button(if self.editing_automation_job.is_some(){"Save job changes"}else{"Add job"}).clicked(){self.save_automation_job();}if self.editing_automation_job.is_some()&&ui.button("Cancel edit").clicked(){self.cancel_automation_job_edit();}});
+                                ui.horizontal(|ui|{let mut limit_regressions=self.automation_maximum_regressions.is_some();if ui.checkbox(&mut limit_regressions,"Limit regressions").changed(){self.automation_maximum_regressions=limit_regressions.then_some(0);}if let Some(maximum)=self.automation_maximum_regressions.as_mut(){ui.label("Maximum removals/confidence declines");ui.add(egui::DragValue::new(maximum).range(0..=1_000_000));}if ui.button("Build query from schema").clicked(){self.build_sql_query_from_schema();}if ui.button("Validate query").clicked(){self.validate_sql_query();}if ui.button(if self.editing_automation_job.is_some(){"Save job changes"}else{"Add job"}).clicked(){self.save_automation_job();}if self.editing_automation_job.is_some()&&ui.button("Cancel edit").clicked(){self.cancel_automation_job_edit();}});
                                 ui.label(egui::RichText::new("A regression is a removed connection or confidence decline. Runs over either configured limit are saved as failed, with their snapshots retained.").small().color(muted));
                                 ui.add(egui::TextEdit::multiline(&mut self.sql_query).desired_width(canvas_w-20.0).desired_rows(5).code_editor());
                                 ui.label(egui::RichText::new("Named SQL parameters · name=value per line; bind as text with :name, @name, or $name").small().color(muted));
@@ -5265,7 +5285,7 @@ impl eframe::App for App {
                                 ui.add(egui::TextEdit::multiline(&mut self.sql_query).desired_width(canvas_w-20.0).desired_rows(4).code_editor());
                                 ui.label(egui::RichText::new("Named SQL parameters · name=value per line; bind as text with :name, @name, or $name").small().color(muted));
                                 ui.add(egui::TextEdit::multiline(&mut self.sql_parameter_text).desired_width(canvas_w-20.0).desired_rows(2).code_editor());
-                                ui.horizontal(|ui|{if ui.button("Validate query").clicked(){self.validate_sql_query();}if ui.button("Ingest SQL snapshot").clicked(){self.ingest_sqlite_snapshot();}});
+                                ui.horizontal(|ui|{if ui.button("Build query from schema").clicked(){self.build_sql_query_from_schema();}if ui.button("Validate query").clicked(){self.validate_sql_query();}if ui.button("Ingest SQL snapshot").clicked(){self.ingest_sqlite_snapshot();}});
                                 Self::show_sql_validation_preview(ui, self.sql_validation_preview.as_ref(), &self.sql_path, &self.sql_series, &self.sql_query, &self.sql_parameter_text);
                                 if let Some(current)=latest {
                                     let capture_label=if selected_index==latest_index{"Latest snapshot"}else{"Selected historical snapshot"};
@@ -7651,7 +7671,7 @@ fn export_graphml_cli(case_path: &str, output_path: &str, json_output: bool) -> 
     Ok(())
 }
 
-fn inspect_sqlite_schema_cli(database_path: &str, json_output: bool) -> Result<(), String> {
+fn read_sqlite_schema(database_path: &str) -> Result<Vec<serde_json::Value>, String> {
     let connection = Connection::open_with_flags(database_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
         .map_err(|error| format!("cannot open SQLite database read-only: {error}"))?;
     connection
@@ -7697,34 +7717,138 @@ fn inspect_sqlite_schema_cli(database_path: &str, json_output: bool) -> Result<(
             "columns": columns,
         }));
     }
+    Ok(schema)
+}
+
+fn sqlite_query_template(schema: &[serde_json::Value]) -> Option<(String, String)> {
+    let fields: [(&str, &[&str]); 11] = [
+        (
+            "source",
+            &[
+                "source",
+                "from",
+                "entity_a",
+                "source_name",
+                "from_name",
+                "entity_a_name",
+                "source_id",
+                "from_id",
+                "entity_a_id",
+                "origin",
+            ],
+        ),
+        (
+            "target",
+            &[
+                "target",
+                "to",
+                "entity_b",
+                "target_name",
+                "to_name",
+                "entity_b_name",
+                "target_id",
+                "to_id",
+                "entity_b_id",
+                "destination",
+            ],
+        ),
+        (
+            "connection_id",
+            &["connection_id", "link_id", "record_id", "id"],
+        ),
+        (
+            "source_type",
+            &["source_type", "from_type", "entity_a_type"],
+        ),
+        ("target_type", &["target_type", "to_type", "entity_b_type"]),
+        ("relationship", &["relationship", "link_type", "relation"]),
+        ("date", &["date", "event_date", "datetime", "timestamp"]),
+        ("confidence", &["confidence", "strength"]),
+        ("directed", &["directed", "is_directed", "direction"]),
+        (
+            "source_reference",
+            &[
+                "source_reference",
+                "evidence",
+                "reference",
+                "source_document_id",
+                "evidence_id",
+            ],
+        ),
+        ("notes", &["notes", "description"]),
+    ];
+    for object in schema {
+        let object_name = object["name"].as_str()?;
+        let columns = object["columns"].as_array()?;
+        let matching_column = |aliases: &[&str]| {
+            columns.iter().find_map(|column| {
+                let name = column["name"].as_str()?;
+                aliases
+                    .iter()
+                    .any(|alias| name.trim().eq_ignore_ascii_case(alias))
+                    .then_some(name)
+            })
+        };
+        if matching_column(fields[0].1).is_none() || matching_column(fields[1].1).is_none() {
+            continue;
+        }
+        let mut selected = Vec::new();
+        for (canonical, aliases) in fields {
+            if let Some(column) = matching_column(aliases) {
+                selected.push(format!(
+                    "\"{}\" AS \"{canonical}\"",
+                    column.replace('"', "\"\"")
+                ));
+            }
+        }
+        return Some((
+            object_name.to_owned(),
+            format!(
+                "SELECT {}\nFROM \"{}\";",
+                selected.join(",\n       "),
+                object_name.replace('"', "\"\"")
+            ),
+        ));
+    }
+    None
+}
+
+fn inspect_sqlite_schema_cli(database_path: &str, json_output: bool) -> Result<(), String> {
+    let schema = read_sqlite_schema(database_path)?;
     if json_output {
         println!(
             "{}",
             serde_json::to_string_pretty(&serde_json::json!({
                 "schema_version": 1,
+                "ok": true,
                 "database": database_path,
+                "object_count": schema.len(),
                 "objects": schema,
             }))
             .map_err(|error| error.to_string())?
         );
     } else {
-        for object in schema {
-            let object_type = object["type"].as_str().unwrap_or("object");
-            let name = object["name"].as_str().unwrap_or("");
-            println!("{object_type} {name}");
-            for column in object["columns"].as_array().into_iter().flatten() {
-                println!(
-                    "  {} · {}{}",
-                    column["name"].as_str().unwrap_or(""),
-                    column["type"].as_str().unwrap_or(""),
-                    if column["primary_key_order"].as_i64().unwrap_or_default() > 0 {
-                        " · primary key"
-                    } else if column["not_null"].as_bool().unwrap_or(false) {
-                        " · not null"
-                    } else {
-                        ""
-                    }
-                );
+        if schema.is_empty() {
+            println!("No user tables or views found.");
+        } else {
+            for object in schema {
+                let object_type = object["type"].as_str().unwrap_or("object");
+                let name = object["name"].as_str().unwrap_or("");
+                println!("{object_type} {name}");
+                for column in object["columns"].as_array().into_iter().flatten() {
+                    println!(
+                        "  {} · {}{}",
+                        column["name"].as_str().unwrap_or(""),
+                        column["type"].as_str().unwrap_or(""),
+                        if column["primary_key_order"].as_i64().unwrap_or_default() > 0 {
+                            " · primary key"
+                        } else if column["not_null"].as_bool().unwrap_or(false) {
+                            " · not null"
+                        } else {
+                            ""
+                        }
+                    );
+                }
             }
         }
     }
