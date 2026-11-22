@@ -2661,7 +2661,7 @@ impl App {
             self.status = "SAVE CASE AND JOB CHANGES BEFORE RUNNING AUTOMATION".into();
             return;
         }
-        if job_ids.is_empty() {
+        if job_ids.is_empty() && replay_run_id.is_none() {
             self.status = "NO AUTOMATION JOBS TO RUN".into();
             return;
         }
