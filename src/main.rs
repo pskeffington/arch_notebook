@@ -1,9 +1,13 @@
 use eframe::egui;
+use quick_xml::{
+    Reader as XmlReader, escape::resolve_predefined_entity, events::Event as XmlEvent,
+};
 use rusqlite::{Connection, OpenFlags, TransactionBehavior, types::ValueRef};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     env, fs,
+    io::Write,
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -235,6 +239,23 @@ struct ImportSpecification {
     mapping: ImportColumnMapping,
     #[serde(default)]
     header_signature: Vec<String>,
+}
+
+#[derive(Default)]
+struct GraphMlRecord {
+    id: String,
+    source: String,
+    target: String,
+    directed: Option<bool>,
+    data: HashMap<String, String>,
+}
+
+#[derive(Default)]
+struct GraphMlDocument {
+    default_directed: bool,
+    graph_data: HashMap<String, String>,
+    nodes: Vec<GraphMlRecord>,
+    edges: Vec<GraphMlRecord>,
 }
 
 #[derive(Clone, Default, Serialize, Deserialize)]
@@ -817,6 +838,36 @@ impl App {
                 self.status = "CASE LOADED".into();
             }
             Err(e) => self.status = format!("LOAD FAILED · {e}"),
+        }
+    }
+
+    fn import_graphml(&mut self) {
+        let source_path = self.import_path.trim().to_owned();
+        let result = graphml_csv_bytes(&source_path).and_then(write_graphml_csv_temp);
+        let temporary_path = match result {
+            Ok(path) => path,
+            Err(error) => {
+                self.status = format!("GRAPHML IMPORT FAILED · {error}");
+                return;
+            }
+        };
+        let original_path = self.import_path.clone();
+        let original_mapping = self.import_column_mapping.clone();
+        self.import_path = temporary_path.to_string_lossy().into_owned();
+        self.import_column_mapping = ImportColumnMapping::default();
+        self.import_delimited();
+        self.import_path = original_path;
+        self.import_column_mapping = original_mapping;
+        let import_status = std::mem::take(&mut self.status);
+        self.status = if let Some(summary) = import_status.strip_prefix("CSV IMPORT · ") {
+            format!("GRAPHML IMPORT · {summary}")
+        } else if let Some(error) = import_status.strip_prefix("IMPORT FAILED · ") {
+            format!("GRAPHML IMPORT FAILED · {error}")
+        } else {
+            format!("GRAPHML IMPORT FAILED · {import_status}")
+        };
+        if let Err(error) = fs::remove_file(&temporary_path) {
+            self.status = format!("{} · TEMP FILE CLEANUP FAILED · {error}", self.status);
         }
     }
 
@@ -4240,6 +4291,7 @@ impl eframe::App for App {
                         }
                     });
                     if ui.button("Import CSV/TSV").clicked(){self.inspect_delimited_import();}
+                    if ui.button("Import GraphML").clicked(){self.import_graphml();}
                     if ui.button("Export CSV/TSV").clicked(){self.export_delimited();}
                     if ui.button("Export GraphML").clicked(){self.export_graphml();}
                     egui::ComboBox::from_id_salt("layout_mode")
@@ -5269,6 +5321,804 @@ fn delimited_text_format(path: &str) -> &'static str {
     } else {
         "CSV"
     }
+}
+
+#[derive(Clone, Copy)]
+enum GraphMlScope {
+    Graph,
+    Node,
+    Edge,
+}
+
+fn graphml_xml_attributes(
+    start: &quick_xml::events::BytesStart<'_>,
+    decoder: quick_xml::encoding::Decoder,
+) -> Result<HashMap<String, String>, String> {
+    let mut attributes = HashMap::new();
+    for attribute in start.attributes() {
+        let attribute = attribute.map_err(|error| error.to_string())?;
+        let name = String::from_utf8_lossy(attribute.key.as_ref()).into_owned();
+        let value = attribute
+            .decoded_and_normalized_value(quick_xml::XmlVersion::Implicit1_0, decoder)
+            .map_err(|error| error.to_string())?
+            .into_owned();
+        attributes.insert(name, value);
+    }
+    Ok(attributes)
+}
+
+fn graphml_store_data(
+    scope: GraphMlScope,
+    key: String,
+    value: String,
+    keys: &HashMap<String, (String, String)>,
+    document: &mut GraphMlDocument,
+    node: &mut Option<GraphMlRecord>,
+    edge: &mut Option<GraphMlRecord>,
+) -> Result<(), String> {
+    let (declared_scope, property) = keys
+        .get(&key)
+        .cloned()
+        .unwrap_or_else(|| (String::new(), key));
+    let scope_name = match scope {
+        GraphMlScope::Graph => "graph",
+        GraphMlScope::Node => "node",
+        GraphMlScope::Edge => "edge",
+    };
+    if !declared_scope.is_empty() && declared_scope != scope_name && declared_scope != "all" {
+        return Err(format!(
+            "GraphML key {property} is declared for {declared_scope} but used on {scope_name}"
+        ));
+    }
+    match scope {
+        GraphMlScope::Graph => {
+            document.graph_data.insert(property, value);
+        }
+        GraphMlScope::Node => {
+            node.as_mut()
+                .ok_or("GraphML node data is outside a node")?
+                .data
+                .insert(property, value);
+        }
+        GraphMlScope::Edge => {
+            edge.as_mut()
+                .ok_or("GraphML edge data is outside an edge")?
+                .data
+                .insert(property, value);
+        }
+    }
+    Ok(())
+}
+
+fn resolve_graphml_reference(reference: &str) -> Result<String, String> {
+    if let Some(value) = resolve_predefined_entity(reference) {
+        return Ok(value.to_owned());
+    }
+    let codepoint = if let Some(hex) = reference.strip_prefix("#x") {
+        u32::from_str_radix(hex, 16).map_err(|error| error.to_string())?
+    } else if let Some(decimal) = reference.strip_prefix('#') {
+        decimal.parse::<u32>().map_err(|error| error.to_string())?
+    } else {
+        return Err(format!(
+            "GraphML uses unsupported custom XML entity &{reference};"
+        ));
+    };
+    char::from_u32(codepoint)
+        .map(|character| character.to_string())
+        .ok_or_else(|| format!("GraphML contains invalid XML character reference &{reference};"))
+}
+
+fn parse_graphml(path: &str) -> Result<GraphMlDocument, String> {
+    if path.trim().is_empty() {
+        return Err("GraphML import path cannot be empty".into());
+    }
+    let mut reader = XmlReader::from_file(path).map_err(|error| error.to_string())?;
+    reader.config_mut().trim_text(false);
+    let decoder = reader.decoder();
+    let mut document = GraphMlDocument::default();
+    let mut keys: HashMap<String, (String, String)> = HashMap::new();
+    let mut node: Option<GraphMlRecord> = None;
+    let mut edge: Option<GraphMlRecord> = None;
+    let mut active_data: Option<(GraphMlScope, String, String)> = None;
+    let mut root_seen = false;
+    let mut graph_count = 0;
+    let mut buffer = Vec::new();
+    loop {
+        let event = reader
+            .read_event_into(&mut buffer)
+            .map_err(|error| format!("invalid GraphML XML: {error}"))?;
+        match event {
+            XmlEvent::Start(start) => match start.local_name().as_ref() {
+                b"graphml" => root_seen = true,
+                b"key" => {
+                    let attributes = graphml_xml_attributes(&start, decoder)?;
+                    if let Some(id) = attributes.get("id") {
+                        keys.insert(
+                            id.clone(),
+                            (
+                                attributes.get("for").cloned().unwrap_or_default(),
+                                attributes
+                                    .get("attr.name")
+                                    .cloned()
+                                    .unwrap_or_else(|| id.clone()),
+                            ),
+                        );
+                    }
+                }
+                b"graph" => {
+                    graph_count += 1;
+                    if graph_count > 1 {
+                        return Err("GraphML import supports one top-level graph".into());
+                    }
+                    let attributes = graphml_xml_attributes(&start, decoder)?;
+                    document.default_directed = match attributes
+                        .get("edgedefault")
+                        .map(String::as_str)
+                        .unwrap_or("undirected")
+                    {
+                        "directed" => true,
+                        "undirected" => false,
+                        value => {
+                            return Err(format!(
+                                "GraphML edgedefault must be directed or undirected, got {value}"
+                            ));
+                        }
+                    };
+                }
+                b"node" => {
+                    if node.is_some() || edge.is_some() {
+                        return Err("nested GraphML nodes and edges are not supported".into());
+                    }
+                    let attributes = graphml_xml_attributes(&start, decoder)?;
+                    node = Some(GraphMlRecord {
+                        id: attributes.get("id").cloned().unwrap_or_default(),
+                        ..GraphMlRecord::default()
+                    });
+                }
+                b"edge" => {
+                    if node.is_some() || edge.is_some() {
+                        return Err("nested GraphML nodes and edges are not supported".into());
+                    }
+                    let attributes = graphml_xml_attributes(&start, decoder)?;
+                    edge = Some(graphml_edge_record(attributes)?);
+                }
+                b"data" => {
+                    let attributes = graphml_xml_attributes(&start, decoder)?;
+                    let key = attributes
+                        .get("key")
+                        .cloned()
+                        .ok_or("GraphML data element is missing its key")?;
+                    let scope = if edge.is_some() {
+                        GraphMlScope::Edge
+                    } else if node.is_some() {
+                        GraphMlScope::Node
+                    } else {
+                        GraphMlScope::Graph
+                    };
+                    active_data = Some((scope, key, String::new()));
+                }
+                _ => {}
+            },
+            XmlEvent::Empty(start) => match start.local_name().as_ref() {
+                b"key" => {
+                    let attributes = graphml_xml_attributes(&start, decoder)?;
+                    if let Some(id) = attributes.get("id") {
+                        keys.insert(
+                            id.clone(),
+                            (
+                                attributes.get("for").cloned().unwrap_or_default(),
+                                attributes
+                                    .get("attr.name")
+                                    .cloned()
+                                    .unwrap_or_else(|| id.clone()),
+                            ),
+                        );
+                    }
+                }
+                b"node" => {
+                    let attributes = graphml_xml_attributes(&start, decoder)?;
+                    document.nodes.push(GraphMlRecord {
+                        id: attributes.get("id").cloned().unwrap_or_default(),
+                        ..GraphMlRecord::default()
+                    });
+                }
+                b"edge" => {
+                    let attributes = graphml_xml_attributes(&start, decoder)?;
+                    document.edges.push(graphml_edge_record(attributes)?);
+                }
+                b"data" => {
+                    let attributes = graphml_xml_attributes(&start, decoder)?;
+                    let key = attributes
+                        .get("key")
+                        .cloned()
+                        .ok_or("GraphML data element is missing its key")?;
+                    let scope = if edge.is_some() {
+                        GraphMlScope::Edge
+                    } else if node.is_some() {
+                        GraphMlScope::Node
+                    } else {
+                        GraphMlScope::Graph
+                    };
+                    graphml_store_data(
+                        scope,
+                        key,
+                        String::new(),
+                        &keys,
+                        &mut document,
+                        &mut node,
+                        &mut edge,
+                    )?;
+                }
+                _ => {}
+            },
+            XmlEvent::Text(text) => {
+                if let Some((_, _, value)) = active_data.as_mut() {
+                    let decoded = text.decode().map_err(|error| error.to_string())?;
+                    value.push_str(&decoded);
+                }
+            }
+            XmlEvent::CData(text) => {
+                if let Some((_, _, value)) = active_data.as_mut() {
+                    value.push_str(&text.decode().map_err(|error| error.to_string())?);
+                }
+            }
+            XmlEvent::GeneralRef(reference) => {
+                if let Some((_, _, value)) = active_data.as_mut() {
+                    value.push_str(&resolve_graphml_reference(
+                        &reference.decode().map_err(|error| error.to_string())?,
+                    )?);
+                }
+            }
+            XmlEvent::End(end) => match end.local_name().as_ref() {
+                b"data" => {
+                    let Some((scope, key, value)) = active_data.take() else {
+                        return Err("GraphML data end tag has no matching start".into());
+                    };
+                    graphml_store_data(
+                        scope,
+                        key,
+                        value,
+                        &keys,
+                        &mut document,
+                        &mut node,
+                        &mut edge,
+                    )?;
+                }
+                b"node" => {
+                    document
+                        .nodes
+                        .push(node.take().ok_or("GraphML node end tag has no start")?);
+                }
+                b"edge" => {
+                    document
+                        .edges
+                        .push(edge.take().ok_or("GraphML edge end tag has no start")?);
+                }
+                _ => {}
+            },
+            XmlEvent::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+    if !root_seen || graph_count != 1 {
+        return Err("file does not contain one GraphML graph".into());
+    }
+    if node.is_some() || edge.is_some() || active_data.is_some() {
+        return Err("GraphML document ended inside an element".into());
+    }
+    Ok(document)
+}
+
+fn graphml_edge_record(attributes: HashMap<String, String>) -> Result<GraphMlRecord, String> {
+    let directed = attributes
+        .get("directed")
+        .map(|value| match value.as_str() {
+            "true" | "1" => Ok(true),
+            "false" | "0" => Ok(false),
+            _ => Err(format!("invalid GraphML edge direction: {value}")),
+        })
+        .transpose()?;
+    Ok(GraphMlRecord {
+        id: attributes.get("id").cloned().unwrap_or_default(),
+        source: attributes.get("source").cloned().unwrap_or_default(),
+        target: attributes.get("target").cloned().unwrap_or_default(),
+        directed,
+        data: HashMap::new(),
+    })
+}
+
+fn graphml_property<'a>(record: &'a GraphMlRecord, keys: &[&str]) -> Option<&'a str> {
+    keys.iter().find_map(|key| {
+        record
+            .data
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case(key))
+            .map(|(_, value)| value.as_str())
+    })
+}
+
+fn graphml_json_property<T: serde::Serialize>(value: &T) -> Result<String, String> {
+    serde_json::to_string(value).map_err(|error| error.to_string())
+}
+
+fn graphml_csv_bytes(path: &str) -> Result<Vec<u8>, String> {
+    let mut document = parse_graphml(path)?;
+    let source_identity = fs::canonicalize(path)
+        .unwrap_or_else(|_| PathBuf::from(path))
+        .to_string_lossy()
+        .into_owned();
+    let mut namespace_bytes = [0u8; 16];
+    let mut hash = 0xcbf29ce484222325u64;
+    for byte in source_identity.bytes() {
+        hash = (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3);
+    }
+    namespace_bytes[..8].copy_from_slice(&hash.to_be_bytes());
+    namespace_bytes[8..].copy_from_slice(
+        &hash
+            .rotate_left(29)
+            .wrapping_mul(0x9e3779b97f4a7c15)
+            .to_be_bytes(),
+    );
+    namespace_bytes[6] = (namespace_bytes[6] & 0x0f) | 0x50;
+    namespace_bytes[8] = (namespace_bytes[8] & 0x3f) | 0x80;
+    let namespace = Uuid::from_bytes(namespace_bytes);
+    let mut node_ids = HashMap::<String, Uuid>::new();
+    let mut seen_ids = std::collections::HashSet::new();
+    let mut positions = Vec::<(f32, f32)>::new();
+
+    for node in &document.nodes {
+        if node.id.trim().is_empty() || !seen_ids.insert(node.id.clone()) {
+            return Err(format!(
+                "GraphML node ID is empty or duplicated: {}",
+                node.id
+            ));
+        }
+        let id = graphml_property(node, &["arch_notebook_uuid", "node_uuid", "uuid"])
+            .filter(|value| !value.trim().is_empty())
+            .map(Uuid::parse_str)
+            .transpose()
+            .map_err(|error| format!("GraphML node {} has an invalid UUID: {error}", node.id))?
+            .or_else(|| {
+                node.id
+                    .strip_prefix("n_")
+                    .and_then(|value| Uuid::parse_str(value).ok())
+            })
+            .unwrap_or_else(|| {
+                let mut bytes = namespace.into_bytes();
+                for (index, byte) in node.id.bytes().enumerate() {
+                    let slot = index % bytes.len();
+                    bytes[slot] = bytes[slot].wrapping_mul(31).wrapping_add(byte);
+                }
+                bytes[6] = (bytes[6] & 0x0f) | 0x50;
+                bytes[8] = (bytes[8] & 0x3f) | 0x80;
+                Uuid::from_bytes(bytes)
+            });
+        node_ids.insert(node.id.clone(), id);
+
+        let x = graphml_property(node, &["x", "x_coord", "xcoordinate"])
+            .and_then(|value| value.parse::<f32>().ok())
+            .filter(|value| value.is_finite());
+        let y = graphml_property(node, &["y", "y_coord", "ycoordinate"])
+            .and_then(|value| value.parse::<f32>().ok())
+            .filter(|value| value.is_finite());
+        if let (Some(x), Some(y)) = (x, y) {
+            positions.push((x, y));
+        }
+    }
+
+    // Normalize external layout coordinates only when they are outside the app's unit chart.
+    let normalize = positions
+        .iter()
+        .any(|(x, y)| !(0.0..=1.0).contains(x) || !(0.0..=1.0).contains(y));
+    let bounds = positions
+        .iter()
+        .fold(None::<(f32, f32, f32, f32)>, |bounds, (x, y)| {
+            Some(match bounds {
+                Some((min_x, min_y, max_x, max_y)) => {
+                    (min_x.min(*x), min_y.min(*y), max_x.max(*x), max_y.max(*y))
+                }
+                None => (*x, *y, *x, *y),
+            })
+        });
+    let coordinate = |value: Option<&str>, axis: usize| -> String {
+        let Some(mut value) = value
+            .and_then(|value| value.parse::<f32>().ok())
+            .filter(|value| value.is_finite())
+        else {
+            return String::new();
+        };
+        if normalize {
+            if let Some((min_x, min_y, max_x, max_y)) = bounds {
+                let (min, max) = if axis == 0 {
+                    (min_x, max_x)
+                } else {
+                    (min_y, max_y)
+                };
+                value = if max > min {
+                    0.1 + 0.8 * (value - min) / (max - min)
+                } else {
+                    0.5
+                };
+            }
+        }
+        value.clamp(0.0, 1.0).to_string()
+    };
+
+    let mut headers = vec![
+        "record_type",
+        "connection_id",
+        "source",
+        "source_entity_id",
+        "source_type",
+        "source_detail_json",
+        "source_aliases_json",
+        "source_color",
+        "source_x",
+        "source_y",
+        "source_position_locked",
+        "relationship",
+        "target",
+        "target_entity_id",
+        "target_type",
+        "target_detail_json",
+        "target_aliases_json",
+        "target_color",
+        "target_x",
+        "target_y",
+        "target_position_locked",
+        "date",
+        "confidence",
+        "directed",
+        "notes",
+        "source_notes",
+        "source_reference",
+        "ingest_source",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect::<Vec<_>>();
+    let mut attribute_keys = document
+        .nodes
+        .iter()
+        .flat_map(|node| node.data.keys())
+        .filter(|key| {
+            ![
+                "label",
+                "name",
+                "entity_name",
+                "entity_type",
+                "type",
+                "kind",
+                "detail",
+                "description",
+                "aliases_json",
+                "aliases",
+                "merged_records_json",
+                "attributes_json",
+                "color",
+                "x",
+                "y",
+                "x_coord",
+                "y_coord",
+                "position_locked",
+            ]
+            .iter()
+            .any(|reserved| key.eq_ignore_ascii_case(reserved))
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    attribute_keys.push("merged_records_json".to_owned());
+    attribute_keys.sort_by_key(|key| key.to_ascii_lowercase());
+    attribute_keys.dedup_by(|first, second| first.eq_ignore_ascii_case(second));
+    for key in &attribute_keys {
+        headers.push(format!("source_attribute:{key}"));
+    }
+    for key in &attribute_keys {
+        headers.push(format!("target_attribute:{key}"));
+    }
+
+    let mut writer = csv::WriterBuilder::new().from_writer(Vec::new());
+    writer
+        .write_record(&headers)
+        .map_err(|error| error.to_string())?;
+    for node in &document.nodes {
+        let name = graphml_property(node, &["label", "name", "entity_name"])
+            .filter(|value| !value.is_empty())
+            .unwrap_or(&node.id);
+        let kind = graphml_property(node, &["entity_type", "type", "kind"]).unwrap_or("");
+        let detail = graphml_property(node, &["detail", "description"]).unwrap_or("");
+        let aliases = graphml_property(node, &["aliases_json", "aliases"])
+            .and_then(|value| serde_json::from_str::<Vec<String>>(value).ok())
+            .or_else(|| {
+                graphml_property(node, &["aliases"]).map(|value| {
+                    value
+                        .split('|')
+                        .map(str::trim)
+                        .filter(|part| !part.is_empty())
+                        .map(str::to_owned)
+                        .collect()
+                })
+            })
+            .unwrap_or_default();
+        let entity_id = node_ids[&node.id].to_string();
+        let source_detail = graphml_json_property(&detail)?;
+        let source_aliases = graphml_json_property(&aliases)?;
+        let mut row = vec![String::new(); headers.len()];
+        let fields = [
+            ("record_type", "entity"),
+            ("source", name),
+            ("source_entity_id", entity_id.as_str()),
+            ("source_type", kind),
+            ("source_detail_json", source_detail.as_str()),
+            ("source_aliases_json", source_aliases.as_str()),
+            (
+                "source_color",
+                graphml_property(node, &["color"]).unwrap_or(""),
+            ),
+            (
+                "source_position_locked",
+                graphml_property(node, &["position_locked"]).unwrap_or(""),
+            ),
+        ];
+        for (key, value) in fields {
+            if let Some(index) = headers.iter().position(|header| header == key) {
+                row[index] = value.to_owned();
+            }
+        }
+        if let Some(index) = headers.iter().position(|header| header == "source_x") {
+            row[index] = coordinate(graphml_property(node, &["x", "x_coord", "xcoordinate"]), 0);
+        }
+        if let Some(index) = headers.iter().position(|header| header == "source_y") {
+            row[index] = coordinate(graphml_property(node, &["y", "y_coord", "ycoordinate"]), 1);
+        }
+        let attributes = graphml_property(node, &["attributes_json"])
+            .and_then(|value| serde_json::from_str::<Vec<(String, String)>>(value).ok())
+            .unwrap_or_default();
+        for (key, value) in &attributes {
+            if let Some(index) = headers
+                .iter()
+                .position(|header| header == &format!("source_attribute:{key}"))
+            {
+                row[index] = value.clone();
+            }
+        }
+        for key in &attribute_keys {
+            let value = node
+                .data
+                .iter()
+                .find(|(name, _)| name.eq_ignore_ascii_case(key))
+                .map(|(_, value)| value.clone())
+                .or_else(|| {
+                    attributes
+                        .iter()
+                        .find(|(name, _)| name.eq_ignore_ascii_case(key))
+                        .map(|(_, value)| value.clone())
+                })
+                .unwrap_or_default();
+            if let Some(index) = headers
+                .iter()
+                .position(|header| header == &format!("source_attribute:{key}"))
+            {
+                row[index] = value;
+            }
+        }
+        writer
+            .write_record(row)
+            .map_err(|error| error.to_string())?;
+    }
+
+    let mut edge_ids = std::collections::HashSet::new();
+    for (index, edge) in document.edges.iter_mut().enumerate() {
+        if !edge.id.is_empty() && !edge_ids.insert(edge.id.clone()) {
+            return Err(format!("GraphML edge ID is duplicated: {}", edge.id));
+        }
+        let from = node_ids.get(&edge.source).ok_or_else(|| {
+            format!(
+                "GraphML edge {} has missing source node {}",
+                edge.id, edge.source
+            )
+        })?;
+        let to = node_ids.get(&edge.target).ok_or_else(|| {
+            format!(
+                "GraphML edge {} has missing target node {}",
+                edge.id, edge.target
+            )
+        })?;
+        let mut row = vec![String::new(); headers.len()];
+        let source_node = document
+            .nodes
+            .iter()
+            .find(|node| node.id == edge.source)
+            .expect("resolved source");
+        let target_node = document
+            .nodes
+            .iter()
+            .find(|node| node.id == edge.target)
+            .expect("resolved target");
+        let put = |row: &mut Vec<String>, key: &str, value: String| {
+            if let Some(position) = headers.iter().position(|header| header == key) {
+                row[position] = value;
+            }
+        };
+        for (side, record, id) in [("source", source_node, from), ("target", target_node, to)] {
+            let name = graphml_property(record, &["label", "name", "entity_name"])
+                .unwrap_or(&record.id)
+                .to_owned();
+            let kind = graphml_property(record, &["entity_type", "type", "kind"])
+                .unwrap_or("")
+                .to_owned();
+            let detail = graphml_property(record, &["detail", "description"]).unwrap_or("");
+            let aliases = graphml_property(record, &["aliases_json", "aliases"])
+                .and_then(|value| serde_json::from_str::<Vec<String>>(value).ok())
+                .unwrap_or_default();
+            put(&mut row, side, name);
+            put(&mut row, &format!("{side}_entity_id"), id.to_string());
+            put(&mut row, &format!("{side}_type"), kind);
+            put(
+                &mut row,
+                &format!("{side}_detail_json"),
+                graphml_json_property(&detail)?,
+            );
+            put(
+                &mut row,
+                &format!("{side}_aliases_json"),
+                graphml_json_property(&aliases)?,
+            );
+            put(
+                &mut row,
+                &format!("{side}_color"),
+                graphml_property(record, &["color"])
+                    .unwrap_or("")
+                    .to_owned(),
+            );
+            put(
+                &mut row,
+                &format!("{side}_x"),
+                coordinate(
+                    graphml_property(record, &["x", "x_coord", "xcoordinate"]),
+                    0,
+                ),
+            );
+            put(
+                &mut row,
+                &format!("{side}_y"),
+                coordinate(
+                    graphml_property(record, &["y", "y_coord", "ycoordinate"]),
+                    1,
+                ),
+            );
+            put(
+                &mut row,
+                &format!("{side}_position_locked"),
+                graphml_property(record, &["position_locked"])
+                    .unwrap_or("")
+                    .to_owned(),
+            );
+            let attributes = graphml_property(record, &["attributes_json"])
+                .and_then(|value| serde_json::from_str::<Vec<(String, String)>>(value).ok())
+                .unwrap_or_default();
+            for key in &attribute_keys {
+                let value = record
+                    .data
+                    .iter()
+                    .find(|(name, _)| name.eq_ignore_ascii_case(key))
+                    .map(|(_, value)| value.clone())
+                    .or_else(|| {
+                        attributes
+                            .iter()
+                            .find(|(name, _)| name.eq_ignore_ascii_case(key))
+                            .map(|(_, value)| value.clone())
+                    })
+                    .unwrap_or_default();
+                put(&mut row, &format!("{side}_attribute:{key}"), value);
+            }
+        }
+        put(&mut row, "record_type", "connection".into());
+        put(
+            &mut row,
+            "relationship",
+            graphml_property(edge, &["relationship", "label", "name"])
+                .unwrap_or("")
+                .to_owned(),
+        );
+        put(
+            &mut row,
+            "connection_id",
+            graphml_property(edge, &["connection_id"])
+                .unwrap_or("")
+                .to_owned(),
+        );
+        put(
+            &mut row,
+            "date",
+            graphml_property(edge, &["date"]).unwrap_or("").to_owned(),
+        );
+        put(
+            &mut row,
+            "confidence",
+            graphml_property(edge, &["confidence"])
+                .unwrap_or("2")
+                .to_owned(),
+        );
+        put(
+            &mut row,
+            "directed",
+            edge.directed
+                .unwrap_or(document.default_directed)
+                .to_string(),
+        );
+        put(
+            &mut row,
+            "notes",
+            graphml_property(edge, &["notes", "analyst_notes"])
+                .unwrap_or("")
+                .to_owned(),
+        );
+        put(
+            &mut row,
+            "source_notes",
+            graphml_property(edge, &["source_notes"])
+                .unwrap_or("")
+                .to_owned(),
+        );
+        put(
+            &mut row,
+            "source_reference",
+            graphml_property(edge, &["source_reference", "evidence"])
+                .unwrap_or("")
+                .to_owned(),
+        );
+        let ingest_source = graphml_property(edge, &["ingest_source"])
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+            .unwrap_or_else(|| format!("graphml:{path}"));
+        let connection_id = graphml_property(edge, &["connection_id"])
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+            .unwrap_or_else(|| {
+                format!(
+                    "graphml:{}",
+                    if edge.id.is_empty() {
+                        format!("edge-{index}")
+                    } else {
+                        edge.id.clone()
+                    }
+                )
+            });
+        put(&mut row, "connection_id", connection_id);
+        put(&mut row, "ingest_source", ingest_source);
+        writer
+            .write_record(row)
+            .map_err(|error| error.to_string())?;
+    }
+    writer
+        .into_inner()
+        .map_err(|error| error.into_error().to_string())
+}
+
+fn write_graphml_csv_temp(contents: Vec<u8>) -> Result<PathBuf, String> {
+    use std::fs::OpenOptions;
+    let path = env::temp_dir().join(format!(
+        "arch-notebook-graphml-import-{}.csv",
+        Uuid::new_v4()
+    ));
+    #[cfg(unix)]
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let mut file = options
+        .open(&path)
+        .map_err(|error| format!("cannot create temporary GraphML import file: {error}"))?;
+    if let Err(error) = file.write_all(&contents) {
+        let _ = fs::remove_file(&path);
+        return Err(format!(
+            "cannot write temporary GraphML import file: {error}"
+        ));
+    }
+    Ok(path)
 }
 
 fn graphml_data(xml: &mut String, key: &str, value: &str) {
