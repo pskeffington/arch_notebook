@@ -69,7 +69,11 @@ List configured jobs as JSON without changing the case file:
 cargo run --offline -- --list-jobs harbor-light.case.json
 ```
 
-Add `--json` to get a schema-versioned stable object containing the case path and job list. The default list output remains a JSON array for compatibility.
+Add `--json` to get a schema-versioned object containing each job’s UUID, enabled state, database, series, SQL query, and limits, plus total, enabled, and returned counts. Use `--enabled-only` to inspect just the batch set; it can be combined with `--json`. Without `--json`, output remains a JSON array for compatibility.
+
+```sh
+cargo run --offline -- --list-jobs harbor-light.case.json --enabled-only --json
+```
 
 Read saved automation outcomes without opening the desktop app:
 

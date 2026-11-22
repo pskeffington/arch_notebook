@@ -7137,7 +7137,11 @@ fn list_automation_jobs_cli(
     let case = serde_json::from_str::<CaseFile>(&content)
         .map_err(|error| format!("cannot parse case: {error}"))?;
     let total = case.automation_jobs.len();
-    let enabled = case.automation_jobs.iter().filter(|job| job.enabled).count();
+    let enabled = case
+        .automation_jobs
+        .iter()
+        .filter(|job| job.enabled)
+        .count();
     let jobs: Vec<serde_json::Value> = case
         .automation_jobs
         .iter()
@@ -7159,17 +7163,15 @@ fn list_automation_jobs_cli(
     if json_output {
         println!(
             "{}",
-            serde_json::to_string_pretty(
-                &serde_json::json!({
-                    "schema_version": 1,
-                    "case": case_path,
-                    "filter": {"enabled_only": enabled_only},
-                    "total": total,
-                    "enabled": enabled,
-                    "returned": jobs.len(),
-                    "jobs": jobs
-                })
-            )
+            serde_json::to_string_pretty(&serde_json::json!({
+                "schema_version": 1,
+                "case": case_path,
+                "filter": {"enabled_only": enabled_only},
+                "total": total,
+                "enabled": enabled,
+                "returned": jobs.len(),
+                "jobs": jobs
+            }))
             .map_err(|error| error.to_string())?
         );
     } else {
