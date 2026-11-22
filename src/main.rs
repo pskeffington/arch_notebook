@@ -8550,6 +8550,42 @@ fn export_graphml_cli(case_path: &str, output_path: &str, json_output: bool) -> 
     Ok(())
 }
 
+fn import_graphml_cli(case_path: &str, input_path: &str, json_output: bool) -> Result<(), String> {
+    let case_file = Path::new(case_path);
+    let _case_lock = lock_automation_case(case_file)?;
+    let content =
+        fs::read_to_string(case_file).map_err(|error| format!("cannot read case: {error}"))?;
+    let mut case = serde_json::from_str::<CaseFile>(&content)
+        .map_err(|error| format!("cannot parse case: {error}"))?;
+    normalize_snapshot_database_paths(&mut case, case_path);
+    let mut app = App::automation_context(case, case_path);
+    app.import_path = input_path.to_owned();
+    app.import_graphml();
+    if let Some(error) = app.status.strip_prefix("GRAPHML IMPORT FAILED · ") {
+        return Err(error.to_owned());
+    }
+    save_case_atomically(case_file, &app.case)?;
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "schema_version": 1,
+                "ok": true,
+                "saved": true,
+                "case": case_path,
+                "input": input_path,
+                "entities": app.case.entities.len(),
+                "relationships": app.case.links.len(),
+                "message": app.status,
+            }))
+            .map_err(|error| error.to_string())?
+        );
+    } else {
+        println!("{}", app.status);
+    }
+    Ok(())
+}
+
 fn read_sqlite_schema(database_path: &str) -> Result<Vec<serde_json::Value>, String> {
     let connection = Connection::open_with_flags(database_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
         .map_err(|error| format!("cannot open SQLite database read-only: {error}"))?;
@@ -9638,7 +9674,7 @@ fn main() -> eframe::Result<()> {
         .is_some_and(|arg| arg == "--help" || arg == "-h")
     {
         println!(
-            "Arch Notebook\n\nUsage:\n  arch-notebook\n  arch-notebook --inspect-sqlite <database.sqlite> [--json]\n  arch-notebook --export-graphml <case.json> <output.graphml> [--json]\n  arch-notebook --export-sql-comparison <case.json> <baseline-snapshot-id> <current-snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --list-jobs <case.json> [--enabled-only] [--json]\n  arch-notebook --list-runs <case.json> [--json] [--job <name-or-id>] [--offset <count>] [--limit <count>]\n  arch-notebook --validate-enabled-jobs <case.json> [--json] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --validate-run <case.json> <run-id> [--json]\n  arch-notebook --run-enabled-jobs <case.json> [--json] [--skip-recent-success] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --run-job <case.json> <job-name-or-id> [--param name=value ...] [--json]\n  arch-notebook --rerun-run <case.json> <run-id> [--json]\n\nJob and run listing and validation do not change the case. Run history is newest first and can be filtered or paged. SQL comparisons can be exported from saved snapshots for downstream tools. Batch runs save snapshots and run history to the case file. JSON output is available for scheduler integration."
+            "Arch Notebook\n\nUsage:\n  arch-notebook\n  arch-notebook --inspect-sqlite <database.sqlite> [--json]\n  arch-notebook --import-graphml <case.json> <input.graphml> [--json]\n  arch-notebook --export-graphml <case.json> <output.graphml> [--json]\n  arch-notebook --export-sql-comparison <case.json> <baseline-snapshot-id> <current-snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --list-jobs <case.json> [--enabled-only] [--json]\n  arch-notebook --list-runs <case.json> [--json] [--job <name-or-id>] [--offset <count>] [--limit <count>]\n  arch-notebook --validate-enabled-jobs <case.json> [--json] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --validate-run <case.json> <run-id> [--json]\n  arch-notebook --run-enabled-jobs <case.json> [--json] [--skip-recent-success] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --run-job <case.json> <job-name-or-id> [--param name=value ...] [--json]\n  arch-notebook --rerun-run <case.json> <run-id> [--json]\n\nJob and run listing and validation do not change the case. Run history is newest first and can be filtered or paged. SQL comparisons can be exported from saved snapshots for downstream tools. Batch runs save snapshots and run history to the case file. JSON output is available for scheduler integration."
         );
         return Ok(());
     }
@@ -9677,6 +9713,20 @@ fn main() -> eframe::Result<()> {
         }
         if let Err(error) = export_graphml_cli(case_path, output_path, json_output) {
             report_cli_error("GraphML export failed", error, json_output);
+        }
+        return Ok(());
+    }
+    if args.first().is_some_and(|arg| arg == "--import-graphml") {
+        let json_output = args.iter().any(|arg| arg == "--json");
+        let usage = "usage: arch-notebook --import-graphml <case.json> <input.graphml> [--json]";
+        let (Some(case_path), Some(input_path)) = (args.get(1), args.get(2)) else {
+            report_cli_usage_error(usage, json_output);
+        };
+        if args.len() > 4 || args.get(3).is_some_and(|arg| arg != "--json") {
+            report_cli_usage_error(usage, json_output);
+        }
+        if let Err(error) = import_graphml_cli(case_path, input_path, json_output) {
+            report_cli_error("GraphML import failed", error, json_output);
         }
         return Ok(());
     }
