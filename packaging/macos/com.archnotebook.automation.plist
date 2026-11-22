@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.archnotebook.automation</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/Applications/Arch Notebook.app/Contents/MacOS/arch-notebook</string>
+		<string>--run-enabled-jobs</string>
+		<string>/Users/REPLACE_WITH_USER/Library/Application Support/Arch Notebook/harbor-light.case.json</string>
+		<string>--json</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>StartInterval</key>
+	<integer>3600</integer>
+	<key>StandardOutPath</key>
+	<string>/Users/REPLACE_WITH_USER/Library/Logs/arch-notebook-automation.log</string>
+	<key>StandardErrorPath</key>
+	<string>/Users/REPLACE_WITH_USER/Library/Logs/arch-notebook-automation-error.log</string>
+</dict>
+</plist>
