@@ -462,6 +462,7 @@ struct ImportValueTransform {
 enum ImportTransformOperation {
     #[default]
     Replace,
+    ReplaceExact,
     Lowercase,
     Uppercase,
 }
@@ -1455,8 +1456,10 @@ impl App {
                     .ok_or_else(|| {
                         format!("value transform column is missing: {}", transform.column)
                     })?;
-                if transform.operation == ImportTransformOperation::Replace
-                    && transform.find.is_empty()
+                if matches!(
+                    transform.operation,
+                    ImportTransformOperation::Replace | ImportTransformOperation::ReplaceExact
+                ) && transform.find.is_empty()
                 {
                     return Err(format!(
                         "replace transform for {} needs text to find",
@@ -1539,6 +1542,8 @@ impl App {
                     })?;
                     *value = match operation {
                         ImportTransformOperation::Replace => value.replace(find, replace),
+                        ImportTransformOperation::ReplaceExact if value == find => replace.clone(),
+                        ImportTransformOperation::ReplaceExact => value.clone(),
                         ImportTransformOperation::Lowercase => value.to_lowercase(),
                         ImportTransformOperation::Uppercase => value.to_uppercase(),
                     };
@@ -7921,6 +7926,8 @@ impl eframe::App for App {
                                                 normalized = match transform.operation {
                                                     ImportTransformOperation::Replace if !transform.find.is_empty() => normalized.replace(&transform.find, &transform.replace),
                                                     ImportTransformOperation::Replace => normalized,
+                                                    ImportTransformOperation::ReplaceExact if normalized == transform.find => transform.replace.clone(),
+                                                    ImportTransformOperation::ReplaceExact => normalized,
                                                     ImportTransformOperation::Lowercase => normalized.to_lowercase(),
                                                     ImportTransformOperation::Uppercase => normalized.to_uppercase(),
                                                 };
@@ -8086,18 +8093,20 @@ impl eframe::App for App {
                                 egui::ComboBox::from_id_salt(("transform_operation", index))
                                     .selected_text(match transform.operation {
                                         ImportTransformOperation::Replace => "Replace text",
+                                        ImportTransformOperation::ReplaceExact => "Map exact value",
                                         ImportTransformOperation::Lowercase => "Lowercase",
                                         ImportTransformOperation::Uppercase => "Uppercase",
                                     })
                                     .show_ui(ui, |ui| {
                                         ui.selectable_value(&mut transform.operation, ImportTransformOperation::Replace, "Replace text");
+                                        ui.selectable_value(&mut transform.operation, ImportTransformOperation::ReplaceExact, "Map exact value");
                                         ui.selectable_value(&mut transform.operation, ImportTransformOperation::Lowercase, "Lowercase");
                                         ui.selectable_value(&mut transform.operation, ImportTransformOperation::Uppercase, "Uppercase");
                                     });
-                                if transform.operation == ImportTransformOperation::Replace {
-                                    ui.add(egui::TextEdit::singleline(&mut transform.find).hint_text("Find").desired_width(90.0));
-                                    ui.label("with");
-                                    ui.add(egui::TextEdit::singleline(&mut transform.replace).hint_text("Replace").desired_width(90.0));
+                                if matches!(transform.operation, ImportTransformOperation::Replace | ImportTransformOperation::ReplaceExact) {
+                                    ui.add(egui::TextEdit::singleline(&mut transform.find).hint_text(if transform.operation == ImportTransformOperation::ReplaceExact { "Exact value" } else { "Find text" }).desired_width(90.0));
+                                    ui.label("→");
+                                    ui.add(egui::TextEdit::singleline(&mut transform.replace).hint_text("Replace with").desired_width(90.0));
                                 }
                                 if ui.small_button("×").clicked() {
                                     remove_transform = Some(index);
