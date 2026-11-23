@@ -6633,15 +6633,39 @@ impl App {
                 );
                 xml.push_str("    </node>\n");
             }
-            for (index, link) in self.case.links.iter().enumerate() {
+            let mut generated_connection_occurrences = HashMap::<Vec<u8>, usize>::new();
+            let mut exported_edge_occurrences = HashMap::<Vec<u8>, usize>::new();
+            for link in &self.case.links {
+                let source_scope = link.ingest_source.as_deref().unwrap_or_default();
+                let connection_id = if link.connection_id.is_empty() {
+                    let identity = graphml_connection_identity_material(
+                        link.from,
+                        link.to,
+                        &link.label,
+                        link.directed,
+                        source_scope,
+                    )?;
+                    let occurrence = generated_connection_occurrences
+                        .entry(identity.clone())
+                        .or_default();
+                    let connection_id = graphml_generated_connection_id(&identity, *occurrence);
+                    *occurrence += 1;
+                    connection_id
+                } else {
+                    link.connection_id.clone()
+                };
+                let edge_material = serde_json::to_vec(&(source_scope, &connection_id))
+                    .map_err(|error| error.to_string())?;
+                let edge_occurrence = exported_edge_occurrences
+                    .entry(edge_material.clone())
+                    .or_default();
+                let edge_id = format!("e_{}_{}", sha256_hex(&edge_material), *edge_occurrence);
+                *edge_occurrence += 1;
                 xml.push_str(&format!(
-                    "    <edge id=\"e{}\" source=\"n_{}\" target=\"n_{}\" directed=\"{}\">\n",
-                    index + 1,
-                    link.from,
-                    link.to,
-                    link.directed
+                    "    <edge id=\"{edge_id}\" source=\"n_{}\" target=\"n_{}\" directed=\"{}\">\n",
+                    link.from, link.to, link.directed
                 ));
-                graphml_data(&mut xml, "edge_connection_id", &link.connection_id);
+                graphml_data(&mut xml, "edge_connection_id", &connection_id);
                 graphml_data(&mut xml, "edge_label", &link.label);
                 graphml_data(&mut xml, "edge_relationship", &link.label);
                 graphml_data(&mut xml, "edge_date", &link.date);
@@ -6654,11 +6678,7 @@ impl App {
                     "edge_attributes",
                     &serde_json::to_string(&link.attributes).map_err(|error| error.to_string())?,
                 );
-                graphml_data(
-                    &mut xml,
-                    "edge_ingest_source",
-                    link.ingest_source.as_deref().unwrap_or_default(),
-                );
+                graphml_data(&mut xml, "edge_ingest_source", source_scope);
                 xml.push_str("    </edge>\n");
             }
             xml.push_str("  </graph>\n</graphml>\n");
@@ -17127,6 +17147,32 @@ fn merge_graphml_source_catalog(existing: &mut serde_json::Value, incoming: &ser
     existing["snapshot_count"] = serde_json::json!(snapshot_count);
 }
 
+fn graphml_connection_identity_material(
+    source: Uuid,
+    target: Uuid,
+    relationship: &str,
+    directed: bool,
+    source_scope: &str,
+) -> Result<Vec<u8>, String> {
+    let (source, target) = if !directed && source > target {
+        (target, source)
+    } else {
+        (source, target)
+    };
+    serde_json::to_vec(&(
+        source_scope,
+        source,
+        target,
+        relationship.trim().to_ascii_lowercase(),
+        directed,
+    ))
+    .map_err(|error| error.to_string())
+}
+
+fn graphml_generated_connection_id(identity: &[u8], occurrence: usize) -> String {
+    format!("graphml:auto:{}:{occurrence}", sha256_hex(identity))
+}
+
 fn graphml_import_payload(path: &str) -> Result<GraphMlImportPayload, String> {
     let mut document = parse_graphml(path)?;
     let source_identity = fs::canonicalize(path)
@@ -17678,32 +17724,18 @@ fn graphml_import_payload(path: &str) -> Result<GraphMlImportPayload, String> {
             .map(str::to_owned)
             .unwrap_or_else(|| format!("graphml:{source_identity}"));
         let directed = edge.directed.unwrap_or(document.default_directed);
-        let relationship_identity = graphml_property(edge, &["relationship", "label", "name"])
-            .unwrap_or("")
-            .trim()
-            .to_ascii_lowercase();
-        // Use resolved entity IDs instead of file edge positions so unrelated edge reordering
-        // keeps imported records matched; the occurrence suffix distinguishes parallel edges.
-        let (identity_source, identity_target) = if !directed && from > to {
-            (to, from)
-        } else {
-            (from, to)
-        };
-        let generated_id_material = serde_json::to_vec(&(
-            identity_source,
-            identity_target,
-            relationship_identity,
+        let generated_id_material = graphml_connection_identity_material(
+            *from,
+            *to,
+            graphml_property(edge, &["relationship", "label", "name"]).unwrap_or(""),
             directed,
-        ))
-        .map_err(|error| error.to_string())?;
+            &ingest_source,
+        )?;
         let occurrence = generated_edge_id_occurrences
             .entry(generated_id_material.clone())
             .or_default();
-        let generated_connection_id = format!(
-            "graphml:auto:{}:{}",
-            sha256_hex(&generated_id_material),
-            *occurrence
-        );
+        let generated_connection_id =
+            graphml_generated_connection_id(&generated_id_material, *occurrence);
         *occurrence += 1;
         let connection_id = graphml_property(edge, &["connection_id"])
             .filter(|value| !value.is_empty())
