@@ -18327,7 +18327,6 @@ fn run_automation_cli(
             }
         }
     }
-    eprintln!("AUTOMATION BATCH ID · {batch_id}");
     let mut app = App::automation_context(case, case_path);
     normalize_snapshot_database_paths(&mut app.case, &app.case_path);
     let completed_jobs = app
@@ -18388,6 +18387,10 @@ fn run_automation_cli(
             .automation_batches
             .drain(..app.case.automation_batches.len() - 200);
     }
+    if resume_batch_id.is_none() {
+        save_case_atomically(Path::new(case_path), &app.case)?;
+    }
+    eprintln!("AUTOMATION BATCH ID · {batch_id}");
     let mut failures = 0;
     let mut skipped = Vec::new();
     let mut outcomes = Vec::new();
