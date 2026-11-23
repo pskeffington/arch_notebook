@@ -281,6 +281,7 @@ struct App {
     selected_link: Option<usize>,
     page: WorkspacePage,
     entity_sort: EntitySort,
+    most_connected_measure: MostConnectedMeasure,
     layout_mode: LayoutMode,
     link_sort: LinkSort,
     link_table_view: LinkTableView,
@@ -492,6 +493,15 @@ enum EntitySort {
     Connections,
 }
 
+#[derive(Default, PartialEq, Clone, Copy)]
+enum MostConnectedMeasure {
+    #[default]
+    ConnectedEntities,
+    LinkRecords,
+    IncomingLinks,
+    OutgoingLinks,
+}
+
 #[derive(PartialEq, Clone, Copy)]
 enum LayoutMode {
     Connectivity,
@@ -617,6 +627,7 @@ impl Default for App {
             selected_link: None,
             page: WorkspacePage::Chart,
             entity_sort: EntitySort::Name,
+            most_connected_measure: MostConnectedMeasure::default(),
             layout_mode: LayoutMode::Connectivity,
             link_sort: LinkSort::Date,
             link_table_view: LinkTableView::Connections,
@@ -885,6 +896,7 @@ impl App {
             selected_link: None,
             page: WorkspacePage::Chart,
             entity_sort: EntitySort::Name,
+            most_connected_measure: MostConnectedMeasure::default(),
             layout_mode: LayoutMode::Connectivity,
             link_sort: LinkSort::Date,
             link_table_view: LinkTableView::Connections,
@@ -4831,6 +4843,33 @@ fn connected_entity_counts(case: &CaseFile) -> HashMap<Uuid, usize> {
         .collect()
 }
 
+fn most_connected_counts(case: &CaseFile, measure: MostConnectedMeasure) -> HashMap<Uuid, usize> {
+    if measure == MostConnectedMeasure::ConnectedEntities {
+        return connected_entity_counts(case);
+    }
+    let mut counts: HashMap<Uuid, usize> =
+        case.entities.iter().map(|entity| (entity.id, 0)).collect();
+    for link in &case.links {
+        match measure {
+            MostConnectedMeasure::ConnectedEntities => {}
+            MostConnectedMeasure::LinkRecords => {
+                *counts.entry(link.from).or_default() += 1;
+                if link.to != link.from {
+                    *counts.entry(link.to).or_default() += 1;
+                }
+            }
+            MostConnectedMeasure::IncomingLinks if link.directed => {
+                *counts.entry(link.to).or_default() += 1;
+            }
+            MostConnectedMeasure::OutgoingLinks if link.directed => {
+                *counts.entry(link.from).or_default() += 1;
+            }
+            MostConnectedMeasure::IncomingLinks | MostConnectedMeasure::OutgoingLinks => {}
+        }
+    }
+    counts
+}
+
 fn connected_components(case: &CaseFile) -> Vec<Vec<Uuid>> {
     let names: HashMap<Uuid, String> = case
         .entities
@@ -7013,9 +7052,100 @@ impl eframe::App for App {
                     egui::Frame::new().fill(panel).inner_margin(12).show(ui,|ui|{
                         ui.set_min_width(right);ui.set_max_width(right);
                         ui.label(egui::RichText::new("ANALYSIS").size(10.0).strong().color(muted));ui.add_space(10.0);
-                        let mut degrees:Vec<_>=self.case.entities.iter().map(|e|(e,connected_counts.get(&e.id).copied().unwrap_or_default())).collect();degrees.sort_by_key(|(_,n)|std::cmp::Reverse(*n));
                         ui.label(egui::RichText::new("MOST CONNECTED").size(9.0).strong().color(cyan));
-                        for (rank,(e,n)) in degrees.iter().take(5).enumerate(){ui.horizontal(|ui|{let label=format!("{:02}  {} · {}",rank+1,e.name,e.kind);if ui.selectable_label(self.selected==Some(e.id),label).clicked(){self.selected=Some(e.id);self.selected_link=None;self.chart_focus=Some(e.id);self.chart_focus_group=None;self.page=WorkspacePage::Chart;self.show_timeline=false;}ui.with_layout(egui::Layout::right_to_left(egui::Align::Center),|ui|{ui.label(n.to_string());});});}
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label("Rank by");
+                            egui::ComboBox::from_id_salt("most_connected_measure")
+                                .selected_text(match self.most_connected_measure {
+                                    MostConnectedMeasure::ConnectedEntities => "Distinct entities",
+                                    MostConnectedMeasure::LinkRecords => "Link records",
+                                    MostConnectedMeasure::IncomingLinks => "Incoming links",
+                                    MostConnectedMeasure::OutgoingLinks => "Outgoing links",
+                                })
+                                .show_ui(ui, |ui| {
+                                    ui.selectable_value(
+                                        &mut self.most_connected_measure,
+                                        MostConnectedMeasure::ConnectedEntities,
+                                        "Distinct entities",
+                                    );
+                                    ui.selectable_value(
+                                        &mut self.most_connected_measure,
+                                        MostConnectedMeasure::LinkRecords,
+                                        "Link records",
+                                    );
+                                    ui.selectable_value(
+                                        &mut self.most_connected_measure,
+                                        MostConnectedMeasure::IncomingLinks,
+                                        "Incoming links",
+                                    );
+                                    ui.selectable_value(
+                                        &mut self.most_connected_measure,
+                                        MostConnectedMeasure::OutgoingLinks,
+                                        "Outgoing links",
+                                    );
+                                });
+                        });
+                        let measure_note = match self.most_connected_measure {
+                            MostConnectedMeasure::ConnectedEntities => {
+                                "Distinct counterpart entities; parallel links count once."
+                            }
+                            MostConnectedMeasure::LinkRecords => {
+                                "Every link record counts; self-links count once."
+                            }
+                            MostConnectedMeasure::IncomingLinks => {
+                                "Directed links ending at each entity; undirected links are excluded."
+                            }
+                            MostConnectedMeasure::OutgoingLinks => {
+                                "Directed links starting at each entity; undirected links are excluded."
+                            }
+                        };
+                        ui.label(egui::RichText::new(measure_note).small().color(muted));
+                        let ranking_counts =
+                            most_connected_counts(&self.case, self.most_connected_measure);
+                        let mut degrees: Vec<_> = self
+                            .case
+                            .entities
+                            .iter()
+                            .map(|entity| {
+                                (
+                                    entity,
+                                    ranking_counts.get(&entity.id).copied().unwrap_or_default(),
+                                )
+                            })
+                            .collect();
+                        degrees.sort_by(|(first, first_count), (second, second_count)| {
+                            second_count.cmp(first_count).then_with(|| {
+                                first
+                                    .name
+                                    .to_lowercase()
+                                    .cmp(&second.name.to_lowercase())
+                            })
+                        });
+                        for (rank, (entity, count)) in degrees.iter().take(5).enumerate() {
+                            ui.horizontal(|ui| {
+                                let label = format!(
+                                    "{:02}  {} · {}",
+                                    rank + 1,
+                                    entity.name,
+                                    entity.kind
+                                );
+                                if ui
+                                    .selectable_label(self.selected == Some(entity.id), label)
+                                    .clicked()
+                                {
+                                    self.selected = Some(entity.id);
+                                    self.selected_link = None;
+                                    self.chart_focus = Some(entity.id);
+                                    self.chart_focus_group = None;
+                                    self.page = WorkspacePage::Chart;
+                                    self.show_timeline = false;
+                                }
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| ui.label(count.to_string()),
+                                );
+                            });
+                        }
                         ui.add_space(16.0);
                         ui.label(egui::RichText::new("NETWORK GROUPS").size(9.0).strong().color(cyan));
                         if network_groups.is_none() {
