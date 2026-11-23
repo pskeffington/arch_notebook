@@ -2867,7 +2867,7 @@ impl App {
                 series: self.sql_series.trim().into(),
                 query: self.sql_query.trim().into(),
                 parameters,
-                enabled: true,
+                enabled: false,
                 minimum_connections: self.automation_minimum_connections,
                 maximum_connections: self.automation_maximum_connections,
                 maximum_regressions: self.automation_maximum_regressions,
@@ -2876,7 +2876,8 @@ impl App {
             self.editing_automation_job = None;
             self.automation_editor_before_edit = None;
             self.automation_job_name.clear();
-            self.status = format!("RECOVERED AUTOMATION JOB ADDED · {name}");
+            self.status =
+                format!("RECOVERED AUTOMATION JOB ADDED · {name} · DISABLED UNTIL REVIEWED");
             return;
         }
         self.case.automation_jobs.push(AutomationJob {
