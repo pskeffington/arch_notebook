@@ -501,6 +501,8 @@ struct AutomationRun {
     finished_at: String,
     #[serde(default)]
     duration_ms: Option<u64>,
+    #[serde(default)]
+    sqlite_lock_retries: usize,
     success: bool,
     message: String,
     #[serde(default)]
@@ -682,6 +684,7 @@ struct App {
     )>,
     automation_worker: Option<Receiver<Result<AutomationWorkerResult, String>>>,
     automation_progress: Option<Arc<Mutex<String>>>,
+    sql_lock_retry_count: usize,
     automation_schedule: String,
     automation_schedule_message: Option<(String, bool, String)>,
     automation_schedule_target_path: Option<String>,
@@ -1075,6 +1078,7 @@ impl Default for App {
             automation_editor_before_edit: None,
             automation_worker: None,
             automation_progress: None,
+            sql_lock_retry_count: 0,
             automation_schedule: "hourly".into(),
             automation_schedule_message: None,
             automation_schedule_target_path: None,
@@ -1368,6 +1372,7 @@ impl App {
             automation_editor_before_edit: None,
             automation_worker: None,
             automation_progress: None,
+            sql_lock_retry_count: 0,
             automation_schedule: "hourly".into(),
             automation_schedule_message: None,
             automation_schedule_target_path: None,
@@ -2611,22 +2616,40 @@ impl App {
     }
 
     fn ingest_sqlite_snapshot(&mut self) {
+        self.sql_lock_retry_count = 0;
         for attempt in 1..=SQLITE_LOCK_RETRY_ATTEMPTS {
             let Some(lock_error) = self.ingest_sqlite_snapshot_attempt() else {
+                if self.sql_lock_retry_count > 0 {
+                    self.status = format!(
+                        "{} · RECOVERED AFTER {} SQLITE LOCK RETRIES",
+                        self.status, self.sql_lock_retry_count
+                    );
+                }
                 return;
             };
             if attempt == SQLITE_LOCK_RETRY_ATTEMPTS {
                 self.status = format!(
-                    "SQL INGEST FAILED · source remained locked after {attempt} attempts · {lock_error}"
+                    "SQL INGEST FAILED · source remained locked after {attempt} attempts and {} retries · {lock_error}",
+                    self.sql_lock_retry_count
                 );
                 return;
             }
+            self.sql_lock_retry_count += 1;
             self.status = format!(
                 "SQL SOURCE BUSY · RETRYING ATTEMPT {} OF {} IN {} SECONDS",
                 attempt + 1,
                 SQLITE_LOCK_RETRY_ATTEMPTS,
                 SQLITE_LOCK_RETRY_DELAY.as_secs()
             );
+            if let Some(progress) = self.automation_progress.as_ref()
+                && let Ok(mut progress) = progress.lock()
+            {
+                *progress = format!(
+                    "SQLite source busy · retrying capture {} of {} after a short wait",
+                    attempt + 1,
+                    SQLITE_LOCK_RETRY_ATTEMPTS
+                );
+            }
             thread::sleep(SQLITE_LOCK_RETRY_DELAY);
         }
     }
@@ -3324,6 +3347,7 @@ impl App {
         let snapshot_count_before = self.case.snapshots.len();
 
         self.ingest_sqlite_snapshot();
+        let lock_retries = self.sql_lock_retry_count;
         let candidate_snapshot = self.case.snapshots.get(snapshot_count_before).cloned();
         let baseline_snapshot = candidate_snapshot
             .as_ref()
@@ -3449,6 +3473,11 @@ impl App {
                 .strip_prefix("SQL INGEST FAILED · ")
                 .map(|error| format!("SQL QUERY INVALID · {error}"))
                 .unwrap_or_else(|| "SQL QUERY INVALID".into())
+        };
+        let validation_message = if lock_retries == 0 {
+            validation_message
+        } else {
+            format!("{validation_message} · SQLITE LOCK RETRIES: {lock_retries}")
         };
 
         self.case = case_before;
@@ -3917,11 +3946,14 @@ impl App {
             .selected_link
             .and_then(|index| self.case.links.get(index))
             .cloned();
+        let progress = Arc::new(Mutex::new("Opening the read-only SQL source".to_owned()));
+        let worker_progress = Arc::clone(&progress);
         let (sender, receiver) = mpsc::channel();
         let spawn_result = thread::Builder::new()
             .name("arch-notebook-sql-query".into())
             .spawn(move || {
                 let mut worker = App::automation_context(case, &case_path);
+                worker.automation_progress = Some(worker_progress);
                 worker.selected_link = selected_link_record
                     .as_ref()
                     .and_then(|selected| refreshed_link_index(&worker.case.links, selected));
@@ -3957,6 +3989,7 @@ impl App {
         match spawn_result {
             Ok(_) => {
                 self.automation_worker = Some(receiver);
+                self.automation_progress = Some(progress);
                 self.status = if validate {
                     "SQL QUERY VALIDATION RUNNING · WINDOW REMAINS RESPONSIVE".into()
                 } else {
@@ -4020,6 +4053,7 @@ impl App {
                         .map_err(|error| format!("cannot parse case: {error}"))?;
                     normalize_snapshot_database_paths(&mut case, &case_path);
                     let mut worker = App::automation_context(case, &case_path);
+                    worker.automation_progress = Some(Arc::clone(&worker_progress));
                     worker.selected_link = selected_link_record
                         .as_ref()
                         .and_then(|selected| refreshed_link_index(&worker.case.links, selected));
@@ -4273,6 +4307,7 @@ impl App {
     }
 
     fn execute_automation_job(&mut self, job: &AutomationJob, trigger: &str) -> (bool, String) {
+        self.sql_lock_retry_count = 0;
         let elapsed = Instant::now();
         let started_at = epoch_timestamp();
         if let Some(existing) = self.case.automation_jobs.iter().find(|existing| {
@@ -4419,6 +4454,7 @@ impl App {
             started_at,
             finished_at: epoch_timestamp(),
             duration_ms: Some(duration_ms),
+            sqlite_lock_retries: self.sql_lock_retry_count,
             success,
             message,
             analyst_note: String::new(),
@@ -7072,6 +7108,7 @@ fn automation_outcome_json(
     job: &AutomationJob,
     success: bool,
     message: &str,
+    sqlite_lock_retries: usize,
     run_id: Option<Uuid>,
     snapshot: Option<&ConnectionSnapshot>,
     previous: Option<&ConnectionSnapshot>,
@@ -7102,6 +7139,7 @@ fn automation_outcome_json(
         "job": job.name,
         "job_id": job.id,
         "run_id": run_id,
+        "sqlite_lock_retries": sqlite_lock_retries,
         "duration_ms": serde_json::Value::Null,
         "database_path": job.database_path,
         "series": job.series,
@@ -8374,6 +8412,12 @@ impl eframe::App for App {
                                             }
                                             if let Some(duration_ms) = run.duration_ms {
                                                 ui.label(format!("Query and validation time: {duration_ms} ms"));
+                                            }
+                                            if run.sqlite_lock_retries > 0 {
+                                                ui.label(format!(
+                                                    "Recovered after {} SQLite lock retries",
+                                                    run.sqlite_lock_retries
+                                                ));
                                             }
                                             ui.label(&run.message);
                                             let note = self
@@ -12224,6 +12268,7 @@ fn run_automation_cli(
                 "run_id": run.id,
                 "finished_at": run.finished_at,
                 "duration_ms": run.duration_ms,
+                "sqlite_lock_retries": run.sqlite_lock_retries,
                 "snapshot_id": run.snapshot_id,
             }));
             if !json_output {
@@ -12241,6 +12286,7 @@ fn run_automation_cli(
         let run = app.case.automation_runs.last();
         let run_id = run.map(|run| run.id);
         let duration_ms = run.and_then(|run| run.duration_ms);
+        let sqlite_lock_retries = run.map(|run| run.sqlite_lock_retries).unwrap_or_default();
         let snapshot_id = run.and_then(|run| run.snapshot_id);
         let trigger = run.map(|run| run.trigger.as_str()).unwrap_or("cli");
         let snapshot =
@@ -12257,7 +12303,13 @@ fn run_automation_cli(
         save_case_atomically(Path::new(case_path), &app.case)?;
         if json_output {
             outcomes.push(automation_outcome_json(
-                &job, success, &message, run_id, snapshot, previous,
+                &job,
+                success,
+                &message,
+                sqlite_lock_retries,
+                run_id,
+                snapshot,
+                previous,
             ));
             if let Some(outcome) = outcomes.last_mut() {
                 outcome["duration_ms"] = serde_json::json!(duration_ms);
@@ -12395,8 +12447,15 @@ fn validate_saved_automation_configuration_cli(
         .and_then(|index| app.case.snapshots.get(index));
     let duration_ms = started.elapsed().as_millis() as u64;
     if json_output {
-        let mut outcome =
-            automation_outcome_json(&job, success, &message, None, snapshot, previous);
+        let mut outcome = automation_outcome_json(
+            &job,
+            success,
+            &message,
+            app.sql_lock_retry_count,
+            None,
+            snapshot,
+            previous,
+        );
         outcome["duration_ms"] = serde_json::json!(duration_ms);
         println!(
             "{}",
@@ -12470,6 +12529,7 @@ fn rerun_saved_automation_configuration_cli(
             &job,
             success,
             &message,
+            new_run.sqlite_lock_retries,
             Some(new_run_id),
             snapshot,
             previous,
@@ -13458,7 +13518,15 @@ fn validate_automation_job_cli(
         .and_then(|_| previous_snapshot_index(&app.case, snapshot_index))
         .and_then(|index| app.case.snapshots.get(index));
     if json_output {
-        let outcome = automation_outcome_json(&job, success, &message, None, snapshot, previous);
+        let outcome = automation_outcome_json(
+            &job,
+            success,
+            &message,
+            app.sql_lock_retry_count,
+            None,
+            snapshot,
+            previous,
+        );
         println!(
             "{}",
             serde_json::to_string_pretty(&serde_json::json!({
@@ -13536,7 +13604,7 @@ fn validate_enabled_automation_jobs_cli(
             failures += 1;
             if json_output {
                 outcomes.push(automation_outcome_json(
-                    &job, false, &message, None, None, None,
+                    &job, false, &message, 0, None, None, None,
                 ));
             } else {
                 println!("FAIL · {} · {}", job.name, message);
@@ -13594,7 +13662,13 @@ fn validate_enabled_automation_jobs_cli(
         }
         if json_output {
             outcomes.push(automation_outcome_json(
-                &job, success, &message, None, snapshot, previous,
+                &job,
+                success,
+                &message,
+                app.sql_lock_retry_count,
+                None,
+                snapshot,
+                previous,
             ));
         } else {
             println!(
@@ -14291,6 +14365,7 @@ fn list_automation_runs_cli(
                 &job,
                 run.success,
                 &run.message,
+                run.sqlite_lock_retries,
                 Some(run.id),
                 snapshot,
                 previous,
@@ -14299,6 +14374,7 @@ fn list_automation_runs_cli(
             outcome["started_at"] = serde_json::json!(run.started_at);
             outcome["finished_at"] = serde_json::json!(run.finished_at);
             outcome["duration_ms"] = serde_json::json!(run.duration_ms);
+            outcome["sqlite_lock_retries"] = serde_json::json!(run.sqlite_lock_retries);
             outcome["enabled"] = serde_json::json!(run.enabled);
             outcome["configuration_recorded"] = serde_json::json!(run.configuration_recorded);
             outcome["trigger"] = serde_json::json!(run.trigger);
