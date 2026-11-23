@@ -49,7 +49,7 @@ jobs:
             artifact_arch: x86_64
             target: x86_64-apple-darwin
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Select stable Rust toolchain
         run: |
           rustup toolchain install stable --profile minimal
@@ -90,7 +90,7 @@ jobs:
         env:
           ARCH_NOTEBOOK_SKIP_BUILD: '1'
         run: scripts/package-macos.sh
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: arch-notebook-${{ matrix.package }}-${{ matrix.artifact_arch }}
           path: |
@@ -106,13 +106,13 @@ jobs:
     steps:
       - name: Install Arch build environment
         run: pacman -Syu --noconfirm --needed base-devel cargo git libglvnd libx11 libxcb libxcursor libxi libxinerama libxkbcommon libxkbcommon-x11 libxrandr libxrender pkgconf rust shadow sqlite wayland
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Build package
         run: |
           useradd --create-home builder
           chown -R builder:builder "$GITHUB_WORKSPACE"
           su builder -c "cd '$GITHUB_WORKSPACE/packaging/arch' && makepkg --noconfirm"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: arch-notebook-archlinux
           path: packaging/arch/*.pkg.tar.zst
@@ -128,7 +128,7 @@ jobs:
       contents: write
       actions: read
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: arch-notebook-*
           path: release-assets
