@@ -284,10 +284,37 @@ struct App {
     automation_worker: Option<Receiver<Result<AutomationWorkerResult, String>>>,
 }
 
-struct AutomationWorkerResult {
-    case: CaseFile,
-    disk_case_json: String,
-    status: String,
+enum AutomationWorkerResult {
+    SavedCase {
+        case: CaseFile,
+        disk_case_json: String,
+        status: String,
+        selected_snapshot: Option<(String, usize)>,
+        selected_link: Option<usize>,
+    },
+    UnsavedCase {
+        case: CaseFile,
+        status: String,
+        selected_snapshot: Option<(String, usize)>,
+        selected_link: Option<usize>,
+    },
+    Validation {
+        preview: Option<SqlValidationPreview>,
+        status: String,
+    },
+}
+
+struct SqlUiRequest {
+    database_path: String,
+    series: String,
+    query: String,
+    parameter_text: String,
+    minimum_connections: usize,
+    maximum_connections: Option<usize>,
+    maximum_regressions: Option<usize>,
+    maximum_skipped_rows: Option<usize>,
+    data_mode: DataMode,
+    editing_job: Option<Uuid>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -2647,6 +2674,90 @@ impl App {
         self.start_automation_work(job_ids, None, batch);
     }
 
+    fn sql_ui_request(&self) -> SqlUiRequest {
+        SqlUiRequest {
+            database_path: self.sql_path.clone(),
+            series: self.sql_series.clone(),
+            query: self.sql_query.clone(),
+            parameter_text: self.sql_parameter_text.clone(),
+            minimum_connections: self.automation_minimum_connections,
+            maximum_connections: self.automation_maximum_connections,
+            maximum_regressions: self.automation_maximum_regressions,
+            maximum_skipped_rows: self.automation_maximum_skipped_rows,
+            data_mode: self.data_mode,
+            editing_job: self.editing_automation_job,
+        }
+    }
+
+    fn start_sql_validation(&mut self) {
+        self.start_sql_ui_operation(self.sql_ui_request(), true);
+    }
+
+    fn start_sql_ingestion(&mut self) {
+        self.start_sql_ui_operation(self.sql_ui_request(), false);
+    }
+
+    fn start_sql_ui_operation(&mut self, request: SqlUiRequest, validate: bool) {
+        if self.automation_worker.is_some() {
+            self.status = "SQL OPERATION ALREADY RUNNING".into();
+            return;
+        }
+        let case = self.case.clone();
+        let case_path = self.case_path.clone();
+        let selected_link_record = self
+            .selected_link
+            .and_then(|index| self.case.links.get(index))
+            .cloned();
+        let (sender, receiver) = mpsc::channel();
+        let spawn_result = thread::Builder::new()
+            .name("arch-notebook-sql-query".into())
+            .spawn(move || {
+                let mut worker = App::automation_context(case, &case_path);
+                worker.selected_link = selected_link_record
+                    .as_ref()
+                    .and_then(|selected| refreshed_link_index(&worker.case.links, selected));
+                worker.sql_path = request.database_path;
+                worker.sql_series = request.series;
+                worker.sql_query = request.query;
+                worker.sql_parameter_text = request.parameter_text;
+                worker.automation_minimum_connections = request.minimum_connections;
+                worker.automation_maximum_connections = request.maximum_connections;
+                worker.automation_maximum_regressions = request.maximum_regressions;
+                worker.automation_maximum_skipped_rows = request.maximum_skipped_rows;
+                worker.data_mode = request.data_mode;
+                worker.editing_automation_job = request.editing_job;
+                let result = if validate {
+                    worker.validate_sql_query();
+                    AutomationWorkerResult::Validation {
+                        preview: worker.sql_validation_preview,
+                        status: worker.status,
+                    }
+                } else {
+                    worker.ingest_sqlite_snapshot();
+                    let selected_snapshot =
+                        worker.sql_snapshot_source.zip(worker.sql_snapshot_index);
+                    AutomationWorkerResult::UnsavedCase {
+                        case: worker.case,
+                        status: worker.status,
+                        selected_snapshot,
+                        selected_link: worker.selected_link,
+                    }
+                };
+                let _ = sender.send(Ok(result));
+            });
+        match spawn_result {
+            Ok(_) => {
+                self.automation_worker = Some(receiver);
+                self.status = if validate {
+                    "SQL QUERY VALIDATION RUNNING · WINDOW REMAINS RESPONSIVE".into()
+                } else {
+                    "SQL SNAPSHOT INGESTION RUNNING · WINDOW REMAINS RESPONSIVE".into()
+                };
+            }
+            Err(error) => self.status = format!("SQL OPERATION START FAILED · {error}"),
+        }
+    }
+
     fn start_automation_work(
         &mut self,
         job_ids: Vec<Uuid>,
@@ -2667,6 +2778,10 @@ impl App {
         }
         let case_path = self.case_path.clone();
         let expected_disk_json = self.disk_case_json.clone().unwrap_or_default();
+        let selected_link_record = self
+            .selected_link
+            .and_then(|index| self.case.links.get(index))
+            .cloned();
         let (sender, receiver) = mpsc::channel();
         let spawn_result = thread::Builder::new()
             .name("arch-notebook-automation".into())
@@ -2683,6 +2798,9 @@ impl App {
                         .map_err(|error| format!("cannot parse case: {error}"))?;
                     normalize_snapshot_database_paths(&mut case, &case_path);
                     let mut worker = App::automation_context(case, &case_path);
+                    worker.selected_link = selected_link_record
+                        .as_ref()
+                        .and_then(|selected| refreshed_link_index(&worker.case.links, selected));
                     let mut jobs: Vec<_> = job_ids
                         .iter()
                         .filter_map(|id| {
@@ -2746,10 +2864,15 @@ impl App {
                     let disk_case_json = worker
                         .disk_case_json
                         .unwrap_or(serde_json::to_string(&worker.case).map_err(|error| error.to_string())?);
-                    Ok(AutomationWorkerResult {
+                    let selected_snapshot = worker
+                        .sql_snapshot_source
+                        .zip(worker.sql_snapshot_index);
+                    Ok(AutomationWorkerResult::SavedCase {
                         case: worker.case,
                         disk_case_json,
                         status,
+                        selected_snapshot,
+                        selected_link: worker.selected_link,
                     })
                 })();
                 let _ = sender.send(result);
@@ -2775,39 +2898,19 @@ impl App {
             self.status = "SQL QUERY INVALID · job not found".into();
             return false;
         };
-        let editor_state = (
-            self.sql_path.clone(),
-            self.sql_series.clone(),
-            self.sql_query.clone(),
-            self.sql_parameter_text.clone(),
-            self.automation_minimum_connections,
-            self.automation_maximum_connections,
-            self.automation_maximum_regressions,
-            self.automation_maximum_skipped_rows,
-            self.editing_automation_job,
-        );
-        self.sql_path = job.database_path;
-        self.sql_series = job.series;
-        self.sql_query = job.query;
-        self.sql_parameter_text = format_sql_parameters(&job.parameters);
-        self.automation_minimum_connections = job.minimum_connections;
-        self.automation_maximum_connections = job.maximum_connections;
-        self.automation_maximum_regressions = job.maximum_regressions;
-        self.automation_maximum_skipped_rows = job.maximum_skipped_rows;
-        self.editing_automation_job = Some(id);
-        let valid = self.validate_sql_query();
-        (
-            self.sql_path,
-            self.sql_series,
-            self.sql_query,
-            self.sql_parameter_text,
-            self.automation_minimum_connections,
-            self.automation_maximum_connections,
-            self.automation_maximum_regressions,
-            self.automation_maximum_skipped_rows,
-            self.editing_automation_job,
-        ) = editor_state;
-        valid
+        let mut request = self.sql_ui_request();
+        request.database_path = job.database_path;
+        request.series = job.series;
+        request.query = job.query;
+        request.parameter_text = format_sql_parameters(&job.parameters);
+        request.minimum_connections = job.minimum_connections;
+        request.maximum_connections = job.maximum_connections;
+        request.maximum_regressions = job.maximum_regressions;
+        request.maximum_skipped_rows = job.maximum_skipped_rows;
+        request.data_mode = DataMode::Automation;
+        request.editing_job = Some(id);
+        self.start_sql_ui_operation(request, true);
+        true
     }
 
     fn run_automation_job_cli(&mut self, job: &AutomationJob) -> (bool, String) {
@@ -5417,11 +5520,45 @@ impl eframe::App for App {
             match worker_state {
                 Ok(Ok(result)) => {
                     self.automation_worker = None;
-                    self.case = result.case;
-                    self.disk_case_json = Some(result.disk_case_json);
-                    self.saved_case_json = self.current_case_json();
-                    self.invalidate_network_groups();
-                    self.status = result.status;
+                    match result {
+                        AutomationWorkerResult::SavedCase {
+                            case,
+                            disk_case_json,
+                            status,
+                            selected_snapshot,
+                            selected_link,
+                        } => {
+                            self.case = case;
+                            self.disk_case_json = Some(disk_case_json);
+                            self.saved_case_json = self.current_case_json();
+                            self.selected_link = selected_link;
+                            if let Some((source, index)) = selected_snapshot {
+                                self.sql_snapshot_source = Some(source);
+                                self.sql_snapshot_index = Some(index);
+                            }
+                            self.status = status;
+                            self.invalidate_network_groups();
+                        }
+                        AutomationWorkerResult::UnsavedCase {
+                            case,
+                            status,
+                            selected_snapshot,
+                            selected_link,
+                        } => {
+                            self.case = case;
+                            self.selected_link = selected_link;
+                            if let Some((source, index)) = selected_snapshot {
+                                self.sql_snapshot_source = Some(source);
+                                self.sql_snapshot_index = Some(index);
+                            }
+                            self.status = status;
+                            self.invalidate_network_groups();
+                        }
+                        AutomationWorkerResult::Validation { preview, status } => {
+                            self.sql_validation_preview = preview;
+                            self.status = status;
+                        }
+                    }
                 }
                 Ok(Err(error)) => {
                     self.automation_worker = None;
@@ -5437,12 +5574,14 @@ impl eframe::App for App {
                     egui::CentralPanel::default().show(ctx, |ui| {
                         ui.vertical_centered(|ui| {
                             ui.add_space(ui.available_height() * 0.35);
-                            ui.heading("SQL automation is running");
+                            ui.heading("SQL operation is running");
                             ui.add_space(10.0);
                             ui.add(egui::Spinner::new());
                             ui.add_space(10.0);
-                            ui.label("The window remains responsive. Case editing is paused while the run owns the case lock.");
-                            ui.label("Each job result is saved as a checkpoint.");
+                            ui.label("The window remains responsive. Editing is paused until the query finishes.");
+                            if self.status.starts_with("AUTOMATION RUNNING") {
+                                ui.label("Automation saves a checkpoint after each job.");
+                            }
                             ui.add_space(12.0);
                             ui.label(&self.status);
                         });
@@ -5715,7 +5854,7 @@ impl eframe::App for App {
                                         ui.add(egui::DragValue::new(maximum).range(0..=1_000_000));
                                     }
                                 });
-                                ui.horizontal(|ui|{let mut limit_regressions=self.automation_maximum_regressions.is_some();if ui.checkbox(&mut limit_regressions,"Limit regressions").changed(){self.automation_maximum_regressions=limit_regressions.then_some(0);}if let Some(maximum)=self.automation_maximum_regressions.as_mut(){ui.label("Maximum removals/confidence declines");ui.add(egui::DragValue::new(maximum).range(0..=1_000_000));}if ui.button("Build query from schema").clicked(){self.build_sql_query_from_schema();}if ui.button("Validate query").clicked(){self.validate_sql_query();}if ui.button(if self.editing_automation_job.is_some(){"Save job changes"}else{"Add job"}).clicked(){self.save_automation_job();}if self.editing_automation_job.is_some()&&ui.button("Cancel edit").clicked(){self.cancel_automation_job_edit();}});
+                                ui.horizontal(|ui|{let mut limit_regressions=self.automation_maximum_regressions.is_some();if ui.checkbox(&mut limit_regressions,"Limit regressions").changed(){self.automation_maximum_regressions=limit_regressions.then_some(0);}if let Some(maximum)=self.automation_maximum_regressions.as_mut(){ui.label("Maximum removals/confidence declines");ui.add(egui::DragValue::new(maximum).range(0..=1_000_000));}if ui.button("Build query from schema").clicked(){self.build_sql_query_from_schema();}if ui.button("Validate query").clicked(){self.start_sql_validation();}if ui.button(if self.editing_automation_job.is_some(){"Save job changes"}else{"Add job"}).clicked(){self.save_automation_job();}if self.editing_automation_job.is_some()&&ui.button("Cancel edit").clicked(){self.cancel_automation_job_edit();}});
                                 if self.sql_schema_templates.len() > 1 {
                                     ui.horizontal(|ui| {
                                         ui.label("Query source table or view");
@@ -6007,7 +6146,7 @@ impl eframe::App for App {
                                 ui.add(egui::TextEdit::multiline(&mut self.sql_query).desired_width(canvas_w-20.0).desired_rows(4).code_editor());
                                 ui.label(egui::RichText::new("Named SQL parameters · name=value per line; bind as text with :name, @name, or $name").small().color(muted));
                                 ui.add(egui::TextEdit::multiline(&mut self.sql_parameter_text).desired_width(canvas_w-20.0).desired_rows(2).code_editor());
-                                ui.horizontal(|ui|{if ui.button("Build query from schema").clicked(){self.build_sql_query_from_schema();}if ui.button("Validate query").clicked(){self.validate_sql_query();}if ui.button("Ingest SQL snapshot").clicked(){self.ingest_sqlite_snapshot();}});
+                                ui.horizontal(|ui|{if ui.button("Build query from schema").clicked(){self.build_sql_query_from_schema();}if ui.button("Validate query").clicked(){self.start_sql_validation();}if ui.button("Ingest SQL snapshot").clicked(){self.start_sql_ingestion();}});
                                 if self.sql_schema_templates.len() > 1 {
                                     ui.horizontal(|ui| {
                                         ui.label("Query source table or view");
