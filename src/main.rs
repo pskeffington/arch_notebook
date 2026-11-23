@@ -2876,6 +2876,7 @@ impl App {
             self.editing_automation_job = None;
             self.automation_editor_before_edit = None;
             self.automation_job_name.clear();
+            self.automation_job_filter = name.clone();
             self.status =
                 format!("RECOVERED AUTOMATION JOB ADDED · {name} · DISABLED UNTIL REVIEWED");
             return;
