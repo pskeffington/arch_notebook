@@ -577,6 +577,8 @@ struct AutomationJob {
     #[serde(default)]
     maximum_connection_property_changes: Option<usize>,
     #[serde(default)]
+    maximum_entity_property_changes: Option<usize>,
+    #[serde(default)]
     maximum_skipped_rows: Option<usize>,
 }
 
@@ -607,6 +609,8 @@ struct AutomationJobPackageDefinition {
     maximum_added_connections: Option<usize>,
     #[serde(default)]
     maximum_connection_property_changes: Option<usize>,
+    #[serde(default)]
+    maximum_entity_property_changes: Option<usize>,
     #[serde(default)]
     maximum_skipped_rows: Option<usize>,
 }
@@ -659,6 +663,8 @@ struct AutomationRun {
     maximum_added_connections: Option<usize>,
     #[serde(default)]
     maximum_connection_property_changes: Option<usize>,
+    #[serde(default)]
+    maximum_entity_property_changes: Option<usize>,
     #[serde(default)]
     maximum_skipped_rows: Option<usize>,
     #[serde(default)]
@@ -753,6 +759,7 @@ struct SqlValidationPreview {
     regression_count: usize,
     added_connection_count: usize,
     connection_property_change_count: usize,
+    entity_property_change_count: usize,
     below_minimum_confidence_count: usize,
     change_count: usize,
     changes: Vec<ConnectionDelta>,
@@ -764,6 +771,7 @@ struct SqlValidationPreview {
     maximum_regressions: Option<usize>,
     maximum_added_connections: Option<usize>,
     maximum_connection_property_changes: Option<usize>,
+    maximum_entity_property_changes: Option<usize>,
     maximum_skipped_rows: Option<usize>,
     connections: Vec<ConnectionFact>,
     skipped_endpoints: Vec<SkippedSqlEndpoint>,
@@ -1005,6 +1013,7 @@ struct App {
     automation_maximum_regressions: Option<usize>,
     automation_maximum_added_connections: Option<usize>,
     automation_maximum_connection_property_changes: Option<usize>,
+    automation_maximum_entity_property_changes: Option<usize>,
     automation_maximum_skipped_rows: Option<usize>,
     editing_automation_job: Option<Uuid>,
     automation_editor_before_edit: Option<(
@@ -1015,6 +1024,7 @@ struct App {
         String,
         usize,
         Option<u8>,
+        Option<usize>,
         Option<usize>,
         Option<usize>,
         Option<usize>,
@@ -1072,6 +1082,7 @@ struct SqlUiRequest {
     maximum_regressions: Option<usize>,
     maximum_added_connections: Option<usize>,
     maximum_connection_property_changes: Option<usize>,
+    maximum_entity_property_changes: Option<usize>,
     maximum_skipped_rows: Option<usize>,
     data_mode: DataMode,
     editing_job: Option<Uuid>,
@@ -1508,6 +1519,7 @@ impl Default for App {
             automation_maximum_regressions: None,
             automation_maximum_added_connections: None,
             automation_maximum_connection_property_changes: None,
+            automation_maximum_entity_property_changes: None,
             automation_maximum_skipped_rows: None,
             editing_automation_job: None,
             automation_editor_before_edit: None,
@@ -1880,6 +1892,7 @@ impl App {
             automation_maximum_regressions: None,
             automation_maximum_added_connections: None,
             automation_maximum_connection_property_changes: None,
+            automation_maximum_entity_property_changes: None,
             automation_maximum_skipped_rows: None,
             editing_automation_job: None,
             automation_editor_before_edit: None,
@@ -4385,6 +4398,8 @@ impl App {
                 job.maximum_added_connections = self.automation_maximum_added_connections;
                 job.maximum_connection_property_changes =
                     self.automation_maximum_connection_property_changes;
+                job.maximum_entity_property_changes =
+                    self.automation_maximum_entity_property_changes;
                 job.maximum_skipped_rows = self.automation_maximum_skipped_rows;
                 self.editing_automation_job = None;
                 self.restore_automation_editor_before_edit();
@@ -4406,6 +4421,7 @@ impl App {
                 maximum_added_connections: self.automation_maximum_added_connections,
                 maximum_connection_property_changes: self
                     .automation_maximum_connection_property_changes,
+                maximum_entity_property_changes: self.automation_maximum_entity_property_changes,
                 maximum_skipped_rows: self.automation_maximum_skipped_rows,
             });
             self.editing_automation_job = None;
@@ -4435,6 +4451,7 @@ impl App {
             maximum_added_connections: self.automation_maximum_added_connections,
             maximum_connection_property_changes: self
                 .automation_maximum_connection_property_changes,
+            maximum_entity_property_changes: self.automation_maximum_entity_property_changes,
             maximum_skipped_rows: self.automation_maximum_skipped_rows,
         });
         self.editing_automation_job = None;
@@ -4483,6 +4500,8 @@ impl App {
                         == self.automation_maximum_added_connections
                     && preview.maximum_connection_property_changes
                         == self.automation_maximum_connection_property_changes
+                    && preview.maximum_entity_property_changes
+                        == self.automation_maximum_entity_property_changes
                     && preview.maximum_skipped_rows == self.automation_maximum_skipped_rows
                     && parse_sql_parameters(&self.sql_parameter_text)
                         .is_ok_and(|parameters| parameters == preview.parameters)
@@ -4647,6 +4666,10 @@ impl App {
                     .contains(&DeltaKind::ConnectionAttributesChanged)
             })
             .count();
+        let entity_property_change_count = deltas
+            .iter()
+            .filter(|delta| delta.kinds.contains(&DeltaKind::EntityAttributesChanged))
+            .count();
         let below_minimum_confidence_count = candidate_snapshot
             .as_ref()
             .map(|snapshot| {
@@ -4680,6 +4703,7 @@ impl App {
                 regression_count,
                 added_connection_count,
                 connection_property_change_count,
+                entity_property_change_count,
                 below_minimum_confidence_count,
                 change_count,
                 changes,
@@ -4692,6 +4716,7 @@ impl App {
                 maximum_added_connections: self.automation_maximum_added_connections,
                 maximum_connection_property_changes: self
                     .automation_maximum_connection_property_changes,
+                maximum_entity_property_changes: self.automation_maximum_entity_property_changes,
                 maximum_skipped_rows: self.automation_maximum_skipped_rows,
                 connections: snapshot.connections.iter().take(8).cloned().collect(),
                 skipped_endpoints,
@@ -4772,12 +4797,24 @@ impl App {
                 ),
                 None => String::new(),
             };
+            let entity_property_change_threshold = match self
+                .automation_maximum_entity_property_changes
+            {
+                Some(maximum) if entity_property_change_count > maximum => format!(
+                    " · ENTITY PROPERTY CHANGE LIMIT EXCEEDED ({entity_property_change_count}; MAXIMUM {maximum})"
+                ),
+                Some(maximum) => format!(
+                    " · ENTITY PROPERTY CHANGE LIMIT MET ({entity_property_change_count}; MAXIMUM {maximum})"
+                ),
+                None => String::new(),
+            };
             let limits_pass = automation_limits_pass(
                 count,
                 below_minimum_confidence_count,
                 regression_count,
                 added_connection_count,
                 property_change_count,
+                entity_property_change_count,
                 skipped_rows,
                 self.automation_minimum_connections,
                 self.automation_minimum_confidence,
@@ -4785,6 +4822,7 @@ impl App {
                 self.automation_maximum_regressions,
                 self.automation_maximum_added_connections,
                 self.automation_maximum_connection_property_changes,
+                self.automation_maximum_entity_property_changes,
                 self.automation_maximum_skipped_rows,
             );
             let validation_result = if limits_pass {
@@ -4793,7 +4831,7 @@ impl App {
                 "SQL QUERY LIMITS FAILED"
             };
             format!(
-                "{validation_result} · {count} CONNECTIONS{maximum_connection_threshold}{skipped}{skipped_row_threshold}{threshold}{confidence_threshold}{regression_threshold}{addition_threshold}{property_change_threshold} · CASE UNCHANGED"
+                "{validation_result} · {count} CONNECTIONS{maximum_connection_threshold}{skipped}{skipped_row_threshold}{threshold}{confidence_threshold}{regression_threshold}{addition_threshold}{property_change_threshold}{entity_property_change_threshold} · CASE UNCHANGED"
             )
         } else {
             self.status
@@ -4835,6 +4873,7 @@ impl App {
         maximum_regressions: Option<usize>,
         maximum_added_connections: Option<usize>,
         maximum_connection_property_changes: Option<usize>,
+        maximum_entity_property_changes: Option<usize>,
         maximum_skipped_rows: Option<usize>,
         regressions_only: &mut bool,
     ) {
@@ -4849,6 +4888,7 @@ impl App {
                 && preview.maximum_added_connections == maximum_added_connections
                 && preview.maximum_connection_property_changes
                     == maximum_connection_property_changes
+                && preview.maximum_entity_property_changes == maximum_entity_property_changes
                 && preview.maximum_skipped_rows == maximum_skipped_rows
                 && parse_sql_parameters(parameter_text)
                     .is_ok_and(|parameters| parameters == preview.parameters)
@@ -4876,9 +4916,10 @@ impl App {
             ));
             ui.label(if preview.has_baseline {
                 format!(
-                    "{} regressions · {} additions · {} relationship-property changes vs previous capture",
+                    "{} regressions · {} additions · {} entity-property changes · {} relationship-property changes vs previous capture",
                     preview.regression_count,
                     preview.added_connection_count,
+                    preview.entity_property_change_count,
                     preview.connection_property_change_count
                 )
             } else {
@@ -5183,6 +5224,7 @@ impl App {
             self.automation_maximum_added_connections = job.maximum_added_connections;
             self.automation_maximum_connection_property_changes =
                 job.maximum_connection_property_changes;
+            self.automation_maximum_entity_property_changes = job.maximum_entity_property_changes;
             self.automation_maximum_skipped_rows = job.maximum_skipped_rows;
             self.editing_automation_job = Some(id);
             self.status = "EDITING AUTOMATION JOB".into();
@@ -5247,6 +5289,7 @@ impl App {
         self.automation_maximum_added_connections = job.maximum_added_connections;
         self.automation_maximum_connection_property_changes =
             job.maximum_connection_property_changes;
+        self.automation_maximum_entity_property_changes = job.maximum_entity_property_changes;
         self.automation_maximum_skipped_rows = job.maximum_skipped_rows;
         self.editing_automation_job = Some(job.id);
         self.data_mode = DataMode::Automation;
@@ -5280,6 +5323,7 @@ impl App {
                 self.automation_maximum_regressions,
                 self.automation_maximum_added_connections,
                 self.automation_maximum_connection_property_changes,
+                self.automation_maximum_entity_property_changes,
                 self.automation_maximum_skipped_rows,
             ));
         }
@@ -5299,6 +5343,7 @@ impl App {
             maximum_regressions,
             maximum_added_connections,
             maximum_connection_property_changes,
+            maximum_entity_property_changes,
             maximum_skipped_rows,
         )) = self.automation_editor_before_edit.take()
         {
@@ -5314,6 +5359,7 @@ impl App {
             self.automation_maximum_added_connections = maximum_added_connections;
             self.automation_maximum_connection_property_changes =
                 maximum_connection_property_changes;
+            self.automation_maximum_entity_property_changes = maximum_entity_property_changes;
             self.automation_maximum_skipped_rows = maximum_skipped_rows;
         }
     }
@@ -5394,6 +5440,7 @@ impl App {
             maximum_added_connections: self.automation_maximum_added_connections,
             maximum_connection_property_changes: self
                 .automation_maximum_connection_property_changes,
+            maximum_entity_property_changes: self.automation_maximum_entity_property_changes,
             maximum_skipped_rows: self.automation_maximum_skipped_rows,
             data_mode: self.data_mode,
             editing_job: self.editing_automation_job,
@@ -5441,6 +5488,8 @@ impl App {
                 worker.automation_maximum_added_connections = request.maximum_added_connections;
                 worker.automation_maximum_connection_property_changes =
                     request.maximum_connection_property_changes;
+                worker.automation_maximum_entity_property_changes =
+                    request.maximum_entity_property_changes;
                 worker.automation_maximum_skipped_rows = request.maximum_skipped_rows;
                 worker.data_mode = request.data_mode;
                 worker.editing_automation_job = request.editing_job;
@@ -5966,6 +6015,7 @@ impl App {
         request.maximum_regressions = job.maximum_regressions;
         request.maximum_added_connections = job.maximum_added_connections;
         request.maximum_connection_property_changes = job.maximum_connection_property_changes;
+        request.maximum_entity_property_changes = job.maximum_entity_property_changes;
         request.maximum_skipped_rows = job.maximum_skipped_rows;
         request.data_mode = DataMode::Automation;
         request.editing_job = Some(id);
@@ -6159,6 +6209,8 @@ impl App {
             let added_connection_count = automation_added_connection_count(&self.case, &source_key);
             let property_change_count =
                 automation_connection_property_change_count(&self.case, &source_key);
+            let entity_property_change_count =
+                automation_entity_property_change_count(&self.case, &source_key);
             if count < job.minimum_connections {
                 self.status = format!(
                     "{} · BELOW MINIMUM ({} CONNECTIONS; {} REQUIRED)",
@@ -6211,6 +6263,18 @@ impl App {
                 };
                 self.status = format!("{} · {limit_status}", self.status);
             }
+            if let Some(maximum) = job.maximum_entity_property_changes {
+                let limit_status = if entity_property_change_count > maximum {
+                    format!(
+                        "ENTITY PROPERTY CHANGE LIMIT EXCEEDED ({entity_property_change_count}; MAXIMUM {maximum})"
+                    )
+                } else {
+                    format!(
+                        "ENTITY PROPERTY CHANGE LIMIT MET ({entity_property_change_count}; MAXIMUM {maximum})"
+                    )
+                };
+                self.status = format!("{} · {limit_status}", self.status);
+            }
             if let Some(maximum) = job.maximum_skipped_rows
                 && skipped_rows > maximum
             {
@@ -6235,6 +6299,7 @@ impl App {
                 regression_count,
                 added_connection_count,
                 property_change_count,
+                entity_property_change_count,
                 skipped_rows,
                 job.minimum_connections,
                 job.minimum_confidence,
@@ -6242,6 +6307,7 @@ impl App {
                 job.maximum_regressions,
                 job.maximum_added_connections,
                 job.maximum_connection_property_changes,
+                job.maximum_entity_property_changes,
                 job.maximum_skipped_rows,
             );
         }
@@ -6310,6 +6376,7 @@ impl App {
             maximum_regressions: job.maximum_regressions,
             maximum_added_connections: job.maximum_added_connections,
             maximum_connection_property_changes: job.maximum_connection_property_changes,
+            maximum_entity_property_changes: job.maximum_entity_property_changes,
             maximum_skipped_rows: job.maximum_skipped_rows,
             enabled: job.enabled,
             configuration_recorded: true,
@@ -9912,6 +9979,24 @@ fn automation_connection_property_change_count(case: &CaseFile, source_key: &str
         .count()
 }
 
+fn automation_entity_property_change_count(case: &CaseFile, source_key: &str) -> usize {
+    let mut snapshots = case
+        .snapshots
+        .iter()
+        .rev()
+        .filter(|snapshot| snapshot.source_key == source_key);
+    let Some(current) = snapshots.next() else {
+        return 0;
+    };
+    let Some(previous) = snapshots.next() else {
+        return 0;
+    };
+    compare_snapshots(previous, current)
+        .iter()
+        .filter(|delta| delta.kinds.contains(&DeltaKind::EntityAttributesChanged))
+        .count()
+}
+
 fn connection_attribute_differences(
     previous: &serde_json::Value,
     current: &serde_json::Value,
@@ -9950,6 +10035,23 @@ fn connection_attribute_differences(
         .collect()
 }
 
+fn entity_attribute_differences(
+    previous: &serde_json::Value,
+    current: &serde_json::Value,
+) -> Vec<(String, String, String)> {
+    [
+        ("source", "source_attributes"),
+        ("target", "target_attributes"),
+    ]
+    .into_iter()
+    .flat_map(|(side, field)| {
+        connection_attribute_differences(&previous[field], &current[field])
+            .into_iter()
+            .map(move |(name, before, after)| (format!("{side}.{name}"), before, after))
+    })
+    .collect()
+}
+
 fn automation_job_configuration_error(job: &AutomationJob) -> Option<String> {
     if let Some(minimum) = job
         .minimum_confidence
@@ -9975,6 +10077,7 @@ fn automation_limits_pass(
     regressions: usize,
     added_connections: usize,
     connection_property_changes: usize,
+    entity_property_changes: usize,
     skipped_rows: usize,
     minimum_connections: usize,
     minimum_confidence: Option<u8>,
@@ -9982,6 +10085,7 @@ fn automation_limits_pass(
     maximum_regressions: Option<usize>,
     maximum_added_connections: Option<usize>,
     maximum_connection_property_changes: Option<usize>,
+    maximum_entity_property_changes: Option<usize>,
     maximum_skipped_rows: Option<usize>,
 ) -> bool {
     connections >= minimum_connections
@@ -9992,6 +10096,7 @@ fn automation_limits_pass(
         && maximum_added_connections.is_none_or(|maximum| added_connections <= maximum)
         && maximum_connection_property_changes
             .is_none_or(|maximum| connection_property_changes <= maximum)
+        && maximum_entity_property_changes.is_none_or(|maximum| entity_property_changes <= maximum)
         && maximum_skipped_rows.is_none_or(|maximum| skipped_rows <= maximum)
 }
 
@@ -10253,6 +10358,14 @@ fn automation_outcome_json(
                 .and_then(serde_json::Value::as_u64)
         })
         .unwrap_or_default() as usize;
+    let entity_property_change_count = delta
+        .as_ref()
+        .and_then(|delta| {
+            delta
+                .pointer("/counts/entity_properties_changed")
+                .and_then(serde_json::Value::as_u64)
+        })
+        .unwrap_or_default() as usize;
     let result_quality = snapshot.map(snapshot_result_quality);
     let schema_adaptation_kind = sql_schema_adaptation_kind(message);
     let schema_adaptation = serde_json::json!({
@@ -10292,6 +10405,11 @@ fn automation_outcome_json(
             "observed": snapshot.map(|_| connection_property_change_count),
             "passed": snapshot.map(|_| job.maximum_connection_property_changes.is_none_or(|limit| connection_property_change_count <= limit))
         },
+        "maximum_entity_property_changes": {
+            "limit": job.maximum_entity_property_changes,
+            "observed": snapshot.map(|_| entity_property_change_count),
+            "passed": snapshot.map(|_| job.maximum_entity_property_changes.is_none_or(|limit| entity_property_change_count <= limit))
+        },
         "maximum_skipped_rows": {
             "limit": job.maximum_skipped_rows,
             "observed": skipped_rows,
@@ -10320,6 +10438,7 @@ fn automation_outcome_json(
                 regression_count,
                 added_connection_count,
                 connection_property_change_count,
+                entity_property_change_count,
                 skipped_rows.unwrap_or_default(),
                 job.minimum_connections,
                 job.minimum_confidence,
@@ -10327,6 +10446,7 @@ fn automation_outcome_json(
                 job.maximum_regressions,
                 job.maximum_added_connections,
                 job.maximum_connection_property_changes,
+                job.maximum_entity_property_changes,
                 job.maximum_skipped_rows,
             )
         }),
@@ -10344,6 +10464,8 @@ fn automation_outcome_json(
         "maximum_added_connections": job.maximum_added_connections,
         "connection_property_change_count": snapshot.map(|_| connection_property_change_count),
         "maximum_connection_property_changes": job.maximum_connection_property_changes,
+        "entity_property_change_count": snapshot.map(|_| entity_property_change_count),
+        "maximum_entity_property_changes": job.maximum_entity_property_changes,
         "maximum_skipped_rows": job.maximum_skipped_rows,
         "query": job.query,
         "parameters": job.parameters,
@@ -11709,6 +11831,24 @@ impl eframe::App for App {
                                     }
                                 });
                                 ui.horizontal(|ui| {
+                                    let mut limit_properties =
+                                        self.automation_maximum_entity_property_changes.is_some();
+                                    if ui
+                                        .checkbox(&mut limit_properties, "Limit entity property changes")
+                                        .on_hover_text("Count each connection record whose source or target entity attributes changed since the previous capture.")
+                                        .changed()
+                                    {
+                                        self.automation_maximum_entity_property_changes =
+                                            limit_properties.then_some(0);
+                                    }
+                                    if let Some(maximum) =
+                                        self.automation_maximum_entity_property_changes.as_mut()
+                                    {
+                                        ui.label("Maximum affected connections");
+                                        ui.add(egui::DragValue::new(maximum).range(0..=1_000_000));
+                                    }
+                                });
+                                ui.horizontal(|ui| {
                                     if ui.button("Build query from schema").clicked() { self.build_sql_query_from_schema(); }
                                     if ui.button("Validate query").clicked() { self.start_sql_validation(); }
                                     if ui.button(if recovered_job_draft { "Save recovered job" } else if editing_saved_job { "Save job changes" } else { "Add job" }).clicked() { self.save_automation_job(); }
@@ -11740,6 +11880,7 @@ impl eframe::App for App {
                                     self.automation_maximum_regressions,
                                     self.automation_maximum_added_connections,
                                     self.automation_maximum_connection_property_changes,
+                                    self.automation_maximum_entity_property_changes,
                                     self.automation_maximum_skipped_rows,
                                     &mut self.sql_validation_preview_regressions_only,
                                 );
@@ -12218,13 +12359,14 @@ impl eframe::App for App {
                                         ui.strong(&job.name);
                                         ui.label(format!("{} · {}", job.series, job.database_path));
                                         ui.label(format!(
-                                            "min {} connections · min confidence {} · max connections {} · max regressions {} · max additions {} · max relationship-property changes {} · max skipped rows {}",
+                                            "min {} connections · min confidence {} · max connections {} · max regressions {} · max additions {} · max relationship-property changes {} · max entity-property changes {} · max skipped rows {}",
                                             job.minimum_connections,
                                             job.minimum_confidence.map(|value|value.to_string()).unwrap_or_else(||"none".into()),
                                             job.maximum_connections.map(|value|value.to_string()).unwrap_or_else(||"unlimited".into()),
                                             job.maximum_regressions.map(|value|value.to_string()).unwrap_or_else(||"unlimited".into()),
                                             job.maximum_added_connections.map(|value|value.to_string()).unwrap_or_else(||"unlimited".into()),
                                             job.maximum_connection_property_changes.map(|value|value.to_string()).unwrap_or_else(||"unlimited".into()),
+                                            job.maximum_entity_property_changes.map(|value|value.to_string()).unwrap_or_else(||"unlimited".into()),
                                             job.maximum_skipped_rows.map(|value|value.to_string()).unwrap_or_else(||"unlimited".into())
                                         ));
                                     });
@@ -12355,6 +12497,7 @@ impl eframe::App for App {
                                                 job.maximum_regressions,
                                                 job.maximum_added_connections,
                                                 job.maximum_connection_property_changes,
+                                                job.maximum_entity_property_changes,
                                                 job.maximum_skipped_rows,
                                                 &mut self.sql_validation_preview_regressions_only,
                                             );
@@ -12758,6 +12901,16 @@ impl eframe::App for App {
                                                                             )).small().color(egui::Color32::from_rgb(195, 187, 176)));
                                                                         }
                                                                     }
+                                                                    if has_entity_property_change {
+                                                                        for (name, before, after) in entity_attribute_differences(
+                                                                            &regression["previous"],
+                                                                            fact,
+                                                                        ) {
+                                                                            ui.label(egui::RichText::new(format!(
+                                                                                "{name}: {before} → {after}"
+                                                                            )).small().color(egui::Color32::from_rgb(195, 187, 176)));
+                                                                        }
+                                                                    }
                                                                 }
                                                             });
                                                     }
@@ -12773,13 +12926,14 @@ impl eframe::App for App {
                                             }
                                             if run.configuration_recorded {
                                                 ui.label(format!(
-                                                    "Minimum {} connections · minimum confidence {} · maximum connections {} · maximum regressions {} · maximum additions {} · maximum relationship-property changes {} · maximum skipped rows {} · job {}",
+                                                    "Minimum {} connections · minimum confidence {} · maximum connections {} · maximum regressions {} · maximum additions {} · maximum relationship-property changes {} · maximum entity-property changes {} · maximum skipped rows {} · job {}",
                                                     run.minimum_connections,
                                                     run.minimum_confidence.map(|value|value.to_string()).unwrap_or_else(||"none".into()),
                                                     run.maximum_connections.map(|value|value.to_string()).unwrap_or_else(||"unlimited".into()),
                                                     run.maximum_regressions.map(|value|value.to_string()).unwrap_or_else(||"unlimited".into()),
                                                     run.maximum_added_connections.map(|value|value.to_string()).unwrap_or_else(||"unlimited".into()),
                                                     run.maximum_connection_property_changes.map(|value|value.to_string()).unwrap_or_else(||"unlimited".into()),
+                                                    run.maximum_entity_property_changes.map(|value|value.to_string()).unwrap_or_else(||"unlimited".into()),
                                                     run.maximum_skipped_rows.map(|value|value.to_string()).unwrap_or_else(||"unlimited".into()),
                                                     if run.enabled { "enabled" } else { "disabled" }
                                                 ));
@@ -13404,6 +13558,29 @@ impl eframe::App for App {
                                                 ui.add(egui::DragValue::new(maximum).range(0..=1_000_000));
                                             }
                                         });
+                                        ui.horizontal(|ui| {
+                                            let mut limit_entity_properties = self
+                                                .automation_maximum_entity_property_changes
+                                                .is_some();
+                                            if ui
+                                                .checkbox(
+                                                    &mut limit_entity_properties,
+                                                    "Limit entity property changes",
+                                                )
+                                                .on_hover_text("Count each connection record whose source or target entity attributes changed since the previous capture.")
+                                                .changed()
+                                            {
+                                                self.automation_maximum_entity_property_changes =
+                                                    limit_entity_properties.then_some(0);
+                                            }
+                                            if let Some(maximum) = self
+                                                .automation_maximum_entity_property_changes
+                                                .as_mut()
+                                            {
+                                                ui.label("Maximum affected connections");
+                                                ui.add(egui::DragValue::new(maximum).range(0..=1_000_000));
+                                            }
+                                        });
                                     });
                                 ui.horizontal(|ui|{if ui.button("Build query from schema").clicked(){self.build_sql_query_from_schema();}if ui.button("Validate query").clicked(){self.start_sql_validation();}if ui.button("Ingest SQL snapshot").clicked(){self.start_sql_ingestion();}});
                                 ui.horizontal(|ui| {
@@ -13442,6 +13619,7 @@ impl eframe::App for App {
                                     self.automation_maximum_regressions,
                                     self.automation_maximum_added_connections,
                                     self.automation_maximum_connection_property_changes,
+                                    self.automation_maximum_entity_property_changes,
                                     self.automation_maximum_skipped_rows,
                                     &mut self.sql_validation_preview_regressions_only,
                                 );
@@ -19233,6 +19411,7 @@ fn automation_job_effective_configuration_matches(
         && left.maximum_regressions == right.maximum_regressions
         && left.maximum_added_connections == right.maximum_added_connections
         && left.maximum_connection_property_changes == right.maximum_connection_property_changes
+        && left.maximum_entity_property_changes == right.maximum_entity_property_changes
         && left.maximum_skipped_rows == right.maximum_skipped_rows
 }
 
@@ -19466,6 +19645,7 @@ fn automation_run_matches_job(run: &AutomationRun, job: &AutomationJob) -> bool 
         && run.maximum_regressions == job.maximum_regressions
         && run.maximum_added_connections == job.maximum_added_connections
         && run.maximum_connection_property_changes == job.maximum_connection_property_changes
+        && run.maximum_entity_property_changes == job.maximum_entity_property_changes
         && run.maximum_skipped_rows == job.maximum_skipped_rows
 }
 
@@ -19939,6 +20119,7 @@ fn automation_job_from_run(prior_run: &AutomationRun) -> Result<AutomationJob, S
         maximum_regressions: prior_run.maximum_regressions,
         maximum_added_connections: prior_run.maximum_added_connections,
         maximum_connection_property_changes: prior_run.maximum_connection_property_changes,
+        maximum_entity_property_changes: prior_run.maximum_entity_property_changes,
         maximum_skipped_rows: prior_run.maximum_skipped_rows,
     })
 }
@@ -19969,6 +20150,7 @@ fn validate_saved_automation_configuration_cli(
     app.automation_maximum_regressions = job.maximum_regressions;
     app.automation_maximum_added_connections = job.maximum_added_connections;
     app.automation_maximum_connection_property_changes = job.maximum_connection_property_changes;
+    app.automation_maximum_entity_property_changes = job.maximum_entity_property_changes;
     app.automation_maximum_skipped_rows = job.maximum_skipped_rows;
     let started = Instant::now();
     let snapshot_count_before = app.case.snapshots.len();
@@ -21748,6 +21930,7 @@ fn write_automation_runs_csv_atomically(
                 "maximum_regressions",
                 "maximum_added_connections",
                 "maximum_connection_property_changes",
+                "maximum_entity_property_changes",
                 "maximum_skipped_rows",
                 "snapshot_id",
                 "source_key",
@@ -21856,6 +22039,9 @@ fn write_automation_runs_csv_atomically(
                         .map(|value| value.to_string())
                         .unwrap_or_default(),
                     run.maximum_connection_property_changes
+                        .map(|value| value.to_string())
+                        .unwrap_or_default(),
+                    run.maximum_entity_property_changes
                         .map(|value| value.to_string())
                         .unwrap_or_default(),
                     run.maximum_skipped_rows
@@ -22210,6 +22396,7 @@ fn validate_automation_job_cli(
     app.automation_maximum_regressions = job.maximum_regressions;
     app.automation_maximum_added_connections = job.maximum_added_connections;
     app.automation_maximum_connection_property_changes = job.maximum_connection_property_changes;
+    app.automation_maximum_entity_property_changes = job.maximum_entity_property_changes;
     app.automation_maximum_skipped_rows = job.maximum_skipped_rows;
     let snapshot_index = app.case.snapshots.len();
     let limits_pass = app.validate_sql_query_for_batch();
@@ -22480,6 +22667,7 @@ fn validate_enabled_automation_jobs_cli(
         app.automation_maximum_added_connections = job.maximum_added_connections;
         app.automation_maximum_connection_property_changes =
             job.maximum_connection_property_changes;
+        app.automation_maximum_entity_property_changes = job.maximum_entity_property_changes;
         app.automation_maximum_skipped_rows = job.maximum_skipped_rows;
         let snapshot_count_before = app.case.snapshots.len();
         let limits_pass = app.validate_sql_query_for_batch();
@@ -22625,6 +22813,7 @@ fn list_automation_jobs_cli(
                 "maximum_regressions": job.maximum_regressions,
                 "maximum_added_connections": job.maximum_added_connections,
                 "maximum_connection_property_changes": job.maximum_connection_property_changes,
+                "maximum_entity_property_changes": job.maximum_entity_property_changes,
                 "maximum_skipped_rows": job.maximum_skipped_rows,
                 "latest_run": latest_run,
             })
@@ -22672,6 +22861,7 @@ fn automation_job_package(job: &AutomationJob) -> AutomationJobPackage {
             maximum_regressions: job.maximum_regressions,
             maximum_added_connections: job.maximum_added_connections,
             maximum_connection_property_changes: job.maximum_connection_property_changes,
+            maximum_entity_property_changes: job.maximum_entity_property_changes,
             maximum_skipped_rows: job.maximum_skipped_rows,
         },
     }
@@ -22767,6 +22957,7 @@ fn job_from_automation_package(
         maximum_regressions: definition.maximum_regressions,
         maximum_added_connections: definition.maximum_added_connections,
         maximum_connection_property_changes: definition.maximum_connection_property_changes,
+        maximum_entity_property_changes: definition.maximum_entity_property_changes,
         maximum_skipped_rows: definition.maximum_skipped_rows,
     };
     if let Some(error) = automation_job_configuration_error(&job) {
@@ -23561,6 +23752,7 @@ fn list_automation_runs_cli(
                 maximum_regressions: run.maximum_regressions,
                 maximum_added_connections: run.maximum_added_connections,
                 maximum_connection_property_changes: run.maximum_connection_property_changes,
+                maximum_entity_property_changes: run.maximum_entity_property_changes,
                 maximum_skipped_rows: run.maximum_skipped_rows,
             };
             let mut outcome = automation_outcome_json(
