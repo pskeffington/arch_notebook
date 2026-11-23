@@ -9051,6 +9051,7 @@ impl eframe::App for App {
                                 )).small().color(muted));
                                 let mut review_snapshot = None;
                                 let mut review_changes = None;
+                                let mut focus_regression: Option<(Uuid, ConnectionFact)> = None;
                                 let mut replay_run = None;
                                 let mut load_run = None;
                                 let mut save_run_note = None;
@@ -9153,6 +9154,72 @@ impl eframe::App for App {
                                                         counts["connection_updated"].as_u64().unwrap_or(0),
                                                         counts["added"].as_u64().unwrap_or(0),
                                                     ));
+                                                    let regressions: Vec<&serde_json::Value> = delta["changes"]
+                                                        .as_array()
+                                                        .into_iter()
+                                                        .flatten()
+                                                        .filter(|change| {
+                                                            change["kinds"].as_array().is_some_and(|kinds| {
+                                                                kinds.iter().any(|kind| {
+                                                                    matches!(
+                                                                        kind.as_str(),
+                                                                        Some("removed" | "confidence_declined")
+                                                                    )
+                                                                })
+                                                            })
+                                                        })
+                                                        .collect();
+                                                    if !regressions.is_empty() {
+                                                        egui::Frame::new()
+                                                            .fill(egui::Color32::from_rgb(43, 35, 34))
+                                                            .inner_margin(8.0)
+                                                            .show(ui, |ui| {
+                                                                ui.label(egui::RichText::new(format!(
+                                                                    "REGRESSION DETAILS · showing {} of {}",
+                                                                    regressions.len().min(5),
+                                                                    regressions.len()
+                                                                )).small().strong().color(egui::Color32::from_rgb(238, 139, 115)));
+                                                                for regression in regressions.iter().take(5) {
+                                                                    let fact = &regression["connection"];
+                                                                    let is_removed = regression["kinds"]
+                                                                        .as_array()
+                                                                        .is_some_and(|kinds| {
+                                                                            kinds.iter().any(|kind| kind == "removed")
+                                                                        });
+                                                                    let change = if is_removed {
+                                                                        "REMOVED".to_owned()
+                                                                    } else {
+                                                                        format!(
+                                                                            "CONFIDENCE {} → {}",
+                                                                            regression["previous"]["confidence"],
+                                                                            fact["confidence"]
+                                                                        )
+                                                                    };
+                                                                    let direction = if fact["directed"].as_bool().unwrap_or(false) { "→" } else { "↔" };
+                                                                    let evidence = if fact["source_reference"].as_str().unwrap_or_default().is_empty() {
+                                                                        "no evidence reference"
+                                                                    } else {
+                                                                        fact["source_reference"].as_str().unwrap_or_default()
+                                                                    };
+                                                                    ui.horizontal(|ui| {
+                                                                        ui.label(egui::RichText::new(format!(
+                                                                            "{change} · {} [{}] {direction} {} [{}] · {} · {evidence}",
+                                                                            fact["source"],
+                                                                            fact["source_type"],
+                                                                            fact["target"],
+                                                                            fact["target_type"],
+                                                                            fact["relationship"],
+                                                                        )).small().color(egui::Color32::from_rgb(226, 207, 198)));
+                                                                        if !is_removed
+                                                                            && ui.small_button("Show current").clicked()
+                                                                            && let Ok(fact) = serde_json::from_value::<ConnectionFact>(fact.clone())
+                                                                        {
+                                                                            focus_regression = Some((snapshot.id, fact));
+                                                                        }
+                                                                    });
+                                                                }
+                                                            });
+                                                    }
                                                 } else {
                                                     ui.label("This is the baseline capture for its database and series.");
                                                 }
@@ -9254,6 +9321,30 @@ impl eframe::App for App {
                                     self.load_automation_run_into_editor(run_id);
                                 }
                                 if let Some(index)=review_snapshot {self.sql_snapshot_source=Some(self.case.snapshots[index].source_key.clone());self.sql_snapshot_index=Some(index);self.data_mode=DataMode::SqlRegressions;}
+                                if let Some((snapshot_id, fact)) = focus_regression
+                                    && let Some(snapshot) = self.case.snapshots.iter().find(|snapshot| snapshot.id == snapshot_id)
+                                {
+                                    if let Some(link_index) = snapshot_case_link_index(
+                                        &self.case,
+                                        &snapshot.database_path,
+                                        &snapshot.source_key,
+                                        &fact,
+                                    ) {
+                                        self.selected = None;
+                                        self.selected_link = Some(link_index);
+                                        self.chart_focus = None;
+                                        self.chart_focus_link = Some(link_index);
+                                        self.chart_focus_group = None;
+                                        self.chart_fit_entities = None;
+                                        self.chart_fit_path = None;
+                                        self.sql_source_focus = None;
+                                        self.path_result.clear();
+                                        self.page = WorkspacePage::Chart;
+                                        self.show_timeline = false;
+                                    } else {
+                                        review_changes = Some(snapshot_id);
+                                    }
+                                }
                                 if let Some(snapshot_id) = review_changes
                                     && let Some(index) = self.case.snapshots.iter().position(|snapshot| snapshot.id == snapshot_id)
                                 {
