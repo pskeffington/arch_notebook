@@ -5946,13 +5946,14 @@ fn automation_run_matches_filter(run: &AutomationRun, filter: &str, failures_onl
     (!failures_only || !run.success)
         && (filter.is_empty()
             || format!(
-                "{} {} {} {} {} {} {} {} {}",
+                "{} {} {} {} {} {} {} {} {} {}",
                 result,
                 run.job_name,
                 run.database_path,
                 run.series,
                 run.query,
                 run.message,
+                run.analyst_note,
                 run.started_at,
                 run.finished_at,
                 run.id,
