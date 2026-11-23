@@ -9315,7 +9315,29 @@ impl eframe::App for App {
                                             || index.is_some()
                                     },
                                 );
+                                let preview_transforms_valid = self
+                                    .import_column_mapping
+                                    .value_transforms
+                                    .iter()
+                                    .all(|transform| {
+                                        if transform.column.is_empty()
+                                            && transform.find.is_empty()
+                                            && transform.replace.is_empty()
+                                        {
+                                            return true;
+                                        }
+                                        !transform.column.is_empty()
+                                            && self.import_headers.iter().any(|header| {
+                                                header.eq_ignore_ascii_case(&transform.column)
+                                            })
+                                            && (!matches!(
+                                                transform.operation,
+                                                ImportTransformOperation::Replace
+                                                    | ImportTransformOperation::ReplaceExact
+                                            ) || !transform.find.is_empty())
+                                    });
                                 let included = preview_filters_valid
+                                    && preview_transforms_valid
                                     && preview_filters.iter().all(|(filter, index)| {
                                         index.is_none_or(|index| {
                                             import_filter_matches(
@@ -9329,7 +9351,13 @@ impl eframe::App for App {
                                         })
                                     });
                                 ui.horizontal_wrapped(|ui| {
-                                    let (status, color, tooltip) = if !preview_filters_valid {
+                                    let (status, color, tooltip) = if !preview_transforms_valid {
+                                        (
+                                            "TRANSFORM NEEDS REVIEW",
+                                            egui::Color32::from_rgb(236, 174, 83),
+                                            "A transform needs a valid column and replace text before import.",
+                                        )
+                                    } else if !preview_filters_valid {
                                         (
                                             "FILTER NEEDS REVIEW",
                                             egui::Color32::from_rgb(236, 174, 83),
