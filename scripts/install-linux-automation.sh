@@ -126,6 +126,7 @@ PY
     exit 0
   fi
   cadence="$(awk -F= '/^OnCalendar=/ { print $2; exit }' "$timer_file")"
+  if [[ "$cadence" == "*:0/15" ]]; then cadence="every 15 minutes"; fi
   if [[ -z "$cadence" ]]; then cadence="unknown cadence"; fi
   if command -v systemctl >/dev/null 2>&1; then
     enabled=0
@@ -158,9 +159,14 @@ if [[ $# -gt 2 ]]; then
 fi
 
 schedule="${ARCH_NOTEBOOK_AUTOMATION_SCHEDULE:-hourly}"
+schedule_label="$schedule"
 case "$schedule" in
+  15m)
+    schedule='*:0/15'
+    schedule_label="every 15 minutes"
+    ;;
   hourly|daily|weekly) ;;
-  *) echo "ARCH_NOTEBOOK_AUTOMATION_SCHEDULE must be hourly, daily, or weekly." >&2; exit 2 ;;
+  *) echo "ARCH_NOTEBOOK_AUTOMATION_SCHEDULE must be 15m, hourly, daily, or weekly." >&2; exit 2 ;;
 esac
 
 home_dir="${HOME:?HOME must be set}"
@@ -300,6 +306,6 @@ PY
 systemctl --user daemon-reload
 systemctl --user enable --now "$schedule_name.timer"
 systemctl --user restart "$schedule_name.timer"
-echo "Enabled $schedule Arch Notebook automation for: $case_file"
+echo "Enabled $schedule_label Arch Notebook automation for: $case_file"
 echo "Check status with: systemctl --user status $schedule_name.timer"
 echo "View run output with: journalctl --user -u $schedule_name.service"

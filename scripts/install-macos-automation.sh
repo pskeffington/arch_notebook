@@ -109,7 +109,7 @@ plist_path, label, domain, case_path = sys.argv[1:]
 with open(plist_path, "rb") as source:
     settings = plistlib.load(source)
 seconds = settings.get("StartInterval")
-cadence = {3600: "hourly", 86400: "daily", 604800: "weekly"}.get(seconds, f"every {seconds} seconds")
+cadence = {900: "every 15 minutes", 3600: "hourly", 86400: "daily", 604800: "weekly"}.get(seconds, f"every {seconds} seconds")
 loaded = subprocess.run(
     ["launchctl", "print", f"{domain}/{label}"],
     stdout=subprocess.DEVNULL,
@@ -129,8 +129,8 @@ fi
 
 schedule="${ARCH_NOTEBOOK_AUTOMATION_SCHEDULE:-hourly}"
 case "$schedule" in
-  hourly|daily|weekly) ;;
-  *) echo "ARCH_NOTEBOOK_AUTOMATION_SCHEDULE must be hourly, daily, or weekly." >&2; exit 2 ;;
+  15m|hourly|daily|weekly) ;;
+  *) echo "ARCH_NOTEBOOK_AUTOMATION_SCHEDULE must be 15m, hourly, daily, or weekly." >&2; exit 2 ;;
 esac
 
 case_file="$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"
@@ -182,7 +182,7 @@ import sys
 import tempfile
 
 destination, runner, binary, case_file, log_dir, label, schedule = sys.argv[1:]
-interval_seconds = {"hourly": 3600, "daily": 86400, "weekly": 604800}[schedule]
+interval_seconds = {"15m": 900, "hourly": 3600, "daily": 86400, "weekly": 604800}[schedule]
 payload = {
     "Label": label,
     "ProgramArguments": [runner, binary, case_file, log_dir],

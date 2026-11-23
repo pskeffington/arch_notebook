@@ -7175,7 +7175,9 @@ impl eframe::App for App {
                     egui::CentralPanel::default().show(ctx, |ui| {
                         ui.vertical_centered(|ui| {
                             ui.add_space(ui.available_height() * 0.35);
-                            ui.heading(if self.status.starts_with("REMOVING") {
+                            ui.heading(if self.status.starts_with("PREFLIGHTING") {
+                                "Preflighting enabled SQL jobs"
+                            } else if self.status.starts_with("REMOVING") {
                                 "Removing SQL schedule"
                             } else if self.status.starts_with("CHECKING") {
                                 "Checking SQL schedule"
@@ -7185,7 +7187,9 @@ impl eframe::App for App {
                             ui.add_space(10.0);
                             ui.add(egui::Spinner::new());
                             ui.add_space(10.0);
-                            ui.label(if self.status.starts_with("REMOVING") {
+                            ui.label(if self.status.starts_with("PREFLIGHTING") {
+                                "The app is checking each enabled query read-only against its configured database."
+                            } else if self.status.starts_with("REMOVING") {
                                 "The app is disabling and removing its per-user schedule."
                             } else if self.status.starts_with("CHECKING") {
                                 "The app is checking the per-user scheduler and installed cadence."
@@ -7828,8 +7832,14 @@ impl eframe::App for App {
                                 ui.horizontal(|ui| {
                                     ui.label(egui::RichText::new("SCHEDULE SQL AUTOMATION").small().strong().color(cyan));
                                     egui::ComboBox::from_id_salt("automation_schedule_cadence")
-                                        .selected_text(&self.automation_schedule)
+                                        .selected_text(match self.automation_schedule.as_str() {
+                                            "15m" => "Every 15 minutes",
+                                            "daily" => "Daily",
+                                            "weekly" => "Weekly",
+                                            _ => "Hourly",
+                                        })
                                         .show_ui(ui, |ui| {
+                                            ui.selectable_value(&mut self.automation_schedule, "15m".into(), "Every 15 minutes");
                                             ui.selectable_value(&mut self.automation_schedule, "hourly".into(), "Hourly");
                                             ui.selectable_value(&mut self.automation_schedule, "daily".into(), "Daily");
                                             ui.selectable_value(&mut self.automation_schedule, "weekly".into(), "Weekly");
@@ -7885,6 +7895,22 @@ impl eframe::App for App {
                                     }
                                 });
                                 ui.label(egui::RichText::new("Schedules are installed per case, so multiple cases can run independently. Install checks enabled queries read-only; Check and Remove apply to the case file currently open here.").small().color(muted));
+                                if self.automation_schedule_worker.is_some()
+                                    && self.automation_schedule_target_path.as_deref()
+                                        == Some(self.case_path.as_str())
+                                {
+                                    ui.horizontal(|ui| {
+                                        ui.add(egui::Spinner::new());
+                                        ui.label(
+                                            egui::RichText::new(format!(
+                                                "{} · {}",
+                                                self.status, self.case_path
+                                            ))
+                                            .small()
+                                            .color(cyan),
+                                        );
+                                    });
+                                }
                                 if self.automation_schedule_worker.is_none()
                                     && let Some((case_path, succeeded, message)) =
                                         self.automation_schedule_message.as_ref()
@@ -10263,16 +10289,33 @@ fn timeline_event_positions(links: &[Link], rect: egui::Rect) -> Vec<(usize, egu
 }
 
 fn save_case_atomically(path: &Path, case: &CaseFile) -> Result<(), String> {
-    let serialized = serde_json::to_string_pretty(case).map_err(|error| error.to_string())?;
-    let mut temporary_name = path.as_os_str().to_os_string();
-    temporary_name.push(format!(".tmp-{}", std::process::id()));
-    let temporary_path = PathBuf::from(temporary_name);
-    fs::write(&temporary_path, serialized).map_err(|error| {
-        format!(
-            "cannot write temporary case file {}: {error}",
-            temporary_path.display()
-        )
-    })?;
+    let serialized = serde_json::to_vec_pretty(case).map_err(|error| error.to_string())?;
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| format!("invalid case path: {}", path.display()))?;
+    let mut temporary_name = file_name.to_os_string();
+    temporary_name.push(format!(".tmp-{}-{}", std::process::id(), Uuid::new_v4()));
+    let temporary_path = parent.join(temporary_name);
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary_path)
+        .map_err(|error| {
+            format!(
+                "cannot create temporary case file {}: {error}",
+                temporary_path.display()
+            )
+        })?;
+    if let Err(error) = file.write_all(&serialized).and_then(|()| file.sync_all()) {
+        drop(file);
+        let _ = fs::remove_file(&temporary_path);
+        return Err(format!("cannot write temporary case file: {error}"));
+    }
+    drop(file);
     if let Err(error) = fs::rename(&temporary_path, path) {
         let _ = fs::remove_file(&temporary_path);
         return Err(format!(
@@ -10280,6 +10323,14 @@ fn save_case_atomically(path: &Path, case: &CaseFile) -> Result<(), String> {
             path.display()
         ));
     }
+    fs::File::open(parent)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|error| {
+            format!(
+                "case file {} was replaced, but its directory could not be synchronized: {error}",
+                path.display()
+            )
+        })?;
     Ok(())
 }
 
