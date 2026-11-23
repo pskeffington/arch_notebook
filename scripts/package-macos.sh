@@ -38,6 +38,8 @@ mkdir -p "$app_bundle/Contents/MacOS" "$app_bundle/Contents/Resources"
 install -m 755 "$binary_path" "$app_bundle/Contents/MacOS/arch-notebook"
 install -m 755 "$repo_root/scripts/install-macos-automation.sh" \
   "$app_bundle/Contents/Resources/install-macos-automation.sh"
+install -m 755 "$repo_root/scripts/run-macos-automation.sh" \
+  "$app_bundle/Contents/Resources/run-macos-automation.sh"
 
 cat > "$app_bundle/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>

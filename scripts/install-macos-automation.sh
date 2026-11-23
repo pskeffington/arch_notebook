@@ -20,12 +20,17 @@ esac
 case_file="$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"
 app_bundle="${2:-/Applications/Arch Notebook.app}"
 binary="$app_bundle/Contents/MacOS/arch-notebook"
+runner="$app_bundle/Contents/Resources/run-macos-automation.sh"
 if [[ ! -r "$case_file" || ! -f "$case_file" ]]; then
   echo "Case file is not readable: $case_file" >&2
   exit 1
 fi
 if [[ ! -x "$binary" ]]; then
   echo "Arch Notebook executable not found: $binary" >&2
+  exit 1
+fi
+if [[ ! -x "$runner" ]]; then
+  echo "Arch Notebook automation runner not found: $runner" >&2
   exit 1
 fi
 if ! command -v python3 >/dev/null 2>&1; then
@@ -47,22 +52,21 @@ log_dir="$HOME/Library/Logs"
 plist_path="$agent_dir/$label.plist"
 mkdir -p "$agent_dir" "$log_dir"
 
-python3 - "$plist_path" "$binary" "$case_file" "$log_dir" "$label" "$schedule" <<'PY'
+python3 - "$plist_path" "$runner" "$binary" "$case_file" "$log_dir" "$label" "$schedule" <<'PY'
 import os
 import plistlib
 import sys
 import tempfile
 
-destination, binary, case_file, log_dir, label, schedule = sys.argv[1:]
+destination, runner, binary, case_file, log_dir, label, schedule = sys.argv[1:]
 interval_seconds = {"hourly": 3600, "daily": 86400, "weekly": 604800}[schedule]
 payload = {
     "Label": label,
-    # launchd appends stdout to these files, so avoid full connection deltas.
-    "ProgramArguments": [binary, "--run-enabled-jobs", case_file],
+    "ProgramArguments": [runner, binary, case_file, log_dir],
     "RunAtLoad": True,
     "StartInterval": interval_seconds,
-    "StandardOutPath": os.path.join(log_dir, "arch-notebook-automation.log"),
-    "StandardErrorPath": os.path.join(log_dir, "arch-notebook-automation-error.log"),
+    "StandardOutPath": "/dev/null",
+    "StandardErrorPath": "/dev/null",
 }
 directory = os.path.dirname(destination)
 fd, temporary = tempfile.mkstemp(prefix=f".{label}.", suffix=".plist", dir=directory)

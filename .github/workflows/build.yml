@@ -65,7 +65,7 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Check packaging script syntax
         run: |
-          for script in scripts/install-linux-user.sh scripts/install-linux-automation.sh scripts/install-macos-automation.sh scripts/package-macos.sh; do
+          for script in scripts/install-linux-user.sh scripts/install-linux-automation.sh scripts/install-macos-automation.sh scripts/run-macos-automation.sh scripts/package-macos.sh; do
             bash -n "$script"
           done
       - name: Fetch locked dependencies
