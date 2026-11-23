@@ -930,6 +930,7 @@ struct App {
     sql_series: String,
     sql_query: String,
     sql_parameter_text: String,
+    sql_cleared_parameter_draft: Option<(String, String)>,
     sql_validation_preview: Option<SqlValidationPreview>,
     sql_skipped_endpoints: Vec<SkippedSqlEndpoint>,
     sql_validation_preview_regressions_only: bool,
@@ -1399,6 +1400,7 @@ impl Default for App {
             sql_series: "Harbor Light connection review".into(),
             sql_query: "SELECT connection_id, source, source_type, target, target_type, relationship, event_date AS date, confidence, directed, source_reference, notes FROM connection_observations WHERE snapshot_id = :snapshot_id ORDER BY connection_id;".into(),
             sql_parameter_text: "snapshot_id=baseline".into(),
+            sql_cleared_parameter_draft: None,
             sql_validation_preview: None,
             sql_skipped_endpoints: Vec::new(),
             sql_validation_preview_regressions_only: false,
@@ -1736,6 +1738,7 @@ impl App {
             sql_series: String::new(),
             sql_query: String::new(),
             sql_parameter_text: String::new(),
+            sql_cleared_parameter_draft: None,
             sql_validation_preview: None,
             sql_skipped_endpoints: Vec::new(),
             sql_validation_preview_regressions_only: false,
@@ -3812,6 +3815,10 @@ impl App {
             return;
         };
         let cleared_parameters = !self.sql_parameter_text.trim().is_empty();
+        if cleared_parameters {
+            self.sql_cleared_parameter_draft =
+                Some((self.sql_path.clone(), self.sql_parameter_text.clone()));
+        }
         self.sql_query = query;
         self.sql_parameter_text.clear();
         self.sql_validation_preview = None;
@@ -3826,6 +3833,13 @@ impl App {
 
     fn show_sql_schema_template_picker(&mut self, ui: &mut egui::Ui) {
         let current_source = (self.sql_path.clone(), self.case_path.clone());
+        if self
+            .sql_cleared_parameter_draft
+            .as_ref()
+            .is_some_and(|(database_path, _)| database_path != &self.sql_path)
+        {
+            self.sql_cleared_parameter_draft = None;
+        }
         if self.sql_schema_template_source.as_ref() != Some(&current_source) {
             self.sql_schema_templates.clear();
             self.sql_schema_objects.clear();
@@ -4057,6 +4071,25 @@ impl App {
                 .small(),
             );
         }
+        if let Some((_, saved_parameters)) = self.sql_cleared_parameter_draft.clone() {
+            ui.label("Previous SQL parameter values are saved here as an inactive draft.");
+            ui.horizontal(|ui| {
+                if ui
+                    .button("Restore prior values (replace active parameters)")
+                    .clicked()
+                {
+                    self.sql_parameter_text = saved_parameters;
+                    self.sql_cleared_parameter_draft = None;
+                    self.sql_validation_preview = None;
+                    self.status =
+                        "PRIOR SQL PARAMETERS RESTORED · VALIDATE AGAINST CURRENT QUERY".into();
+                }
+                if ui.button("Discard prior values").clicked() {
+                    self.sql_cleared_parameter_draft = None;
+                    self.status = "PRIOR SQL PARAMETER DRAFT DISCARDED".into();
+                }
+            });
+        }
         let apply_label = if template_matches_query {
             "Selected query template is already applied"
         } else if clears_parameters {
@@ -4161,6 +4194,7 @@ impl App {
                 return;
             }
         }
+        self.sql_cleared_parameter_draft = None;
         if let Some(id) = self.editing_automation_job {
             if let Some(job) = self
                 .case
@@ -4969,6 +5003,7 @@ impl App {
             self.sql_series = job.series;
             self.sql_query = job.query;
             self.sql_parameter_text = format_sql_parameters(&job.parameters);
+            self.sql_cleared_parameter_draft = None;
             self.automation_minimum_connections = job.minimum_connections;
             self.automation_minimum_confidence = job.minimum_confidence;
             self.automation_maximum_connections = job.maximum_connections;
@@ -5027,6 +5062,7 @@ impl App {
         self.sql_series = job.series;
         self.sql_query = job.query;
         self.sql_parameter_text = format_sql_parameters(&job.parameters);
+        self.sql_cleared_parameter_draft = None;
         self.automation_minimum_connections = job.minimum_connections;
         self.automation_minimum_confidence = job.minimum_confidence;
         self.automation_maximum_connections = job.maximum_connections;
@@ -5072,6 +5108,7 @@ impl App {
     }
 
     fn restore_automation_editor_before_edit(&mut self) {
+        self.sql_cleared_parameter_draft = None;
         if let Some((
             name,
             path,

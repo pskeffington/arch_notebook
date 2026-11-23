@@ -9,26 +9,30 @@ depends=('gcc-libs' 'glibc' 'libglvnd' 'libx11' 'libxcb' 'libxcursor' 'libxi' 'l
 makedepends=('cargo' 'git' 'pkgconf' 'rust')
 provides=('arch-notebook')
 conflicts=('arch-notebook')
-source=("$pkgname::git+$url.git#branch=main")
-sha256sums=('SKIP')
+source=()
+sha256sums=()
+if [[ -z "${ARCH_NOTEBOOK_SOURCE_DIR:-}" ]]; then
+  source=("$pkgname::git+$url.git#branch=main")
+  sha256sums=('SKIP')
+fi
 
 pkgver() {
-  cd "$srcdir/$pkgname"
+  cd "${ARCH_NOTEBOOK_SOURCE_DIR:-$srcdir/$pkgname}"
   printf '0.1.0.r%s.g%s' "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
 }
 
 prepare() {
-  cd "$srcdir/$pkgname"
+  cd "${ARCH_NOTEBOOK_SOURCE_DIR:-$srcdir/$pkgname}"
   cargo fetch --locked
 }
 
 build() {
-  cd "$srcdir/$pkgname"
+  cd "${ARCH_NOTEBOOK_SOURCE_DIR:-$srcdir/$pkgname}"
   cargo build --release --locked
 }
 
 package() {
-  cd "$srcdir/$pkgname"
+  cd "${ARCH_NOTEBOOK_SOURCE_DIR:-$srcdir/$pkgname}"
   install -Dm755 target/release/arch-notebook "$pkgdir/usr/bin/arch-notebook"
   install -Dm644 packaging/arch/arch-notebook.desktop "$pkgdir/usr/share/applications/arch-notebook.desktop"
   install -Dm644 packaging/systemd/arch-notebook-automation.service "$pkgdir/usr/share/arch-notebook/systemd/arch-notebook-automation.service"

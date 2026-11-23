@@ -107,11 +107,13 @@ jobs:
       - name: Install Arch build environment
         run: pacman -Syu --noconfirm --needed base-devel cargo git libglvnd libx11 libxcb libxcursor libxi libxinerama libxkbcommon libxkbcommon-x11 libxrandr libxrender pkgconf rust shadow sqlite wayland
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
       - name: Build package
         run: |
           useradd --create-home builder
           chown -R builder:builder "$GITHUB_WORKSPACE"
-          su builder -c "cd '$GITHUB_WORKSPACE/packaging/arch' && makepkg --noconfirm"
+          su builder -c "cd '$GITHUB_WORKSPACE/packaging/arch' && ARCH_NOTEBOOK_SOURCE_DIR='$GITHUB_WORKSPACE' makepkg --noconfirm"
       - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: arch-notebook-archlinux
