@@ -10041,25 +10041,27 @@ fn automation_snapshot_regression_count(case: &CaseFile, snapshot_index: usize) 
     let Some(current) = case.snapshots.get(snapshot_index) else {
         return 0;
     };
-    previous_snapshot_index(case, snapshot_index)
-        .and_then(|index| case.snapshots.get(index))
-        .map(|baseline| {
-            compare_snapshots(baseline, current)
-                .iter()
-                .filter(|delta| {
-                    delta.kinds.iter().any(|kind| {
-                        matches!(
-                            kind,
-                            DeltaKind::Removed
-                                | DeltaKind::ConfidenceDeclined
-                                | DeltaKind::EntityAttributesChanged
-                                | DeltaKind::ConnectionAttributesChanged
-                        )
-                    })
-                })
-                .count()
+    let Some(baseline) =
+        previous_snapshot_index(case, snapshot_index).and_then(|index| case.snapshots.get(index))
+    else {
+        return 0;
+    };
+    let changed_connections = compare_snapshots(baseline, current)
+        .iter()
+        .filter(|delta| {
+            delta.kinds.iter().any(|kind| {
+                matches!(
+                    kind,
+                    DeltaKind::Removed
+                        | DeltaKind::ConfidenceDeclined
+                        | DeltaKind::EntityAttributesChanged
+                        | DeltaKind::ConnectionAttributesChanged
+                )
+            })
         })
-        .unwrap_or_default()
+        .count();
+    changed_connections
+        + usize::from(snapshot_sqlite_schema_version_change(baseline, current).is_some())
 }
 
 fn automation_regression_count(case: &CaseFile, source_key: &str) -> usize {
@@ -12763,8 +12765,8 @@ impl eframe::App for App {
                                     );
                                     ui.checkbox(
                                         &mut self.automation_runs_with_unreviewed_regressions,
-                                        "Unreviewed regressions or properties",
-                                    ).on_hover_text("Show captures with removals, confidence declines, or SQL relationship-property changes and no review mark, even when the job passed.");
+                                        "Unreviewed regressions, properties, or schema changes",
+                                    ).on_hover_text("Show captures with removals, confidence declines, SQL property changes, or a SQLite schema-version change and no review mark, even when the job passed.");
                                     if ui.small_button("Clear history filters").clicked() {
                                         self.automation_run_filter.clear();
                                         self.automation_run_trigger_filter = "all".into();
@@ -12999,7 +13001,13 @@ impl eframe::App for App {
                                                             })
                                                         })
                                                         .collect();
-                                                    if !regressions.is_empty() {
+                                                    let sqlite_schema_version_changed = delta
+                                                        ["sqlite_schema_version_changed"]
+                                                        .as_bool()
+                                                        .unwrap_or(false);
+                                                    if !regressions.is_empty()
+                                                        || sqlite_schema_version_changed
+                                                    {
                                                         let is_reviewed = run
                                                             .regressions_reviewed
                                                             .unwrap_or_else(|| !run.analyst_note.trim().is_empty());
@@ -13009,15 +13017,24 @@ impl eframe::App for App {
                                                             .show(ui, |ui| {
                                                                 ui.horizontal(|ui| {
                                                                     ui.label(egui::RichText::new(format!(
-                                                                        "REVIEW DETAILS · showing {} of {} · {}",
-                                                                        regressions.len().min(5),
+                                                                        "REVIEW DETAILS · {} connection changes{} · {}",
                                                                         regressions.len(),
+                                                                        if sqlite_schema_version_changed { " · SQLite schema drift" } else { "" },
                                                                         if is_reviewed { "REVIEWED" } else { "NEEDS REVIEW" }
                                                                     )).small().strong().color(egui::Color32::from_rgb(238, 139, 115)));
                                                                     if ui.small_button(if is_reviewed { "Reopen review" } else { "Mark reviewed" }).clicked() {
                                                                         set_regression_review = Some((run.id, !is_reviewed));
                                                                     }
                                                                 });
+                                                                if sqlite_schema_version_changed {
+                                                                    let versions = &delta["sqlite_schema_versions"];
+                                                                    ui.label(format!(
+                                                                        "SQLite schema version changed: {} → {}",
+                                                                        versions["baseline"].as_i64().map(|version| version.to_string()).unwrap_or_else(|| "unknown".into()),
+                                                                        versions["current"].as_i64().map(|version| version.to_string()).unwrap_or_else(|| "unknown".into()),
+                                                                    ));
+                                                                    ui.label("Review the current source schema before attributing capture changes to the query.");
+                                                                }
                                                                 for regression in regressions.iter().take(5) {
                                                                     let fact = &regression["connection"];
                                                                     let is_removed = regression["kinds"]
