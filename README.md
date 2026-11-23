@@ -136,6 +136,15 @@ cargo run --offline -- --validate-job another-case.json "Local baseline" --query
 
 The versioned package carries the job name, configured database path, snapshot series, SQL query, typed parameters, and capture limits. Import assigns a new job UUID, starts the job disabled, and rejects a duplicate job name or a database/series already owned by another job. CLI imports can override the name, database path, or series when adapting a shared query to another environment; relative database paths resolve from the destination case file. Use `--validate-job` to preflight a named or UUID-selected job even while it is disabled. The default checks both query validity and its capture limits; add `--query-only` to report query validity without failing on unmet capture limits. Repeat `--param name=value` to override or add bound SQL parameters for this validation only; the saved job and case remain unchanged. Validation is read-only and does not save the case. In the desktop app, use the separate **Import JSON** and **Export JSON** paths in **Data → Automation**; expand **Adapt imported job** to override the name, database path, or series, and use **Export** beside a job to write its package. After import, the job list focuses on the new disabled entry and the status displays its UUID for review and script handoff. Use **Validate** before enabling it for a scheduled batch; package import does not connect to or modify its SQLite source. Export writes atomically and refuses to replace the case or a SQLite source used by its jobs or snapshots.
 
+Share a saved CSV/TSV import design without copying its case. The versioned JSON package contains the column mapping, row filters, value transforms, and normalized header signature; importing gives the design a new ID and makes it available for matching source files in the destination case.
+
+```sh
+cargo run --offline -- --export-import-design harbor-light.case.json "Financial connections" financial-connections.import.json --json
+cargo run --offline -- --import-import-design another-case.json financial-connections.import.json --name "Local financial feed" --json
+```
+
+Design names must be unique in a case. Use `--name` to adapt a shared design to a local naming scheme. Import does not read source data or change SQLite databases; the saved mapping is applied when a delimited file with the matching header signature is inspected.
+
 Read saved automation outcomes without opening the desktop app:
 
 ```sh

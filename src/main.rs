@@ -441,6 +441,22 @@ struct AutomationJobPackageDefinition {
 }
 
 #[derive(Clone, Serialize, Deserialize)]
+struct ImportDesignPackage {
+    format: String,
+    schema_version: u32,
+    design: ImportDesignPackageDefinition,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct ImportDesignPackageDefinition {
+    name: String,
+    #[serde(default)]
+    mapping: ImportColumnMapping,
+    #[serde(default)]
+    header_signature: Vec<String>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
 struct AutomationRun {
     #[serde(default = "Uuid::new_v4")]
     id: Uuid,
@@ -13610,6 +13626,176 @@ fn write_automation_job_package(
     write_file_atomically(Path::new(output_path), &contents)
 }
 
+fn read_import_design_package(input_path: &str) -> Result<ImportDesignPackage, String> {
+    let package_json = fs::read_to_string(input_path)
+        .map_err(|error| format!("cannot read import design package: {error}"))?;
+    let package = serde_json::from_str::<ImportDesignPackage>(&package_json)
+        .map_err(|error| format!("cannot parse import design package: {error}"))?;
+    if package.schema_version != 1 {
+        return Err(format!(
+            "unsupported import design package schema version: {}",
+            package.schema_version
+        ));
+    }
+    if package.format != "arch-notebook-import-design" {
+        return Err("input is not an Arch Notebook import design package".into());
+    }
+    Ok(package)
+}
+
+fn import_design_from_package(
+    mut definition: ImportDesignPackageDefinition,
+    case: &CaseFile,
+    name_override: Option<&str>,
+) -> Result<ImportSpecification, String> {
+    if let Some(name) = name_override {
+        definition.name = name.to_owned();
+    }
+    definition.name = definition.name.trim().to_owned();
+    if definition.name.is_empty() {
+        return Err("import design package must include a name".into());
+    }
+    if case
+        .import_specifications
+        .iter()
+        .any(|spec| spec.name.eq_ignore_ascii_case(&definition.name))
+    {
+        return Err(format!(
+            "import design name already exists in case: {}",
+            definition.name
+        ));
+    }
+    let mut header_signature: Vec<String> = definition
+        .header_signature
+        .into_iter()
+        .map(|header| header.trim().to_ascii_lowercase())
+        .collect();
+    header_signature.sort();
+    header_signature.dedup();
+    Ok(ImportSpecification {
+        id: Uuid::new_v4(),
+        name: definition.name,
+        mapping: definition.mapping,
+        header_signature,
+    })
+}
+
+fn write_import_design_package(
+    case: &CaseFile,
+    case_path: &str,
+    spec: &ImportSpecification,
+    output_path: &str,
+) -> Result<(), String> {
+    if paths_refer_to_same_file(case_path, output_path) {
+        return Err("import design package output cannot replace its case file".into());
+    }
+    let output_replaces_source = case.automation_jobs.iter().any(|job| {
+        let source = sqlite_database_identity_path(&job.database_path, case_path);
+        paths_refer_to_same_file(&source.to_string_lossy(), output_path)
+    }) || case
+        .snapshots
+        .iter()
+        .any(|snapshot| paths_refer_to_same_file(&snapshot.database_path, output_path));
+    if output_replaces_source {
+        return Err("import design package output cannot replace a saved SQLite source".into());
+    }
+    let package = ImportDesignPackage {
+        format: "arch-notebook-import-design".into(),
+        schema_version: 1,
+        design: ImportDesignPackageDefinition {
+            name: spec.name.clone(),
+            mapping: spec.mapping.clone(),
+            header_signature: spec.header_signature.clone(),
+        },
+    };
+    let contents = serde_json::to_vec_pretty(&package).map_err(|error| error.to_string())?;
+    write_file_atomically(Path::new(output_path), &contents)
+}
+
+fn export_import_design_cli(
+    case_path: &str,
+    selector: &str,
+    output_path: &str,
+    json_output: bool,
+) -> Result<(), String> {
+    let case_file = Path::new(case_path);
+    let _case_lock = lock_automation_case(case_file)?;
+    let content =
+        fs::read_to_string(case_file).map_err(|error| format!("cannot read case: {error}"))?;
+    let case = serde_json::from_str::<CaseFile>(&content)
+        .map_err(|error| format!("cannot parse case: {error}"))?;
+    let matches: Vec<_> = case
+        .import_specifications
+        .iter()
+        .filter(|spec| {
+            spec.name.eq_ignore_ascii_case(selector)
+                || spec.id.to_string().eq_ignore_ascii_case(selector)
+        })
+        .collect();
+    if matches.len() > 1 {
+        return Err(format!("import design selector is ambiguous: {selector}"));
+    }
+    let spec = matches
+        .first()
+        .ok_or_else(|| format!("import design not found: {selector}"))?;
+    write_import_design_package(&case, case_path, spec, output_path)?;
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "schema_version": 1,
+                "ok": true,
+                "case": case_path,
+                "output": output_path,
+                "design_id": spec.id,
+                "design": spec.name,
+            }))
+            .map_err(|error| error.to_string())?
+        );
+    } else {
+        println!("IMPORT DESIGN EXPORTED · {} · {output_path}", spec.name);
+    }
+    Ok(())
+}
+
+fn import_import_design_cli(
+    case_path: &str,
+    input_path: &str,
+    name_override: Option<&str>,
+    json_output: bool,
+) -> Result<(), String> {
+    let case_file = Path::new(case_path);
+    let _case_lock = lock_automation_case(case_file)?;
+    let package = read_import_design_package(input_path)?;
+    let content =
+        fs::read_to_string(case_file).map_err(|error| format!("cannot read case: {error}"))?;
+    let mut case = serde_json::from_str::<CaseFile>(&content)
+        .map_err(|error| format!("cannot parse case: {error}"))?;
+    let spec = import_design_from_package(package.design, &case, name_override)?;
+    let spec_id = spec.id;
+    let spec_name = spec.name.clone();
+    case.import_specifications.push(spec);
+    save_case_atomically(case_file, &case)?;
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "schema_version": 1,
+                "ok": true,
+                "saved": true,
+                "case": case_path,
+                "input": input_path,
+                "design_id": spec_id,
+                "design": spec_name,
+            }))
+            .map_err(|error| error.to_string())?
+        );
+    } else {
+        println!("IMPORT DESIGN IMPORTED · {spec_name}");
+    }
+    Ok(())
+}
+
 fn write_file_atomically(path: &Path, contents: &[u8]) -> Result<(), String> {
     use std::fs::OpenOptions;
     let parent = path
@@ -14062,7 +14248,7 @@ fn main() -> eframe::Result<()> {
         .is_some_and(|arg| arg == "--help" || arg == "-h")
     {
         println!(
-            "Arch Notebook\n\nUsage:\n  arch-notebook\n  arch-notebook --inspect-sqlite <database.sqlite> [--json]\n  arch-notebook --import-graphml <case.json> <input.graphml> [--json]\n  arch-notebook --export-graphml <case.json> <output.graphml> [--json]\n  arch-notebook --export-sql-comparison <case.json> <baseline-snapshot-id> <current-snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --export-job <case.json> <job-name-or-id> <output.json> [--json]\n  arch-notebook --import-job <case.json> <input.json> [--name <job-name>] [--database <path>] [--series <label>] [--json]\n  arch-notebook --list-jobs <case.json> [--enabled-only] [--json]\n  arch-notebook --list-runs <case.json> [--json] [--job <name-or-id>] [--offset <count>] [--limit <count>]\n  arch-notebook --validate-job <case.json> <job-name-or-id> [--query-only] [--param name=value ...] [--json]\n  arch-notebook --validate-enabled-jobs <case.json> [--json] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --check-enabled-job-queries <case.json> [--json] [--require-usable] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --validate-run <case.json> <run-id> [--json]\n  arch-notebook --run-enabled-jobs <case.json> [--json] [--skip-recent-success] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --run-job <case.json> <job-name-or-id> [--param name=value ...] [--json]\n  arch-notebook --rerun-run <case.json> <run-id> [--json]\n\nJob packages contain only portable SQL job settings; case snapshots and run history stay in the case. Job and run listing and validation do not change the case file. Batch runs save snapshots and run history to the case file. JSON output is available for scheduler integration."
+            "Arch Notebook\n\nUsage:\n  arch-notebook\n  arch-notebook --inspect-sqlite <database.sqlite> [--json]\n  arch-notebook --import-graphml <case.json> <input.graphml> [--json]\n  arch-notebook --export-graphml <case.json> <output.graphml> [--json]\n  arch-notebook --export-sql-comparison <case.json> <baseline-snapshot-id> <current-snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --export-job <case.json> <job-name-or-id> <output.json> [--json]\n  arch-notebook --import-job <case.json> <input.json> [--name <job-name>] [--database <path>] [--series <label>] [--json]\n  arch-notebook --export-import-design <case.json> <design-name-or-id> <output.json> [--json]\n  arch-notebook --import-import-design <case.json> <input.json> [--name <design-name>] [--json]\n  arch-notebook --list-jobs <case.json> [--enabled-only] [--json]\n  arch-notebook --list-runs <case.json> [--json] [--job <name-or-id>] [--offset <count>] [--limit <count>]\n  arch-notebook --validate-job <case.json> <job-name-or-id> [--query-only] [--param name=value ...] [--json]\n  arch-notebook --validate-enabled-jobs <case.json> [--json] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --check-enabled-job-queries <case.json> [--json] [--require-usable] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --validate-run <case.json> <run-id> [--json]\n  arch-notebook --run-enabled-jobs <case.json> [--json] [--skip-recent-success] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --run-job <case.json> <job-name-or-id> [--param name=value ...] [--json]\n  arch-notebook --rerun-run <case.json> <run-id> [--json]\n\nJob and import design packages contain portable configuration, not case data or run history. Batch runs save snapshots and run history to the case file. JSON output is available for scheduler integration."
         );
         println!("  arch-notebook --annotate-run <case.json> <run-id> <comment> [--json]");
         return Ok(());
@@ -14200,6 +14386,64 @@ fn main() -> eframe::Result<()> {
             json_output,
         ) {
             report_cli_error("automation job import failed", error, json_output);
+        }
+        return Ok(());
+    }
+    if args
+        .first()
+        .is_some_and(|arg| arg == "--export-import-design")
+    {
+        let json_output = args.iter().any(|arg| arg == "--json");
+        let usage = "usage: arch-notebook --export-import-design <case.json> <design-name-or-id> <output.json> [--json]";
+        let (Some(case_path), Some(selector), Some(output_path)) =
+            (args.get(1), args.get(2), args.get(3))
+        else {
+            report_cli_usage_error(usage, json_output);
+        };
+        if args.len() > 5 || args.get(4).is_some_and(|arg| arg != "--json") {
+            report_cli_usage_error(usage, json_output);
+        }
+        if let Err(error) = export_import_design_cli(case_path, selector, output_path, json_output)
+        {
+            report_cli_error("import design export failed", error, json_output);
+        }
+        return Ok(());
+    }
+    if args
+        .first()
+        .is_some_and(|arg| arg == "--import-import-design")
+    {
+        let json_output = args.iter().any(|arg| arg == "--json");
+        let usage = "usage: arch-notebook --import-import-design <case.json> <input.json> [--name <design-name>] [--json]";
+        let (Some(case_path), Some(input_path)) = (args.get(1), args.get(2)) else {
+            report_cli_usage_error(usage, json_output);
+        };
+        let mut name_override = None;
+        let mut seen_name = false;
+        let mut seen_json = false;
+        let mut index = 3;
+        while index < args.len() {
+            match args[index].as_str() {
+                "--json" if !seen_json => seen_json = true,
+                "--name" if !seen_name => {
+                    index += 1;
+                    let Some(value) = args
+                        .get(index)
+                        .filter(|value| !value.trim().is_empty() && !value.starts_with("--"))
+                    else {
+                        report_cli_usage_error("--name requires a design name", json_output);
+                    };
+                    name_override = Some(value.as_str());
+                    seen_name = true;
+                }
+                _ => report_cli_usage_error(usage, json_output),
+            }
+            index += 1;
+        }
+        if let Err(error) =
+            import_import_design_cli(case_path, input_path, name_override, json_output)
+        {
+            report_cli_error("import design import failed", error, json_output);
         }
         return Ok(());
     }
