@@ -340,6 +340,9 @@ struct App {
     automation_run_filter: String,
     automation_job_import_path: String,
     automation_job_export_path: String,
+    automation_job_import_name: String,
+    automation_job_import_database_path: String,
+    automation_job_import_series: String,
     automation_failed_runs_only: bool,
     sql_snapshot_source: Option<String>,
     sql_snapshot_index: Option<usize>,
@@ -723,6 +726,9 @@ impl Default for App {
                 .join("automation-job.json")
                 .to_string_lossy()
                 .into_owned(),
+            automation_job_import_name: String::new(),
+            automation_job_import_database_path: String::new(),
+            automation_job_import_series: String::new(),
             automation_failed_runs_only: false,
             sql_snapshot_source: None,
             sql_snapshot_index: None,
@@ -997,6 +1003,9 @@ impl App {
             automation_run_filter: String::new(),
             automation_job_import_path: String::new(),
             automation_job_export_path: String::new(),
+            automation_job_import_name: String::new(),
+            automation_job_import_database_path: String::new(),
+            automation_job_import_series: String::new(),
             automation_failed_runs_only: false,
             sql_snapshot_source: None,
             sql_snapshot_index: None,
@@ -2683,13 +2692,29 @@ impl App {
             self.status = "JOB PACKAGE IMPORT FAILED · enter a package path".into();
             return;
         }
+        let name_override = (!self.automation_job_import_name.trim().is_empty())
+            .then(|| self.automation_job_import_name.trim().to_owned());
+        let database_path_override = (!self.automation_job_import_database_path.trim().is_empty())
+            .then(|| self.automation_job_import_database_path.trim().to_owned());
+        let series_override = (!self.automation_job_import_series.trim().is_empty())
+            .then(|| self.automation_job_import_series.trim().to_owned());
         let result = read_automation_job_package(input_path).and_then(|package| {
-            job_from_automation_package(package.job, &self.case, &self.case_path)
+            job_from_automation_package(
+                package.job,
+                &self.case,
+                &self.case_path,
+                name_override.as_deref(),
+                database_path_override.as_deref(),
+                series_override.as_deref(),
+            )
         });
         match result {
             Ok(job) => {
                 let name = job.name.clone();
                 self.case.automation_jobs.push(job);
+                self.automation_job_import_name.clear();
+                self.automation_job_import_database_path.clear();
+                self.automation_job_import_series.clear();
                 self.status = format!("AUTOMATION JOB IMPORTED · {name} · DISABLED UNTIL REVIEWED");
             }
             Err(error) => self.status = format!("JOB PACKAGE IMPORT FAILED · {error}"),
@@ -6362,23 +6387,27 @@ impl eframe::App for App {
                 }
             }
         }
-        let (save, save_as, delete, escape, workspace_shortcut) = ctx.input(|input| {
-            (
-                input.key_pressed(egui::Key::S) && input.modifiers.command,
-                input.key_pressed(egui::Key::S) && input.modifiers.command && input.modifiers.shift,
-                input.key_pressed(egui::Key::Delete),
-                input.key_pressed(egui::Key::Escape),
-                if input.modifiers.command && input.key_pressed(egui::Key::Num1) {
-                    Some((WorkspacePage::Chart, false))
-                } else if input.modifiers.command && input.key_pressed(egui::Key::Num2) {
-                    Some((WorkspacePage::Chart, true))
-                } else if input.modifiers.command && input.key_pressed(egui::Key::Num3) {
-                    Some((WorkspacePage::Data, false))
-                } else {
-                    None
-                },
-            )
-        });
+        let (save, save_as, delete, escape, workspace_shortcut, automation_shortcut) =
+            ctx.input(|input| {
+                (
+                    input.key_pressed(egui::Key::S) && input.modifiers.command,
+                    input.key_pressed(egui::Key::S)
+                        && input.modifiers.command
+                        && input.modifiers.shift,
+                    input.key_pressed(egui::Key::Delete),
+                    input.key_pressed(egui::Key::Escape),
+                    if input.modifiers.command && input.key_pressed(egui::Key::Num1) {
+                        Some((WorkspacePage::Chart, false))
+                    } else if input.modifiers.command && input.key_pressed(egui::Key::Num2) {
+                        Some((WorkspacePage::Chart, true))
+                    } else if input.modifiers.command && input.key_pressed(egui::Key::Num3) {
+                        Some((WorkspacePage::Data, false))
+                    } else {
+                        None
+                    },
+                    input.modifiers.command && input.key_pressed(egui::Key::Num4),
+                )
+            });
         if save_as {
             self.save_as();
         } else if save {
@@ -6389,6 +6418,11 @@ impl eframe::App for App {
         {
             self.page = page;
             self.show_timeline = show_timeline;
+        }
+        if automation_shortcut && !ctx.wants_keyboard_input() {
+            self.page = WorkspacePage::Data;
+            self.show_timeline = false;
+            self.data_mode = DataMode::Automation;
         }
         if delete && self.pending_case_action.is_none() && !ctx.wants_keyboard_input() {
             self.delete_selected();
@@ -6436,6 +6470,13 @@ impl eframe::App for App {
                         if response.clicked() && label=="TIMELINE" { self.page=WorkspacePage::Chart;self.show_timeline=!self.show_timeline; }
                         if response.clicked() && label=="CHART" { self.page=WorkspacePage::Chart;self.show_timeline=false; }
                         if response.clicked() && label=="DATA" { self.page=WorkspacePage::Data;self.show_timeline=false; }
+                    }
+                    let automation_active = self.page == WorkspacePage::Data
+                        && self.data_mode == DataMode::Automation;
+                    if ui.selectable_label(automation_active, "AUTOMATION").clicked() {
+                        self.page = WorkspacePage::Data;
+                        self.show_timeline = false;
+                        self.data_mode = DataMode::Automation;
                     }
                     ui.separator();
                     if ui.button("＋ Entity").clicked() {
@@ -6690,6 +6731,21 @@ impl eframe::App for App {
                                         self.import_automation_job_package();
                                     }
                                 });
+                                egui::CollapsingHeader::new("Adapt imported job (optional overrides)")
+                                    .id_salt("automation_job_import_overrides")
+                                    .show(ui, |ui| {
+                                        ui.label(egui::RichText::new("Leave a field blank to use the package value. Imported jobs stay disabled until reviewed.").small().color(muted));
+                                        ui.horizontal(|ui| {
+                                            ui.label("Name");
+                                            ui.add(egui::TextEdit::singleline(&mut self.automation_job_import_name).hint_text("Keep package name").desired_width(220.0));
+                                            ui.label("Database");
+                                            ui.add(egui::TextEdit::singleline(&mut self.automation_job_import_database_path).hint_text("Keep package path").desired_width(260.0));
+                                        });
+                                        ui.horizontal(|ui| {
+                                            ui.label("Series");
+                                            ui.add(egui::TextEdit::singleline(&mut self.automation_job_import_series).hint_text("Keep package series").desired_width(260.0));
+                                        });
+                                    });
                                 ui.horizontal(|ui| {
                                     ui.label("Export JSON");
                                     ui.add(egui::TextEdit::singleline(&mut self.automation_job_export_path).desired_width(300.0));
@@ -11734,10 +11790,26 @@ fn read_automation_job_package(input_path: &str) -> Result<AutomationJobPackage,
 }
 
 fn job_from_automation_package(
-    definition: AutomationJobPackageDefinition,
+    mut definition: AutomationJobPackageDefinition,
     case: &CaseFile,
     case_path: &str,
+    name_override: Option<&str>,
+    database_path_override: Option<&str>,
+    series_override: Option<&str>,
 ) -> Result<AutomationJob, String> {
+    if let Some(name) = name_override {
+        definition.name = name.to_owned();
+    }
+    if let Some(database_path) = database_path_override {
+        definition.database_path = database_path.to_owned();
+    }
+    if let Some(series) = series_override {
+        definition.series = series.to_owned();
+    }
+    definition.name = definition.name.trim().to_owned();
+    definition.database_path = definition.database_path.trim().to_owned();
+    definition.series = definition.series.trim().to_owned();
+    definition.query = definition.query.trim().to_owned();
     if definition.name.trim().is_empty()
         || definition.database_path.trim().is_empty()
         || definition.series.trim().is_empty()
@@ -11892,6 +11964,9 @@ fn export_automation_job_cli(
 fn import_automation_job_cli(
     case_path: &str,
     input_path: &str,
+    name_override: Option<&str>,
+    database_path_override: Option<&str>,
+    series_override: Option<&str>,
     json_output: bool,
 ) -> Result<(), String> {
     let case_file = Path::new(case_path);
@@ -11901,7 +11976,14 @@ fn import_automation_job_cli(
         fs::read_to_string(case_file).map_err(|error| format!("cannot read case: {error}"))?;
     let mut case = serde_json::from_str::<CaseFile>(&content)
         .map_err(|error| format!("cannot parse case: {error}"))?;
-    let job = job_from_automation_package(package.job, &case, case_path)?;
+    let job = job_from_automation_package(
+        package.job,
+        &case,
+        case_path,
+        name_override,
+        database_path_override,
+        series_override,
+    )?;
     let job_id = job.id;
     let job_name = job.name.clone();
     case.automation_jobs.push(job);
@@ -11917,6 +11999,8 @@ fn import_automation_job_cli(
                 "input": input_path,
                 "job_id": job_id,
                 "job": job_name,
+                "database_path": case.automation_jobs.last().map(|job|job.database_path.as_str()),
+                "series": case.automation_jobs.last().map(|job|job.series.as_str()),
                 "enabled": false,
             }))
             .map_err(|error| error.to_string())?
@@ -12204,7 +12288,7 @@ fn main() -> eframe::Result<()> {
         .is_some_and(|arg| arg == "--help" || arg == "-h")
     {
         println!(
-            "Arch Notebook\n\nUsage:\n  arch-notebook\n  arch-notebook --inspect-sqlite <database.sqlite> [--json]\n  arch-notebook --import-graphml <case.json> <input.graphml> [--json]\n  arch-notebook --export-graphml <case.json> <output.graphml> [--json]\n  arch-notebook --export-sql-comparison <case.json> <baseline-snapshot-id> <current-snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --export-job <case.json> <job-name-or-id> <output.json> [--json]\n  arch-notebook --import-job <case.json> <input.json> [--json]\n  arch-notebook --list-jobs <case.json> [--enabled-only] [--json]\n  arch-notebook --list-runs <case.json> [--json] [--job <name-or-id>] [--offset <count>] [--limit <count>]\n  arch-notebook --validate-enabled-jobs <case.json> [--json] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --check-enabled-job-queries <case.json> [--json] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --validate-run <case.json> <run-id> [--json]\n  arch-notebook --run-enabled-jobs <case.json> [--json] [--skip-recent-success] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --run-job <case.json> <job-name-or-id> [--param name=value ...] [--json]\n  arch-notebook --rerun-run <case.json> <run-id> [--json]\n\nJob packages contain only portable SQL job settings; case snapshots and run history stay in the case. Job and run listing and validation do not change the case file. Batch runs save snapshots and run history to the case file. JSON output is available for scheduler integration."
+            "Arch Notebook\n\nUsage:\n  arch-notebook\n  arch-notebook --inspect-sqlite <database.sqlite> [--json]\n  arch-notebook --import-graphml <case.json> <input.graphml> [--json]\n  arch-notebook --export-graphml <case.json> <output.graphml> [--json]\n  arch-notebook --export-sql-comparison <case.json> <baseline-snapshot-id> <current-snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --export-job <case.json> <job-name-or-id> <output.json> [--json]\n  arch-notebook --import-job <case.json> <input.json> [--name <job-name>] [--database <path>] [--series <label>] [--json]\n  arch-notebook --list-jobs <case.json> [--enabled-only] [--json]\n  arch-notebook --list-runs <case.json> [--json] [--job <name-or-id>] [--offset <count>] [--limit <count>]\n  arch-notebook --validate-enabled-jobs <case.json> [--json] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --check-enabled-job-queries <case.json> [--json] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --validate-run <case.json> <run-id> [--json]\n  arch-notebook --run-enabled-jobs <case.json> [--json] [--skip-recent-success] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --run-job <case.json> <job-name-or-id> [--param name=value ...] [--json]\n  arch-notebook --rerun-run <case.json> <run-id> [--json]\n\nJob packages contain only portable SQL job settings; case snapshots and run history stay in the case. Job and run listing and validation do not change the case file. Batch runs save snapshots and run history to the case file. JSON output is available for scheduler integration."
         );
         return Ok(());
     }
@@ -12280,14 +12364,66 @@ fn main() -> eframe::Result<()> {
     }
     if args.first().is_some_and(|arg| arg == "--import-job") {
         let json_output = args.iter().any(|arg| arg == "--json");
-        let usage = "usage: arch-notebook --import-job <case.json> <input.json> [--json]";
+        let usage = "usage: arch-notebook --import-job <case.json> <input.json> [--name <job-name>] [--database <path>] [--series <label>] [--json]";
         let (Some(case_path), Some(input_path)) = (args.get(1), args.get(2)) else {
             report_cli_usage_error(usage, json_output);
         };
-        if args.len() > 4 || args.get(3).is_some_and(|arg| arg != "--json") {
-            report_cli_usage_error(usage, json_output);
+        let mut name_override = None;
+        let mut database_path_override = None;
+        let mut series_override = None;
+        let mut seen_json = false;
+        let mut seen_name = false;
+        let mut seen_database = false;
+        let mut seen_series = false;
+        let mut index = 3;
+        while index < args.len() {
+            match args[index].as_str() {
+                "--json" if !seen_json => seen_json = true,
+                "--name" if !seen_name => {
+                    index += 1;
+                    let Some(value) = args
+                        .get(index)
+                        .filter(|value| !value.trim().is_empty() && !value.starts_with("--"))
+                    else {
+                        report_cli_usage_error("--name requires a job name", json_output);
+                    };
+                    name_override = Some(value.as_str());
+                    seen_name = true;
+                }
+                "--database" if !seen_database => {
+                    index += 1;
+                    let Some(value) = args
+                        .get(index)
+                        .filter(|value| !value.trim().is_empty() && !value.starts_with("--"))
+                    else {
+                        report_cli_usage_error("--database requires a path", json_output);
+                    };
+                    database_path_override = Some(value.as_str());
+                    seen_database = true;
+                }
+                "--series" if !seen_series => {
+                    index += 1;
+                    let Some(value) = args
+                        .get(index)
+                        .filter(|value| !value.trim().is_empty() && !value.starts_with("--"))
+                    else {
+                        report_cli_usage_error("--series requires a label", json_output);
+                    };
+                    series_override = Some(value.as_str());
+                    seen_series = true;
+                }
+                _ => report_cli_usage_error(usage, json_output),
+            }
+            index += 1;
         }
-        if let Err(error) = import_automation_job_cli(case_path, input_path, json_output) {
+        if let Err(error) = import_automation_job_cli(
+            case_path,
+            input_path,
+            name_override,
+            database_path_override,
+            series_override,
+            json_output,
+        ) {
             report_cli_error("automation job import failed", error, json_output);
         }
         return Ok(());
