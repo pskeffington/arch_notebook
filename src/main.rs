@@ -10824,6 +10824,23 @@ impl eframe::App for App {
                                 ui.close_menu();
                             }
                         }
+                        ui.separator();
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.new_entity_type_text)
+                                .hint_text("Custom entity type"),
+                        );
+                        let custom_type = self.new_entity_type_text.trim().to_owned();
+                        if ui
+                            .add_enabled(
+                                !custom_type.is_empty(),
+                                egui::Button::new("＋ Add custom type"),
+                            )
+                            .clicked()
+                        {
+                            self.add_entity_with_type(&custom_type);
+                            self.new_entity_type_text.clear();
+                            ui.close_menu();
+                        }
                     });
                     let link_entities: Vec<(Uuid, String)> = self
                         .case
@@ -10883,6 +10900,23 @@ impl eframe::App for App {
                                     );
                                 }
                             });
+                        ui.horizontal(|ui| {
+                            ui.add(
+                                egui::TextEdit::singleline(&mut self.new_link_type_text)
+                                    .hint_text("Custom relationship type"),
+                            );
+                            let custom_type = self.new_link_type_text.trim().to_owned();
+                            if ui
+                                .add_enabled(
+                                    !custom_type.is_empty(),
+                                    egui::Button::new("Use type"),
+                                )
+                                .clicked()
+                            {
+                                self.new_link_label = custom_type;
+                                self.new_link_type_text.clear();
+                            }
+                        });
                         let entity_label = |id: Option<Uuid>| {
                             id.and_then(|id| link_entities.iter().find(|(entity, _)| *entity == id))
                                 .map(|(_, label)| label.as_str())
