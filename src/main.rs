@@ -183,6 +183,31 @@ struct AutomationJob {
 }
 
 #[derive(Clone, Serialize, Deserialize)]
+struct AutomationJobPackage {
+    format: String,
+    schema_version: u32,
+    job: AutomationJobPackageDefinition,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct AutomationJobPackageDefinition {
+    name: String,
+    database_path: String,
+    series: String,
+    query: String,
+    #[serde(default)]
+    parameters: Vec<(String, String)>,
+    #[serde(default)]
+    minimum_connections: usize,
+    #[serde(default)]
+    maximum_connections: Option<usize>,
+    #[serde(default)]
+    maximum_regressions: Option<usize>,
+    #[serde(default)]
+    maximum_skipped_rows: Option<usize>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
 struct AutomationRun {
     #[serde(default = "Uuid::new_v4")]
     id: Uuid,
@@ -313,6 +338,8 @@ struct App {
     sql_schema_template_source: Option<(String, String)>,
     automation_job_filter: String,
     automation_run_filter: String,
+    automation_job_import_path: String,
+    automation_job_export_path: String,
     automation_failed_runs_only: bool,
     sql_snapshot_source: Option<String>,
     sql_snapshot_index: Option<usize>,
@@ -691,6 +718,11 @@ impl Default for App {
             sql_schema_template_source: None,
             automation_job_filter: String::new(),
             automation_run_filter: String::new(),
+            automation_job_import_path: String::new(),
+            automation_job_export_path: data_dir
+                .join("automation-job.json")
+                .to_string_lossy()
+                .into_owned(),
             automation_failed_runs_only: false,
             sql_snapshot_source: None,
             sql_snapshot_index: None,
@@ -963,6 +995,8 @@ impl App {
             sql_schema_template_source: None,
             automation_job_filter: String::new(),
             automation_run_filter: String::new(),
+            automation_job_import_path: String::new(),
+            automation_job_export_path: String::new(),
             automation_failed_runs_only: false,
             sql_snapshot_source: None,
             sql_snapshot_index: None,
@@ -2617,6 +2651,49 @@ impl App {
         self.automation_editor_before_edit = None;
         self.automation_job_name.clear();
         self.status = format!("AUTOMATION JOB ADDED · {name}");
+    }
+
+    fn export_automation_job_package(&mut self, id: Uuid) {
+        let Some(job) = self
+            .case
+            .automation_jobs
+            .iter()
+            .find(|job| job.id == id)
+            .cloned()
+        else {
+            self.status = "JOB PACKAGE EXPORT FAILED · job not found".into();
+            return;
+        };
+        let output_path = self.automation_job_export_path.trim();
+        if output_path.is_empty() {
+            self.status = "JOB PACKAGE EXPORT FAILED · enter an output path".into();
+            return;
+        }
+        match write_automation_job_package(&self.case, &self.case_path, &job, output_path) {
+            Ok(()) => {
+                self.status = format!("AUTOMATION JOB EXPORTED · {} · {output_path}", job.name)
+            }
+            Err(error) => self.status = format!("JOB PACKAGE EXPORT FAILED · {error}"),
+        }
+    }
+
+    fn import_automation_job_package(&mut self) {
+        let input_path = self.automation_job_import_path.trim();
+        if input_path.is_empty() {
+            self.status = "JOB PACKAGE IMPORT FAILED · enter a package path".into();
+            return;
+        }
+        let result = read_automation_job_package(input_path).and_then(|package| {
+            job_from_automation_package(package.job, &self.case, &self.case_path)
+        });
+        match result {
+            Ok(job) => {
+                let name = job.name.clone();
+                self.case.automation_jobs.push(job);
+                self.status = format!("AUTOMATION JOB IMPORTED · {name} · DISABLED UNTIL REVIEWED");
+            }
+            Err(error) => self.status = format!("JOB PACKAGE IMPORT FAILED · {error}"),
+        }
     }
 
     fn validate_sql_query(&mut self) -> bool {
@@ -6606,6 +6683,17 @@ impl eframe::App for App {
                                     self.editing_automation_job.is_some() && !editing_saved_job;
                                 ui.label(egui::RichText::new("REPEATABLE SQL INGESTION JOBS").strong().color(cyan));
                                 ui.label(egui::RichText::new("Jobs are saved in this case file. Run them here or from a script with the command-line runner.").small().color(muted));
+                                ui.horizontal(|ui| {
+                                    ui.label("Import JSON");
+                                    ui.add(egui::TextEdit::singleline(&mut self.automation_job_import_path).desired_width(300.0));
+                                    if ui.button("Import package").clicked() {
+                                        self.import_automation_job_package();
+                                    }
+                                });
+                                ui.horizontal(|ui| {
+                                    ui.label("Export JSON");
+                                    ui.add(egui::TextEdit::singleline(&mut self.automation_job_export_path).desired_width(300.0));
+                                });
                                 if recovered_job_draft {
                                     ui.label(egui::RichText::new("RECOVERED RUN CONFIGURATION · saving adds this as a new job").small().strong().color(egui::Color32::from_rgb(236, 174, 83)));
                                 } else if editing_saved_job {
@@ -6753,6 +6841,7 @@ impl eframe::App for App {
                                         if ui.small_button("Validate").clicked(){action=Some(("validate".into(),job.id));}
                                         if ui.small_button("Edit").clicked(){action=Some(("edit".into(),job.id));}
                                         if ui.small_button("Run and save").clicked(){action=Some(("run".into(),job.id));}
+                                        if ui.small_button("Export").on_hover_text("Export this SQL job as a portable JSON package").clicked(){action=Some(("export".into(),job.id));}
                                         if let Some(run_id) = latest_run_id
                                             && ui.small_button("View latest run").clicked()
                                         {
@@ -6813,7 +6902,7 @@ impl eframe::App for App {
                                             );
                                         });
                                 }
-                                if let Some((verb,id))=action {match verb.as_str(){"validate"=>{self.validate_automation_job(id);},"edit"=>self.edit_automation_job(id),"run"=>self.start_automation_jobs(vec![id],false),"delete"=>{if self.editing_automation_job==Some(id){self.cancel_automation_job_edit();}self.case.automation_jobs.retain(|job|job.id!=id);self.status="AUTOMATION JOB DELETED".into();},_=>{}}}
+                                if let Some((verb,id))=action {match verb.as_str(){"validate"=>{self.validate_automation_job(id);},"edit"=>self.edit_automation_job(id),"run"=>self.start_automation_jobs(vec![id],false),"export"=>self.export_automation_job_package(id),"delete"=>{if self.editing_automation_job==Some(id){self.cancel_automation_job_edit();}self.case.automation_jobs.retain(|job|job.id!=id);self.status="AUTOMATION JOB DELETED".into();},_=>{}}}
                                 if let Some(run_id) = focus_run {
                                     self.automation_run_filter = run_id.to_string();
                                     self.automation_failed_runs_only = false;
@@ -9893,6 +9982,36 @@ fn paths_refer_to_same_file(first: &str, second: &str) -> bool {
             .ok()
             .zip(fs::canonicalize(second).ok())
             .is_some_and(|(first, second)| first == second)
+        || absolute_normalized_path(first)
+            .zip(absolute_normalized_path(second))
+            .is_some_and(|(first, second)| first == second)
+}
+
+fn absolute_normalized_path(path: &Path) -> Option<PathBuf> {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        env::current_dir().ok()?.join(path)
+    };
+    let mut normalized = PathBuf::new();
+    for component in absolute.components() {
+        match component {
+            std::path::Component::Prefix(_) | std::path::Component::RootDir => {
+                normalized.push(component.as_os_str());
+            }
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                normalized.pop();
+            }
+            std::path::Component::Normal(part) => {
+                normalized.push(part);
+                if let Ok(canonical) = fs::canonicalize(&normalized) {
+                    normalized = canonical;
+                }
+            }
+        }
+    }
+    Some(normalized)
 }
 
 fn escape_xml_text(value: &str) -> String {
@@ -11579,6 +11698,235 @@ fn list_automation_jobs_cli(
     Ok(())
 }
 
+fn automation_job_package(job: &AutomationJob) -> AutomationJobPackage {
+    AutomationJobPackage {
+        format: "arch-notebook-automation-job".into(),
+        schema_version: 1,
+        job: AutomationJobPackageDefinition {
+            name: job.name.clone(),
+            database_path: job.database_path.clone(),
+            series: job.series.clone(),
+            query: job.query.clone(),
+            parameters: job.parameters.clone(),
+            minimum_connections: job.minimum_connections,
+            maximum_connections: job.maximum_connections,
+            maximum_regressions: job.maximum_regressions,
+            maximum_skipped_rows: job.maximum_skipped_rows,
+        },
+    }
+}
+
+fn read_automation_job_package(input_path: &str) -> Result<AutomationJobPackage, String> {
+    let package_json = fs::read_to_string(input_path)
+        .map_err(|error| format!("cannot read automation job package: {error}"))?;
+    let package = serde_json::from_str::<AutomationJobPackage>(&package_json)
+        .map_err(|error| format!("cannot parse automation job package: {error}"))?;
+    if package.schema_version != 1 {
+        return Err(format!(
+            "unsupported automation job package schema version: {}",
+            package.schema_version
+        ));
+    }
+    if package.format != "arch-notebook-automation-job" {
+        return Err("input is not an Arch Notebook automation job package".into());
+    }
+    Ok(package)
+}
+
+fn job_from_automation_package(
+    definition: AutomationJobPackageDefinition,
+    case: &CaseFile,
+    case_path: &str,
+) -> Result<AutomationJob, String> {
+    if definition.name.trim().is_empty()
+        || definition.database_path.trim().is_empty()
+        || definition.series.trim().is_empty()
+        || definition.query.trim().is_empty()
+    {
+        return Err("job package must include a name, database, series, and query".into());
+    }
+    let parameters = parse_sql_parameters(&format_sql_parameters(&definition.parameters))?;
+    if case
+        .automation_jobs
+        .iter()
+        .any(|job| job.name.eq_ignore_ascii_case(definition.name.trim()))
+    {
+        return Err(format!(
+            "job name already exists in case: {}",
+            definition.name.trim()
+        ));
+    }
+    if let Some(existing) = case.automation_jobs.iter().find(|job| {
+        same_sql_series(
+            &job.database_path,
+            &job.series,
+            &definition.database_path,
+            &definition.series,
+            case_path,
+        )
+    }) {
+        return Err(format!(
+            "database and series already belong to {}",
+            existing.name
+        ));
+    }
+    Ok(AutomationJob {
+        id: Uuid::new_v4(),
+        name: definition.name.trim().to_owned(),
+        database_path: definition.database_path.trim().to_owned(),
+        series: definition.series.trim().to_owned(),
+        query: definition.query.trim().to_owned(),
+        parameters,
+        enabled: false,
+        minimum_connections: definition.minimum_connections,
+        maximum_connections: definition.maximum_connections,
+        maximum_regressions: definition.maximum_regressions,
+        maximum_skipped_rows: definition.maximum_skipped_rows,
+    })
+}
+
+fn write_automation_job_package(
+    case: &CaseFile,
+    case_path: &str,
+    job: &AutomationJob,
+    output_path: &str,
+) -> Result<(), String> {
+    if paths_refer_to_same_file(case_path, output_path) {
+        return Err("job package output cannot replace its case file".into());
+    }
+    let output_replaces_source = case.automation_jobs.iter().any(|job| {
+        let source = sqlite_database_identity_path(&job.database_path, case_path);
+        paths_refer_to_same_file(&source.to_string_lossy(), output_path)
+    }) || case
+        .snapshots
+        .iter()
+        .any(|snapshot| paths_refer_to_same_file(&snapshot.database_path, output_path));
+    if output_replaces_source {
+        return Err("job package output cannot replace a saved SQLite source".into());
+    }
+    let package = automation_job_package(job);
+    let contents = serde_json::to_vec_pretty(&package).map_err(|error| error.to_string())?;
+    write_file_atomically(Path::new(output_path), &contents)
+}
+
+fn write_file_atomically(path: &Path, contents: &[u8]) -> Result<(), String> {
+    use std::fs::OpenOptions;
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| format!("invalid output path: {}", path.display()))?;
+    let mut temporary_name = file_name.to_os_string();
+    temporary_name.push(format!(".tmp-{}-{}", std::process::id(), Uuid::new_v4()));
+    let temporary_path = parent.join(temporary_name);
+    #[cfg(unix)]
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let mut file = options.open(&temporary_path).map_err(|error| {
+        format!(
+            "cannot create temporary output {}: {error}",
+            temporary_path.display()
+        )
+    })?;
+    if let Err(error) = file.write_all(contents).and_then(|()| file.sync_all()) {
+        let _ = fs::remove_file(&temporary_path);
+        return Err(format!("cannot write temporary output: {error}"));
+    }
+    if let Err(error) = fs::rename(&temporary_path, path) {
+        let _ = fs::remove_file(&temporary_path);
+        return Err(format!("cannot replace output {}: {error}", path.display()));
+    }
+    Ok(())
+}
+
+fn export_automation_job_cli(
+    case_path: &str,
+    selector: &str,
+    output_path: &str,
+    json_output: bool,
+) -> Result<(), String> {
+    let case_file = Path::new(case_path);
+    let _case_lock = lock_automation_case(case_file)?;
+    let content =
+        fs::read_to_string(case_file).map_err(|error| format!("cannot read case: {error}"))?;
+    let case = serde_json::from_str::<CaseFile>(&content)
+        .map_err(|error| format!("cannot parse case: {error}"))?;
+    let matches: Vec<_> = case
+        .automation_jobs
+        .iter()
+        .filter(|job| {
+            job.name.eq_ignore_ascii_case(selector)
+                || job.id.to_string().eq_ignore_ascii_case(selector)
+        })
+        .collect();
+    if matches.len() > 1 {
+        return Err(format!("job selector is ambiguous: {selector}"));
+    }
+    let job = matches
+        .first()
+        .ok_or_else(|| format!("automation job not found: {selector}"))?;
+    write_automation_job_package(&case, case_path, job, output_path)?;
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "schema_version": 1,
+                "ok": true,
+                "case": case_path,
+                "output": output_path,
+                "job": job.name,
+            }))
+            .map_err(|error| error.to_string())?
+        );
+    } else {
+        println!("AUTOMATION JOB EXPORTED · {} · {}", job.name, output_path);
+    }
+    Ok(())
+}
+
+fn import_automation_job_cli(
+    case_path: &str,
+    input_path: &str,
+    json_output: bool,
+) -> Result<(), String> {
+    let case_file = Path::new(case_path);
+    let _case_lock = lock_automation_case(case_file)?;
+    let package = read_automation_job_package(input_path)?;
+    let content =
+        fs::read_to_string(case_file).map_err(|error| format!("cannot read case: {error}"))?;
+    let mut case = serde_json::from_str::<CaseFile>(&content)
+        .map_err(|error| format!("cannot parse case: {error}"))?;
+    let job = job_from_automation_package(package.job, &case, case_path)?;
+    let job_id = job.id;
+    let job_name = job.name.clone();
+    case.automation_jobs.push(job);
+    save_case_atomically(case_file, &case)?;
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "schema_version": 1,
+                "ok": true,
+                "saved": true,
+                "case": case_path,
+                "input": input_path,
+                "job_id": job_id,
+                "job": job_name,
+                "enabled": false,
+            }))
+            .map_err(|error| error.to_string())?
+        );
+    } else {
+        println!("AUTOMATION JOB IMPORTED · {job_name} · DISABLED UNTIL REVIEWED");
+    }
+    Ok(())
+}
+
 fn list_automation_runs_cli(
     case_path: &str,
     json_output: bool,
@@ -11856,7 +12204,7 @@ fn main() -> eframe::Result<()> {
         .is_some_and(|arg| arg == "--help" || arg == "-h")
     {
         println!(
-            "Arch Notebook\n\nUsage:\n  arch-notebook\n  arch-notebook --inspect-sqlite <database.sqlite> [--json]\n  arch-notebook --import-graphml <case.json> <input.graphml> [--json]\n  arch-notebook --export-graphml <case.json> <output.graphml> [--json]\n  arch-notebook --export-sql-comparison <case.json> <baseline-snapshot-id> <current-snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --list-jobs <case.json> [--enabled-only] [--json]\n  arch-notebook --list-runs <case.json> [--json] [--job <name-or-id>] [--offset <count>] [--limit <count>]\n  arch-notebook --validate-enabled-jobs <case.json> [--json] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --check-enabled-job-queries <case.json> [--json] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --validate-run <case.json> <run-id> [--json]\n  arch-notebook --run-enabled-jobs <case.json> [--json] [--skip-recent-success] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --run-job <case.json> <job-name-or-id> [--param name=value ...] [--json]\n  arch-notebook --rerun-run <case.json> <run-id> [--json]\n\nJob and run listing and validation do not change the case. Run history is newest first and can be filtered or paged. SQL comparisons can be exported from saved snapshots for downstream tools. Batch runs save snapshots and run history to the case file. JSON output is available for scheduler integration."
+            "Arch Notebook\n\nUsage:\n  arch-notebook\n  arch-notebook --inspect-sqlite <database.sqlite> [--json]\n  arch-notebook --import-graphml <case.json> <input.graphml> [--json]\n  arch-notebook --export-graphml <case.json> <output.graphml> [--json]\n  arch-notebook --export-sql-comparison <case.json> <baseline-snapshot-id> <current-snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --export-job <case.json> <job-name-or-id> <output.json> [--json]\n  arch-notebook --import-job <case.json> <input.json> [--json]\n  arch-notebook --list-jobs <case.json> [--enabled-only] [--json]\n  arch-notebook --list-runs <case.json> [--json] [--job <name-or-id>] [--offset <count>] [--limit <count>]\n  arch-notebook --validate-enabled-jobs <case.json> [--json] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --check-enabled-job-queries <case.json> [--json] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --validate-run <case.json> <run-id> [--json]\n  arch-notebook --run-enabled-jobs <case.json> [--json] [--skip-recent-success] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --run-job <case.json> <job-name-or-id> [--param name=value ...] [--json]\n  arch-notebook --rerun-run <case.json> <run-id> [--json]\n\nJob packages contain only portable SQL job settings; case snapshots and run history stay in the case. Job and run listing and validation do not change the case file. Batch runs save snapshots and run history to the case file. JSON output is available for scheduler integration."
         );
         return Ok(());
     }
@@ -11909,6 +12257,38 @@ fn main() -> eframe::Result<()> {
         }
         if let Err(error) = import_graphml_cli(case_path, input_path, json_output) {
             report_cli_error("GraphML import failed", error, json_output);
+        }
+        return Ok(());
+    }
+    if args.first().is_some_and(|arg| arg == "--export-job") {
+        let json_output = args.iter().any(|arg| arg == "--json");
+        let usage =
+            "usage: arch-notebook --export-job <case.json> <job-name-or-id> <output.json> [--json]";
+        let (Some(case_path), Some(selector), Some(output_path)) =
+            (args.get(1), args.get(2), args.get(3))
+        else {
+            report_cli_usage_error(usage, json_output);
+        };
+        if args.len() > 5 || args.get(4).is_some_and(|arg| arg != "--json") {
+            report_cli_usage_error(usage, json_output);
+        }
+        if let Err(error) = export_automation_job_cli(case_path, selector, output_path, json_output)
+        {
+            report_cli_error("automation job export failed", error, json_output);
+        }
+        return Ok(());
+    }
+    if args.first().is_some_and(|arg| arg == "--import-job") {
+        let json_output = args.iter().any(|arg| arg == "--json");
+        let usage = "usage: arch-notebook --import-job <case.json> <input.json> [--json]";
+        let (Some(case_path), Some(input_path)) = (args.get(1), args.get(2)) else {
+            report_cli_usage_error(usage, json_output);
+        };
+        if args.len() > 4 || args.get(3).is_some_and(|arg| arg != "--json") {
+            report_cli_usage_error(usage, json_output);
+        }
+        if let Err(error) = import_automation_job_cli(case_path, input_path, json_output) {
+            report_cli_error("automation job import failed", error, json_output);
         }
         return Ok(());
     }

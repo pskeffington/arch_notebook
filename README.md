@@ -108,6 +108,15 @@ Add `--json` to get a schema-versioned object containing each job’s UUID, enab
 cargo run --offline -- --list-jobs harbor-light.case.json --enabled-only --json
 ```
 
+Share a saved SQL automation definition without copying the case, captured snapshots, or run history. Export by job name or UUID, then import the JSON package into another case:
+
+```sh
+cargo run --offline -- --export-job harbor-light.case.json "Harbor Light baseline" harbor-light-baseline.job.json --json
+cargo run --offline -- --import-job another-case.json harbor-light-baseline.job.json --json
+```
+
+The versioned package carries the job name, configured database path, snapshot series, SQL query, typed parameters, and capture limits. Import assigns a new job UUID, starts the job disabled, and rejects a duplicate job name or a database/series already owned by another job. Relative database paths resolve from the destination case file. In the desktop app, use the separate **Import JSON** and **Export JSON** paths in **Data → Automation**; **Export** beside a job writes its package. Review the imported path and use **Validate** before enabling it for a scheduled batch; package import does not connect to or modify its SQLite source. Export writes atomically and refuses to replace the case or a SQLite source used by its jobs or snapshots.
+
 Read saved automation outcomes without opening the desktop app:
 
 ```sh
