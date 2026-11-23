@@ -552,6 +552,7 @@ struct App {
     automation_failed_runs_only: bool,
     sql_snapshot_source: Option<String>,
     sql_snapshot_index: Option<usize>,
+    sql_comparison_baseline_id: Option<Uuid>,
     sql_delta_filter: SnapshotDeltaFilter,
     sql_delta_search: String,
     sql_source_focus: Option<String>,
@@ -941,6 +942,7 @@ impl Default for App {
             automation_failed_runs_only: false,
             sql_snapshot_source: None,
             sql_snapshot_index: None,
+            sql_comparison_baseline_id: None,
             sql_delta_filter: SnapshotDeltaFilter::All,
             sql_delta_search: String::new(),
             sql_source_focus: None,
@@ -1221,6 +1223,7 @@ impl App {
             automation_failed_runs_only: false,
             sql_snapshot_source: None,
             sql_snapshot_index: None,
+            sql_comparison_baseline_id: None,
             sql_delta_filter: SnapshotDeltaFilter::All,
             sql_delta_search: String::new(),
             sql_source_focus: None,
@@ -1379,6 +1382,7 @@ impl App {
                 self.saved_case_json = self.current_case_json();
                 self.sql_snapshot_source = None;
                 self.sql_snapshot_index = None;
+                self.sql_comparison_baseline_id = None;
                 self.sql_source_focus = None;
                 self.data_source_filter = None;
                 self.editing_automation_job = None;
@@ -4780,6 +4784,7 @@ impl App {
         self.chart_focus_group = None;
         self.sql_snapshot_source = None;
         self.sql_snapshot_index = None;
+        self.sql_comparison_baseline_id = None;
         self.sql_source_focus = None;
         self.data_source_filter = None;
         self.editing_automation_job = None;
@@ -7183,7 +7188,7 @@ impl eframe::App for App {
                                         self.remove_automation_schedule();
                                     }
                                 });
-                                ui.label(egui::RichText::new("Uses the saved case file. Install runs a read-only SQL preflight; remove disables this user's Linux systemd timer or macOS LaunchAgent.").small().color(muted));
+                                ui.label(egui::RichText::new("One Arch Notebook schedule is installed per user. Installing from another case replaces its case and cadence. Install runs a read-only SQL preflight; remove disables this user's Linux systemd timer or macOS LaunchAgent.").small().color(muted));
                                 ui.add_space(8.0);
                                 ui.horizontal(|ui| {
                                     ui.label(egui::RichText::new("JOBS").small().strong().color(cyan));
@@ -7647,12 +7652,75 @@ impl eframe::App for App {
                                     })
                                 }).or(latest_index);
                                 let current_is_latest = selected_index == latest_index;
-                                let baseline_index = selected_index.and_then(|current| {
-                                    (0..current).rev().find(|index| {
-                                        self.case.snapshots[*index].source_key == self.case.snapshots[current].source_key
-                                    })
-                                });
                                 let current_snapshot = selected_index.and_then(|index|self.case.snapshots.get(index)).cloned();
+                                let prior_snapshots: Vec<(usize, Uuid, String)> = selected_index
+                                    .map(|current| {
+                                        self.case.snapshots[..current]
+                                            .iter()
+                                            .enumerate()
+                                            .filter(|(_, snapshot)| {
+                                                Some(snapshot.source_key.as_str()) == source_key
+                                            })
+                                            .map(|(index, snapshot)| {
+                                                (
+                                                    index,
+                                                    snapshot.id,
+                                                    format!(
+                                                        "Snapshot #{} · {} · {} connections",
+                                                        index + 1,
+                                                        snapshot.captured_at,
+                                                        snapshot.connections.len()
+                                                    ),
+                                                )
+                                            })
+                                            .collect()
+                                    })
+                                    .unwrap_or_default();
+                                let valid_baseline_id = self
+                                    .sql_comparison_baseline_id
+                                    .filter(|id| prior_snapshots.iter().any(|(_, candidate, _)| candidate == id));
+                                self.sql_comparison_baseline_id = valid_baseline_id;
+                                if let Some(previous) = prior_snapshots.last() {
+                                    let selected_label = valid_baseline_id
+                                        .and_then(|id| prior_snapshots.iter().find(|(_, candidate, _)| *candidate == id))
+                                        .map(|(_, _, label)| label.clone())
+                                        .unwrap_or_else(|| format!("Immediately previous · {}", previous.2));
+                                    let mut baseline_changed = false;
+                                    ui.horizontal(|ui| {
+                                        ui.label("Compare with");
+                                        egui::ComboBox::from_id_salt(("sql_comparison_baseline", source_key))
+                                            .selected_text(selected_label)
+                                            .show_ui(ui, |ui| {
+                                                let response = ui.selectable_value(
+                                                    &mut self.sql_comparison_baseline_id,
+                                                    None,
+                                                    format!("Immediately previous · {}", previous.2),
+                                                );
+                                                baseline_changed |= response.changed();
+                                                for (_, id, label) in prior_snapshots.iter().rev().skip(1) {
+                                                    let response = ui.selectable_value(
+                                                        &mut self.sql_comparison_baseline_id,
+                                                        Some(*id),
+                                                        label,
+                                                    );
+                                                    baseline_changed |= response.changed();
+                                                }
+                                            });
+                                    });
+                                    if baseline_changed {
+                                        self.sql_delta_filter = SnapshotDeltaFilter::All;
+                                        self.sql_delta_search.clear();
+                                    }
+                                }
+                                let baseline_index = selected_index.and_then(|current| {
+                                    valid_baseline_id
+                                        .and_then(|id| {
+                                            self.case.snapshots[..current]
+                                                .iter()
+                                                .position(|snapshot| snapshot.id == id)
+                                        })
+                                        .or_else(|| prior_snapshots.last().map(|(index, _, _)| *index))
+                                });
                                 let baseline = baseline_index.and_then(|index|self.case.snapshots.get(index)).cloned();
                                 ui.add_space(6.0);
                                 ui.label(egui::RichText::new("INGEST NEW SNAPSHOT").small().strong().color(cyan));
