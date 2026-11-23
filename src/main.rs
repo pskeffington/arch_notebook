@@ -4051,9 +4051,10 @@ impl App {
                             .collect::<Vec<_>>()
                             .join(" ");
                         let search_text = format!(
-                            "{} {} {column_names} {foreign_key_targets} {indexes} {}",
+                            "{} {} {column_names} {foreign_key_targets} {indexes} {} {}",
                             object["type"].as_str().unwrap_or(""),
                             object["name"].as_str().unwrap_or(""),
+                            object["definition"].as_str().unwrap_or(""),
                             object["inspection_error"].as_str().unwrap_or("")
                         )
                         .to_lowercase();
@@ -4079,6 +4080,9 @@ impl App {
                                             egui::Color32::from_rgb(238, 174, 83),
                                             format!("Unavailable · {error}"),
                                         );
+                                    }
+                                    if let Some(definition) = object["definition"].as_str() {
+                                        ui.monospace(definition);
                                     }
                                     if let Some(columns) = object["columns"].as_array() {
                                         egui::Grid::new(("sql_schema_columns", object_name))
@@ -20708,21 +20712,25 @@ fn read_sqlite_schema(database_path: &str) -> Result<Vec<serde_json::Value>, Str
     let objects = {
         let mut statement = connection
             .prepare(
-                "SELECT type, name FROM sqlite_schema \
+                "SELECT type, name, sql FROM sqlite_schema \
                  WHERE type IN ('table', 'view') AND substr(name, 1, 7) <> 'sqlite_' \
                  ORDER BY type, name",
             )
             .map_err(|error| error.to_string())?;
         statement
             .query_map([], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                ))
             })
             .map_err(|error| error.to_string())?
             .collect::<rusqlite::Result<Vec<_>>>()
             .map_err(|error| error.to_string())?
     };
     let mut schema = Vec::with_capacity(objects.len());
-    for (object_type, name) in objects {
+    for (object_type, name, definition) in objects {
         let (columns, inspection_error) = if object_type == "view" {
             let query = format!("SELECT * FROM {} LIMIT 0", quote_sql_identifier(&name));
             match connection.prepare(&query) {
@@ -20849,6 +20857,7 @@ fn read_sqlite_schema(database_path: &str) -> Result<Vec<serde_json::Value>, Str
         let mut object = serde_json::json!({
             "type": object_type,
             "name": name,
+            "definition": definition,
             "columns": columns,
             "foreign_keys": foreign_keys,
             "indexes": indexes,
@@ -21792,6 +21801,9 @@ fn inspect_sqlite_schema_cli(database_path: &str, json_output: bool) -> Result<(
                 println!("{object_type} {name}");
                 if let Some(error) = object["inspection_error"].as_str() {
                     println!("  unavailable · {error}");
+                }
+                if let Some(definition) = object["definition"].as_str() {
+                    println!("  definition · {definition}");
                 }
                 for column in object["columns"].as_array().into_iter().flatten() {
                     println!(
