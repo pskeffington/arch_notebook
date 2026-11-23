@@ -21416,6 +21416,9 @@ fn list_automation_jobs_cli(
                 .rev()
                 .find(|run| run.job_id == job.id)
                 .map(|run| {
+                    let schema_adaptation_kind = (!run.success)
+                        .then(|| sql_schema_adaptation_kind(&run.message))
+                        .flatten();
                     serde_json::json!({
                         "id": run.id,
                         "status": if run.success { "PASS" } else { "FAIL" },
@@ -21424,6 +21427,14 @@ fn list_automation_jobs_cli(
                         "duration_ms": run.duration_ms,
                         "message": run.message,
                         "snapshot_id": run.snapshot_id,
+                        "schema_adaptation": {
+                            "required": schema_adaptation_kind.is_some(),
+                            "kind": schema_adaptation_kind,
+                            "reference": schema_adaptation_kind
+                                .and_then(|_| sql_schema_adaptation_reference(&run.message)),
+                            "hint": schema_adaptation_kind
+                                .and_then(|_| sql_schema_adaptation_hint(&run.message)),
+                        },
                     })
                 });
             serde_json::json!({

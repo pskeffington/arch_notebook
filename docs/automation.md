@@ -82,7 +82,7 @@ List configured jobs as JSON without changing the case file:
 cargo run --offline -- --list-jobs harbor-light.case.json
 ```
 
-Add `--json` to get a schema-versioned object containing each job’s UUID, enabled state, database, series, SQL query and parameters, limits, and compact latest-run status/timestamps/message/snapshot ID, plus total, enabled, and returned counts. Use `--enabled-only` to inspect just the batch set; it can be combined with `--json`. Without `--json`, output remains a JSON array for compatibility.
+Add `--json` to get a schema-versioned object containing each job’s UUID, enabled state, database, series, SQL query and parameters, limits, and compact latest-run status/timestamps/message/snapshot ID. The latest-run object includes `schema_adaptation`: `required` is true when the saved failure matches a missing-table or missing-column error, `kind` identifies that error class, `reference` contains the referenced table or column when available, and `hint` suggests inspecting the current SQLite schema. These fields are null or false when the latest run does not need schema adaptation. The response also includes total, enabled, and returned counts. Use `--enabled-only` to inspect just the batch set; it can be combined with `--json`. Without `--json`, output remains a JSON array for compatibility.
 
 ```sh
 cargo run --offline -- --list-jobs harbor-light.case.json --enabled-only --json
