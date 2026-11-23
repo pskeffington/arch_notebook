@@ -8,7 +8,7 @@ use rusqlite::{
 };
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{BTreeMap, HashMap, HashSet, VecDeque},
     env, fs,
     io::Write,
     path::{Path, PathBuf},
@@ -878,6 +878,7 @@ enum PendingCaseAction {
 enum DataMode {
     Entities,
     Relationships,
+    Sources,
     SqlRegressions,
     Automation,
 }
@@ -7876,11 +7877,27 @@ impl eframe::App for App {
                             .iter()
                             .filter(|link| link.ingest_source.as_deref() == Some(source_key.as_str()))
                             .count();
+                        let mut source_entities: HashSet<Uuid> = self
+                            .case
+                            .links
+                            .iter()
+                            .filter(|link| link.ingest_source.as_deref() == Some(source_key.as_str()))
+                            .flat_map(|link| [link.from, link.to])
+                            .collect();
+                        source_entities.extend(
+                            self.case
+                                .entities
+                                .iter()
+                                .filter(|entity| {
+                                    entity.external_ids.iter().any(|(key, _)| key == &source_key)
+                                })
+                                .map(|entity| entity.id),
+                        );
                         if let Some(snapshot) = source_snapshot {
                             ui.label(
                                 egui::RichText::new(format!(
-                                    "SOURCE · {} · {} · {source_link_count} LINKS",
-                                    snapshot.series, snapshot.database_path
+                                    "SOURCE · {} · {} · {source_link_count} LINKS · {} ENTITIES",
+                                    snapshot.series, snapshot.database_path, source_entities.len()
                                 ))
                                 .small()
                                 .color(cyan),
@@ -7888,7 +7905,8 @@ impl eframe::App for App {
                         } else {
                             ui.label(
                                 egui::RichText::new(format!(
-                                    "SOURCE HIGHLIGHT · {source_link_count} LINKS"
+                                    "SOURCE HIGHLIGHT · {source_key} · {source_link_count} LINKS · {} ENTITIES",
+                                    source_entities.len()
                                 ))
                                 .small()
                                 .color(cyan),
@@ -7950,7 +7968,7 @@ impl eframe::App for App {
                     ui.allocate_ui_with_layout(egui::vec2(canvas_w,avail.y),egui::Layout::top_down(egui::Align::Min),|ui|{
                         ui.set_min_size(egui::vec2(canvas_w,avail.y));
                         if self.page==WorkspacePage::Data {
-                            ui.horizontal(|ui|{ui.label(egui::RichText::new("CASE RECORDS").strong().color(cyan));ui.selectable_value(&mut self.data_mode,DataMode::Entities,"Entities");ui.selectable_value(&mut self.data_mode,DataMode::Relationships,"Connections");ui.selectable_value(&mut self.data_mode,DataMode::SqlRegressions,"SQL regressions");ui.selectable_value(&mut self.data_mode,DataMode::Automation,"Automation");if self.data_mode==DataMode::Entities||self.data_mode==DataMode::Relationships{ui.label(egui::RichText::new("CSV/TSV carries connection identity, provenance, entity properties and colors").small().color(muted));}});
+                            ui.horizontal(|ui|{ui.label(egui::RichText::new("CASE RECORDS").strong().color(cyan));ui.selectable_value(&mut self.data_mode,DataMode::Entities,"Entities");ui.selectable_value(&mut self.data_mode,DataMode::Relationships,"Connections");ui.selectable_value(&mut self.data_mode,DataMode::Sources,"Sources");ui.selectable_value(&mut self.data_mode,DataMode::SqlRegressions,"SQL regressions");ui.selectable_value(&mut self.data_mode,DataMode::Automation,"Automation");if self.data_mode==DataMode::Entities||self.data_mode==DataMode::Relationships{ui.label(egui::RichText::new("CSV/TSV carries connection identity, provenance, entity properties and colors").small().color(muted));}});
                             ui.horizontal(|ui|{ui.label("Case file");ui.add(egui::TextEdit::singleline(&mut self.case_path_input).desired_width(260.0));ui.label("Description");ui.add(egui::TextEdit::singleline(&mut self.case.description).desired_width(260.0));});
                             ui.horizontal(|ui|{ui.label("Import path");ui.add_enabled(self.import_inspection_worker.is_none(),egui::TextEdit::singleline(&mut self.import_path).desired_width(180.0));ui.label("Export path");ui.add(egui::TextEdit::singleline(&mut self.export_path).desired_width(180.0));ui.label("GraphML");ui.add(egui::TextEdit::singleline(&mut self.graphml_export_path).desired_width(180.0));});
                             if self.data_mode==DataMode::Automation {
@@ -8698,6 +8716,93 @@ impl eframe::App for App {
                                 }
                                 return;
                             }
+                            if self.data_mode == DataMode::Sources {
+                                let mut inventory: BTreeMap<String, (HashSet<Uuid>, usize)> =
+                                    BTreeMap::new();
+                                for link in &self.case.links {
+                                    if let Some(source_key) = link
+                                        .ingest_source
+                                        .as_deref()
+                                        .filter(|source_key| !source_key.is_empty())
+                                    {
+                                        let (entities, links) = inventory
+                                            .entry(source_key.to_owned())
+                                            .or_default();
+                                        entities.insert(link.from);
+                                        entities.insert(link.to);
+                                        *links += 1;
+                                    }
+                                }
+                                for entity in &self.case.entities {
+                                    for (source_key, _) in &entity.external_ids {
+                                        if !source_key.is_empty() {
+                                            inventory
+                                                .entry(source_key.clone())
+                                                .or_default()
+                                                .0
+                                                .insert(entity.id);
+                                        }
+                                    }
+                                }
+                                for snapshot in &self.case.snapshots {
+                                    inventory.entry(snapshot.source_key.clone()).or_default();
+                                }
+                                ui.label(egui::RichText::new("DATA SOURCES · chart provenance")
+                                    .small().strong().color(cyan));
+                                ui.label(egui::RichText::new(
+                                    "Select imported chart items by their source, then inspect the matching connection records. Source records remain local to this case.",
+                                ).small().color(muted));
+                                if inventory.is_empty() {
+                                    ui.label("No imported source records yet. SQL, CSV/TSV, and GraphML provenance appears here after import.");
+                                }
+                                egui::ScrollArea::both().auto_shrink([false, false]).show(ui, |ui| {
+                                    egui::Grid::new("data_source_inventory")
+                                        .striped(true)
+                                        .min_col_width(90.0)
+                                        .show(ui, |ui| {
+                                            for heading in ["SOURCE", "CHART ITEMS", "CONNECTIONS", "ACTIONS"] {
+                                                ui.label(egui::RichText::new(heading).small().strong().color(cyan));
+                                            }
+                                            ui.end_row();
+                                            for (source_key, (entities, link_count)) in &inventory {
+                                                let source_label = self.case.snapshots
+                                                    .iter()
+                                                    .rev()
+                                                    .find(|snapshot| snapshot.source_key == *source_key)
+                                                    .map(|snapshot| format!("SQLite · {} · {}", snapshot.series, snapshot.database_path))
+                                                    .unwrap_or_else(|| source_key.clone());
+                                                ui.label(&source_label).on_hover_text(source_key);
+                                                ui.label(entities.len().to_string());
+                                                ui.label(link_count.to_string());
+                                                ui.horizontal(|ui| {
+                                                    if ui.small_button("Select chart items").clicked() {
+                                                        self.sql_source_focus = Some(source_key.clone());
+                                                        self.chart_fit_entities = Some(entities.iter().copied().collect());
+                                                        self.chart_fit_path = None;
+                                                        self.chart_focus = None;
+                                                        self.chart_focus_link = None;
+                                                        self.chart_focus_group = None;
+                                                        self.path_result.clear();
+                                                        self.page = WorkspacePage::Chart;
+                                                        self.show_timeline = false;
+                                                    }
+                                                    if *link_count > 0 && ui.small_button("View connections").clicked() {
+                                                        self.data_query.clear();
+                                                        self.data_source_filter = Some(source_key.clone());
+                                                        self.data_mode = DataMode::Relationships;
+                                                        self.page = WorkspacePage::Data;
+                                                        self.show_timeline = false;
+                                                        self.connections_for_selected = false;
+                                                        self.selected = None;
+                                                        self.selected_link = None;
+                                                    }
+                                                });
+                                                ui.end_row();
+                                            }
+                                        });
+                                });
+                                return;
+                            }
                             if self.data_mode==DataMode::SqlRegressions {
                                 let mut sources: Vec<(String, String, usize, usize)> = Vec::new();
                                 for snapshot in self.case.snapshots.iter().rev() {
@@ -9089,19 +9194,20 @@ impl eframe::App for App {
                             if self.data_mode == DataMode::Relationships
                                 && let Some(source_filter) = self.data_source_filter.clone()
                             {
-                                let label = self
+                                let source_snapshot = self
                                     .case
                                     .snapshots
                                     .iter()
                                     .rev()
-                                    .find(|snapshot| snapshot.source_key == source_filter)
-                                    .map(|snapshot| {
-                                        format!("{} · {}", snapshot.series, snapshot.database_path)
-                                    })
+                                    .find(|snapshot| snapshot.source_key == source_filter);
+                                let label = source_snapshot
+                                    .map(|snapshot| format!("{} · {}", snapshot.series, snapshot.database_path))
                                     .unwrap_or_else(|| source_filter.clone());
                                 ui.horizontal(|ui| {
-                                    ui.label(egui::RichText::new(format!("SQL source filter · {label}")).small().color(cyan));
-                                    if ui.small_button("Review SQL snapshots").clicked() {
+                                    ui.label(egui::RichText::new(format!("Data source filter · {label}")).small().color(cyan));
+                                    if source_snapshot.is_some()
+                                        && ui.small_button("Review SQL snapshots").clicked()
+                                    {
                                         self.sql_snapshot_source = Some(source_filter.clone());
                                         self.sql_snapshot_index = self
                                             .case
@@ -9239,7 +9345,7 @@ impl eframe::App for App {
                             .map(|pair| (pair[0], pair[1]))
                             .collect();
                         let path_entities: HashSet<Uuid> = self.path_result.iter().copied().collect();
-                        let focused_source_entities: HashSet<Uuid> = self
+                        let mut focused_source_entities: HashSet<Uuid> = self
                             .case
                             .links
                             .iter()
@@ -9248,6 +9354,17 @@ impl eframe::App for App {
                             })
                             .flat_map(|link| [link.from, link.to])
                             .collect();
+                        focused_source_entities.extend(
+                            self.case
+                                .entities
+                                .iter()
+                                .filter(|entity| {
+                                    entity.external_ids.iter().any(|(source_key, _)| {
+                                        self.sql_source_focus.as_deref() == Some(source_key.as_str())
+                                    })
+                                })
+                                .map(|entity| entity.id),
+                        );
                         let has_source_focus = self.sql_source_focus.is_some();
                         let has_group_focus = self.chart_focus_group.is_some();
                         for (link_index, link) in self.case.links.iter().enumerate() {
@@ -9961,6 +10078,12 @@ impl eframe::App for App {
                                             ))
                                             .small()
                                             .color(cyan),
+                                        );
+                                    } else {
+                                        ui.label(
+                                            egui::RichText::new(format!("DATA SOURCE · {source_key}"))
+                                                .small()
+                                                .color(cyan),
                                         );
                                     }
                                     if ui.small_button("Review SQL series").clicked() {
