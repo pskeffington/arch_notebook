@@ -282,6 +282,7 @@ struct App {
     page: WorkspacePage,
     entity_sort: EntitySort,
     most_connected_measure: MostConnectedMeasure,
+    most_connected_relationship: Option<String>,
     layout_mode: LayoutMode,
     link_sort: LinkSort,
     link_table_view: LinkTableView,
@@ -628,6 +629,7 @@ impl Default for App {
             page: WorkspacePage::Chart,
             entity_sort: EntitySort::Name,
             most_connected_measure: MostConnectedMeasure::default(),
+            most_connected_relationship: None,
             layout_mode: LayoutMode::Connectivity,
             link_sort: LinkSort::Date,
             link_table_view: LinkTableView::Connections,
@@ -897,6 +899,7 @@ impl App {
             page: WorkspacePage::Chart,
             entity_sort: EntitySort::Name,
             most_connected_measure: MostConnectedMeasure::default(),
+            most_connected_relationship: None,
             layout_mode: LayoutMode::Connectivity,
             link_sort: LinkSort::Date,
             link_table_view: LinkTableView::Connections,
@@ -4829,8 +4832,18 @@ fn grouped_connections(
 }
 
 fn connected_entity_counts(case: &CaseFile) -> HashMap<Uuid, usize> {
+    connected_entity_counts_for_relationship(case, None)
+}
+
+fn connected_entity_counts_for_relationship(
+    case: &CaseFile,
+    relationship_filter: Option<&str>,
+) -> HashMap<Uuid, usize> {
     let mut neighbors: HashMap<Uuid, HashSet<Uuid>> = HashMap::new();
     for link in &case.links {
+        if relationship_filter.is_some_and(|filter| !link.label.eq_ignore_ascii_case(filter)) {
+            continue;
+        }
         if link.from == link.to {
             continue;
         }
@@ -4843,13 +4856,20 @@ fn connected_entity_counts(case: &CaseFile) -> HashMap<Uuid, usize> {
         .collect()
 }
 
-fn most_connected_counts(case: &CaseFile, measure: MostConnectedMeasure) -> HashMap<Uuid, usize> {
+fn most_connected_counts(
+    case: &CaseFile,
+    measure: MostConnectedMeasure,
+    relationship_filter: Option<&str>,
+) -> HashMap<Uuid, usize> {
     if measure == MostConnectedMeasure::ConnectedEntities {
-        return connected_entity_counts(case);
+        return connected_entity_counts_for_relationship(case, relationship_filter);
     }
     let mut counts: HashMap<Uuid, usize> =
         case.entities.iter().map(|entity| (entity.id, 0)).collect();
     for link in &case.links {
+        if relationship_filter.is_some_and(|filter| !link.label.eq_ignore_ascii_case(filter)) {
+            continue;
+        }
         match measure {
             MostConnectedMeasure::ConnectedEntities => {}
             MostConnectedMeasure::LinkRecords => {
@@ -7052,6 +7072,22 @@ impl eframe::App for App {
                     egui::Frame::new().fill(panel).inner_margin(12).show(ui,|ui|{
                         ui.set_min_width(right);ui.set_max_width(right);
                         ui.label(egui::RichText::new("ANALYSIS").size(10.0).strong().color(muted));ui.add_space(10.0);
+                        let mut relationship_types: Vec<String> = self
+                            .case
+                            .links
+                            .iter()
+                            .map(|link| link.label.clone())
+                            .collect();
+                        relationship_types.sort_by_key(|label| label.to_lowercase());
+                        relationship_types
+                            .dedup_by(|first, second| first.eq_ignore_ascii_case(second));
+                        if self.most_connected_relationship.as_ref().is_some_and(|selected| {
+                            relationship_types
+                                .iter()
+                                .all(|label| !label.eq_ignore_ascii_case(selected))
+                        }) {
+                            self.most_connected_relationship = None;
+                        }
                         ui.label(egui::RichText::new("MOST CONNECTED").size(9.0).strong().color(cyan));
                         ui.horizontal_wrapped(|ui| {
                             ui.label("Rank by");
@@ -7084,6 +7120,38 @@ impl eframe::App for App {
                                         "Outgoing links",
                                     );
                                 });
+                            ui.label("Connected by");
+                            egui::ComboBox::from_id_salt("most_connected_relationship")
+                                .selected_text(
+                                    self.most_connected_relationship
+                                        .as_deref()
+                                        .map(|label| {
+                                            if label.is_empty() {
+                                                "(Unlabeled)"
+                                            } else {
+                                                label
+                                            }
+                                        })
+                                        .unwrap_or("Any relationship"),
+                                )
+                                .show_ui(ui, |ui| {
+                                    ui.selectable_value(
+                                        &mut self.most_connected_relationship,
+                                        None,
+                                        "Any relationship",
+                                    );
+                                    for relationship_type in &relationship_types {
+                                        ui.selectable_value(
+                                            &mut self.most_connected_relationship,
+                                            Some(relationship_type.clone()),
+                                            if relationship_type.is_empty() {
+                                                "(Unlabeled)"
+                                            } else {
+                                                relationship_type
+                                            },
+                                        );
+                                    }
+                                });
                         });
                         let measure_note = match self.most_connected_measure {
                             MostConnectedMeasure::ConnectedEntities => {
@@ -7100,8 +7168,23 @@ impl eframe::App for App {
                             }
                         };
                         ui.label(egui::RichText::new(measure_note).small().color(muted));
-                        let ranking_counts =
-                            most_connected_counts(&self.case, self.most_connected_measure);
+                        if let Some(relationship_type) = self.most_connected_relationship.as_deref()
+                        {
+                            ui.label(
+                                egui::RichText::new(if relationship_type.is_empty() {
+                                    "Connected by: unlabeled relationships."
+                                } else {
+                                    relationship_type
+                                })
+                                .small()
+                                .color(muted),
+                            );
+                        }
+                        let ranking_counts = most_connected_counts(
+                            &self.case,
+                            self.most_connected_measure,
+                            self.most_connected_relationship.as_deref(),
+                        );
                         let mut degrees: Vec<_> = self
                             .case
                             .entities
