@@ -2581,7 +2581,23 @@ impl App {
                 self.status = format!("AUTOMATION JOB UPDATED · {name}");
                 return;
             }
-            self.status = "JOB NOT SAVED · the edited job no longer exists".into();
+            self.case.automation_jobs.push(AutomationJob {
+                id,
+                name: name.clone(),
+                database_path: self.sql_path.trim().into(),
+                series: self.sql_series.trim().into(),
+                query: self.sql_query.trim().into(),
+                parameters,
+                enabled: true,
+                minimum_connections: self.automation_minimum_connections,
+                maximum_connections: self.automation_maximum_connections,
+                maximum_regressions: self.automation_maximum_regressions,
+                maximum_skipped_rows: self.automation_maximum_skipped_rows,
+            });
+            self.editing_automation_job = None;
+            self.automation_editor_before_edit = None;
+            self.automation_job_name.clear();
+            self.status = format!("RECOVERED AUTOMATION JOB ADDED · {name}");
             return;
         }
         self.case.automation_jobs.push(AutomationJob {
@@ -2860,6 +2876,76 @@ impl App {
             self.editing_automation_job = Some(id);
             self.status = "EDITING AUTOMATION JOB".into();
         }
+    }
+
+    fn load_automation_run_into_editor(&mut self, run_id: Uuid) {
+        let Some(run) = self
+            .case
+            .automation_runs
+            .iter()
+            .find(|run| run.id == run_id)
+            .cloned()
+        else {
+            self.status = "RUN CONFIGURATION NOT LOADED · run not found".into();
+            return;
+        };
+        let mut job = match automation_job_from_run(&run) {
+            Ok(job) => job,
+            Err(error) => {
+                self.status = format!("RUN CONFIGURATION NOT LOADED · {error}");
+                return;
+            }
+        };
+        let editing_existing = self
+            .case
+            .automation_jobs
+            .iter()
+            .any(|saved| saved.id == job.id);
+        if !editing_existing {
+            let base_name = format!("{} (recovered)", job.name);
+            let mut candidate = base_name.clone();
+            let mut suffix = 2;
+            while self
+                .case
+                .automation_jobs
+                .iter()
+                .any(|saved| saved.name.eq_ignore_ascii_case(&candidate))
+            {
+                candidate = format!("{base_name} {suffix}");
+                suffix += 1;
+            }
+            job.id = Uuid::new_v4();
+            job.name = candidate;
+        }
+        self.automation_editor_before_edit = Some((
+            self.automation_job_name.clone(),
+            self.sql_path.clone(),
+            self.sql_series.clone(),
+            self.sql_query.clone(),
+            self.sql_parameter_text.clone(),
+            self.automation_minimum_connections,
+            self.automation_maximum_connections,
+            self.automation_maximum_regressions,
+            self.automation_maximum_skipped_rows,
+        ));
+        self.automation_job_name = job.name.clone();
+        self.sql_path = job.database_path;
+        self.sql_series = job.series;
+        self.sql_query = job.query;
+        self.sql_parameter_text = format_sql_parameters(&job.parameters);
+        self.automation_minimum_connections = job.minimum_connections;
+        self.automation_maximum_connections = job.maximum_connections;
+        self.automation_maximum_regressions = job.maximum_regressions;
+        self.automation_maximum_skipped_rows = job.maximum_skipped_rows;
+        self.editing_automation_job = Some(job.id);
+        self.data_mode = DataMode::Automation;
+        self.page = WorkspacePage::Data;
+        self.show_timeline = false;
+        self.status = if editing_existing {
+            format!("LOADED RUN CONFIGURATION · editing {}", job.name)
+        } else {
+            format!("RECOVERED RUN CONFIGURATION · save as {}", job.name)
+        };
     }
 
     fn cancel_automation_job_edit(&mut self) {
@@ -3810,29 +3896,13 @@ impl App {
                     })
                 })
                 .collect();
-            let mut catalog_by_key = HashMap::new();
-            for entry in &self.case.graphml_source_catalogs {
-                if let Some(source_key) =
-                    entry.get("source_key").and_then(serde_json::Value::as_str)
-                {
-                    catalog_by_key
-                        .entry(source_key.to_owned())
-                        .or_insert_with(|| entry.clone());
-                }
-            }
-            for entry in source_catalog {
-                if let Some(source_key) =
-                    entry.get("source_key").and_then(serde_json::Value::as_str)
-                {
-                    catalog_by_key.insert(source_key.to_owned(), entry);
-                }
-            }
-            let mut source_catalog: Vec<serde_json::Value> = catalog_by_key.into_values().collect();
-            source_catalog.sort_by(|first, second| {
-                first["source_key"]
-                    .as_str()
-                    .cmp(&second["source_key"].as_str())
-            });
+            let source_catalog = merge_graphml_source_catalogs(
+                self.case
+                    .graphml_source_catalogs
+                    .iter()
+                    .cloned()
+                    .chain(source_catalog),
+            );
             graphml_data(
                 &mut xml,
                 "graph_source_catalog",
@@ -6529,8 +6599,18 @@ impl eframe::App for App {
                             ui.horizontal(|ui|{ui.label("Case file");ui.add(egui::TextEdit::singleline(&mut self.case_path_input).desired_width(260.0));ui.label("Description");ui.add(egui::TextEdit::singleline(&mut self.case.description).desired_width(260.0));});
                             ui.horizontal(|ui|{ui.label("Import path");ui.add(egui::TextEdit::singleline(&mut self.import_path).desired_width(180.0));ui.label("Export path");ui.add(egui::TextEdit::singleline(&mut self.export_path).desired_width(180.0));ui.label("GraphML");ui.add(egui::TextEdit::singleline(&mut self.graphml_export_path).desired_width(180.0));});
                             if self.data_mode==DataMode::Automation {
+                                let editing_saved_job = self.editing_automation_job.is_some_and(|id| {
+                                    self.case.automation_jobs.iter().any(|job| job.id == id)
+                                });
+                                let recovered_job_draft =
+                                    self.editing_automation_job.is_some() && !editing_saved_job;
                                 ui.label(egui::RichText::new("REPEATABLE SQL INGESTION JOBS").strong().color(cyan));
                                 ui.label(egui::RichText::new("Jobs are saved in this case file. Run them here or from a script with the command-line runner.").small().color(muted));
+                                if recovered_job_draft {
+                                    ui.label(egui::RichText::new("RECOVERED RUN CONFIGURATION · saving adds this as a new job").small().strong().color(egui::Color32::from_rgb(236, 174, 83)));
+                                } else if editing_saved_job {
+                                    ui.label(egui::RichText::new("EDITING SAVED AUTOMATION JOB").small().strong().color(egui::Color32::from_rgb(236, 174, 83)));
+                                }
                                 ui.horizontal(|ui|{ui.label("Job name");ui.add(egui::TextEdit::singleline(&mut self.automation_job_name).desired_width(220.0));ui.label("Database");ui.add(egui::TextEdit::singleline(&mut self.sql_path).hint_text("Relative to case file").desired_width(220.0));});
                                 ui.horizontal(|ui|{ui.label("Snapshot series");ui.add(egui::TextEdit::singleline(&mut self.sql_series).desired_width(220.0));ui.label("Minimum connections");ui.add(egui::DragValue::new(&mut self.automation_minimum_connections).range(0..=1_000_000));});
                                 ui.horizontal(|ui| {
@@ -6560,7 +6640,7 @@ impl eframe::App for App {
                                         ui.add(egui::DragValue::new(maximum).range(0..=1_000_000));
                                     }
                                 });
-                                ui.horizontal(|ui|{let mut limit_regressions=self.automation_maximum_regressions.is_some();if ui.checkbox(&mut limit_regressions,"Limit regressions").changed(){self.automation_maximum_regressions=limit_regressions.then_some(0);}if let Some(maximum)=self.automation_maximum_regressions.as_mut(){ui.label("Maximum removals/confidence declines");ui.add(egui::DragValue::new(maximum).range(0..=1_000_000));}if ui.button("Build query from schema").clicked(){self.build_sql_query_from_schema();}if ui.button("Validate query").clicked(){self.start_sql_validation();}if ui.button(if self.editing_automation_job.is_some(){"Save job changes"}else{"Add job"}).clicked(){self.save_automation_job();}if self.editing_automation_job.is_some()&&ui.button("Cancel edit").clicked(){self.cancel_automation_job_edit();}});
+                                ui.horizontal(|ui|{let mut limit_regressions=self.automation_maximum_regressions.is_some();if ui.checkbox(&mut limit_regressions,"Limit regressions").changed(){self.automation_maximum_regressions=limit_regressions.then_some(0);}if let Some(maximum)=self.automation_maximum_regressions.as_mut(){ui.label("Maximum removals/confidence declines");ui.add(egui::DragValue::new(maximum).range(0..=1_000_000));}if ui.button("Build query from schema").clicked(){self.build_sql_query_from_schema();}if ui.button("Validate query").clicked(){self.start_sql_validation();}if ui.button(if recovered_job_draft{"Save recovered job"}else if editing_saved_job{"Save job changes"}else{"Add job"}).clicked(){self.save_automation_job();}if self.editing_automation_job.is_some()&&ui.button(if recovered_job_draft{"Discard recovered draft"}else{"Cancel edit"}).clicked(){self.cancel_automation_job_edit();}});
                                 if self.sql_schema_templates.len() > 1 {
                                     ui.horizontal(|ui| {
                                         ui.label("Query source table or view");
@@ -6627,6 +6707,7 @@ impl eframe::App for App {
                                     self.case.automation_jobs.len()
                                 )).small().color(muted));
                                 let mut action: Option<(String,Uuid)> = None;
+                                let mut focus_run = None;
                                 for job in &mut self.case.automation_jobs {
                                     if !visible_job_ids.contains(&job.id) {
                                         continue;
@@ -6638,32 +6719,74 @@ impl eframe::App for App {
                                         .rev()
                                         .find(|run| run.job_id == job.id)
                                         .map(|run| {
+                                            let snapshot = run
+                                                .snapshot_id
+                                                .and_then(|id| {
+                                                    self.case
+                                                        .snapshots
+                                                        .iter()
+                                                        .find(|snapshot| snapshot.id == id)
+                                                })
+                                                .or_else(|| {
+                                                    run.snapshot_index
+                                                        .and_then(|index| self.case.snapshots.get(index))
+                                                });
                                             (
+                                                run.id,
                                                 run.success,
                                                 run.finished_at.clone(),
                                                 run.message.clone(),
                                                 run.duration_ms,
+                                                snapshot
+                                                    .map(snapshot_result_quality)
+                                                    .map(snapshot_result_quality_label)
+                                                    .unwrap_or("NO SNAPSHOT")
+                                                    .to_owned(),
+                                                snapshot.map(|snapshot| snapshot.connections.len()),
+                                                snapshot.map(|snapshot| snapshot.skipped_rows),
                                             )
                                         });
+                                    let latest_run_id = latest_run.as_ref().map(|run| run.0);
                                     ui.horizontal(|ui| {
                                         ui.checkbox(&mut job.enabled, "");
                                         ui.label(format!("{} · {} · {} · min {} · max connections {} · max regressions {} · max skipped rows {}",job.name,job.series,job.database_path,job.minimum_connections,job.maximum_connections.map(|value|value.to_string()).unwrap_or_else(||"unlimited".into()),job.maximum_regressions.map(|value|value.to_string()).unwrap_or_else(||"unlimited".into()),job.maximum_skipped_rows.map(|value|value.to_string()).unwrap_or_else(||"unlimited".into())));
                                         if ui.small_button("Validate").clicked(){action=Some(("validate".into(),job.id));}
                                         if ui.small_button("Edit").clicked(){action=Some(("edit".into(),job.id));}
                                         if ui.small_button("Run and save").clicked(){action=Some(("run".into(),job.id));}
+                                        if let Some(run_id) = latest_run_id
+                                            && ui.small_button("View latest run").clicked()
+                                        {
+                                            focus_run = Some(run_id);
+                                        }
                                         if ui.small_button("Delete").clicked(){action=Some(("delete".into(),job.id));}
                                     });
-                                    if let Some((success, finished_at, message, duration_ms)) = latest_run {
+                                    if let Some((_, success, finished_at, message, duration_ms, quality, connection_count, skipped_rows)) = latest_run {
                                         let result = if success { "PASS" } else { "FAIL" };
                                         ui.colored_label(
                                             if success { egui::Color32::from_rgb(102, 190, 146) } else { egui::Color32::from_rgb(222, 112, 104) },
                                             egui::RichText::new(format!(
-                                                "LAST RUN · {result} · {finished_at} · {} ms",
+                                                "LAST RUN · {result} · {finished_at} · {quality} · {} connections · {} skipped · {} ms",
+                                                connection_count.map(|value| value.to_string()).unwrap_or_else(|| "unknown".into()),
+                                                skipped_rows.map(|value| value.to_string()).unwrap_or_else(|| "unknown".into()),
                                                 duration_ms
                                                     .map(|value| value.to_string())
                                                     .unwrap_or_else(|| "unknown duration".into())
                                             )).small(),
-                                        ).on_hover_text(message);
+                                        ).on_hover_text(&message);
+                                        if !success {
+                                            let mut characters = message.chars();
+                                            let mut failure_summary: String =
+                                                characters.by_ref().take(140).collect();
+                                            if characters.next().is_some() {
+                                                failure_summary.push('…');
+                                            }
+                                            ui.label(
+                                                egui::RichText::new(format!("FAILURE · {failure_summary}"))
+                                                    .small()
+                                                    .color(egui::Color32::from_rgb(222, 112, 104)),
+                                            )
+                                            .on_hover_text(&message);
+                                        }
                                     } else {
                                         ui.label(egui::RichText::new("LAST RUN · NEVER RUN").small().color(muted));
                                     }
@@ -6691,6 +6814,10 @@ impl eframe::App for App {
                                         });
                                 }
                                 if let Some((verb,id))=action {match verb.as_str(){"validate"=>{self.validate_automation_job(id);},"edit"=>self.edit_automation_job(id),"run"=>self.start_automation_jobs(vec![id],false),"delete"=>{if self.editing_automation_job==Some(id){self.cancel_automation_job_edit();}self.case.automation_jobs.retain(|job|job.id!=id);self.status="AUTOMATION JOB DELETED".into();},_=>{}}}
+                                if let Some(run_id) = focus_run {
+                                    self.automation_run_filter = run_id.to_string();
+                                    self.automation_failed_runs_only = false;
+                                }
                                 ui.add_space(8.0);
                                 ui.horizontal(|ui| {
                                     ui.label(egui::RichText::new("RUN HISTORY · newest first").small().strong().color(cyan));
@@ -6725,6 +6852,7 @@ impl eframe::App for App {
                                 let mut review_snapshot = None;
                                 let mut review_changes = None;
                                 let mut replay_run = None;
+                                let mut load_run = None;
                                 egui::ScrollArea::vertical().max_height(210.0).show(ui, |ui| {
                                     for run in self
                                         .case
@@ -6754,6 +6882,7 @@ impl eframe::App for App {
                                             run.started_at
                                         ))
                                         .id_salt(("automation_run", run.id))
+                                        .default_open(focus_run == Some(run.id))
                                         .show(ui, |ui| {
                                             ui.label(format!("Finished {}", run.finished_at));
                                             if let Some(source_run) = run.rerun_of {
@@ -6846,6 +6975,11 @@ impl eframe::App for App {
                                             {
                                                 replay_run = Some(run.id);
                                             }
+                                            if run.configuration_recorded
+                                                && ui.small_button("Load configuration into editor").clicked()
+                                            {
+                                                load_run = Some(run.id);
+                                            }
                                             if let Some(index) = snapshot_index {
                                                 if ui.small_button(format!("Review snapshot #{}", index + 1)).clicked() {
                                                     review_snapshot = Some(index);
@@ -6864,6 +6998,9 @@ impl eframe::App for App {
                                 });
                                 if let Some(run_id) = replay_run {
                                     self.replay_saved_automation_run(run_id);
+                                }
+                                if let Some(run_id) = load_run {
+                                    self.load_automation_run_into_editor(run_id);
                                 }
                                 if let Some(index)=review_snapshot {self.sql_snapshot_source=Some(self.case.snapshots[index].source_key.clone());self.sql_snapshot_index=Some(index);self.data_mode=DataMode::SqlRegressions;}
                                 if let Some(snapshot_id) = review_changes
@@ -9131,6 +9268,119 @@ fn graphml_property<'a>(record: &'a GraphMlRecord, keys: &[&str]) -> Option<&'a 
 
 fn graphml_json_property<T: serde::Serialize>(value: &T) -> Result<String, String> {
     serde_json::to_string(value).map_err(|error| error.to_string())
+}
+
+fn merge_graphml_source_catalogs(
+    catalogs: impl IntoIterator<Item = serde_json::Value>,
+) -> Vec<serde_json::Value> {
+    let mut catalogs_by_source: HashMap<String, serde_json::Value> = HashMap::new();
+    for incoming in catalogs {
+        let Some(source_key) = incoming
+            .get("source_key")
+            .and_then(serde_json::Value::as_str)
+        else {
+            continue;
+        };
+        if let Some(existing) = catalogs_by_source.get_mut(source_key) {
+            merge_graphml_source_catalog(existing, &incoming);
+        } else {
+            catalogs_by_source.insert(source_key.to_owned(), incoming);
+        }
+    }
+    let mut catalogs: Vec<_> = catalogs_by_source.into_values().collect();
+    catalogs.sort_by(|first, second| {
+        first["source_key"]
+            .as_str()
+            .cmp(&second["source_key"].as_str())
+    });
+    catalogs
+}
+
+fn merge_graphml_source_catalog(existing: &mut serde_json::Value, incoming: &serde_json::Value) {
+    let existing_time = existing["latest_captured_at"].as_str();
+    let incoming_time = incoming["latest_captured_at"].as_str();
+    let incoming_is_latest = match (existing_time, incoming_time) {
+        (Some(existing), Some(incoming)) => incoming >= existing,
+        (None, None) => true,
+        (None, Some(_)) => true,
+        (Some(_), None) => false,
+    };
+    if incoming_is_latest {
+        for field in [
+            "database_path",
+            "configured_database_path",
+            "series",
+            "latest_snapshot_id",
+            "latest_captured_at",
+            "link_count",
+            "entity_count",
+        ] {
+            if !incoming[field].is_null() {
+                existing[field] = incoming[field].clone();
+            }
+        }
+    }
+
+    let mut captures_by_id = HashMap::new();
+    let mut captures_without_id = Vec::new();
+    for capture in existing["captures"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .chain(incoming["captures"].as_array().into_iter().flatten())
+    {
+        if let Some(snapshot_id) = capture["snapshot_id"].as_str() {
+            captures_by_id.insert(snapshot_id.to_owned(), capture.clone());
+        } else {
+            captures_without_id.push(capture.clone());
+        }
+    }
+    let mut captures: Vec<_> = captures_by_id.into_values().collect();
+    captures.sort_by(|first, second| {
+        first["captured_at"]
+            .as_str()
+            .cmp(&second["captured_at"].as_str())
+            .then_with(|| {
+                first["snapshot_id"]
+                    .as_str()
+                    .cmp(&second["snapshot_id"].as_str())
+            })
+    });
+    captures.extend(captures_without_id);
+
+    let mut snapshot_ids = Vec::new();
+    let mut seen_snapshot_ids = HashSet::new();
+    for snapshot_id in captures
+        .iter()
+        .filter_map(|capture| capture["snapshot_id"].as_str())
+        .chain(
+            existing["snapshot_ids"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(serde_json::Value::as_str),
+        )
+        .chain(
+            incoming["snapshot_ids"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(serde_json::Value::as_str),
+        )
+    {
+        if seen_snapshot_ids.insert(snapshot_id.to_owned()) {
+            snapshot_ids.push(serde_json::Value::String(snapshot_id.to_owned()));
+        }
+    }
+    let snapshot_count = snapshot_ids.len().max(
+        existing["snapshot_count"]
+            .as_u64()
+            .unwrap_or_default()
+            .max(incoming["snapshot_count"].as_u64().unwrap_or_default()) as usize,
+    );
+    existing["captures"] = serde_json::Value::Array(captures);
+    existing["snapshot_ids"] = serde_json::Value::Array(snapshot_ids);
+    existing["snapshot_count"] = serde_json::json!(snapshot_count);
 }
 
 fn graphml_import_payload(path: &str) -> Result<GraphMlImportPayload, String> {
