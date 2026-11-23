@@ -4010,6 +4010,27 @@ impl App {
                             }
                         });
                     }
+                    let attribute_projections = sqlite_query_attribute_projections(query);
+                    ui.add_space(4.0);
+                    if attribute_projections.is_empty() {
+                        ui.label("Custom attributes: none detected");
+                    } else {
+                        ui.collapsing(
+                            format!(
+                                "Review custom attribute mappings · {}",
+                                attribute_projections.len()
+                            ),
+                            |ui| {
+                                for (alias, expression) in attribute_projections {
+                                    ui.horizontal(|ui| {
+                                        ui.monospace(alias);
+                                        ui.label("←");
+                                        ui.monospace(expression);
+                                    });
+                                }
+                            },
+                        );
+                    }
                     ui.add_space(4.0);
                     let mut preview = query.clone();
                     ui.add(
@@ -19469,6 +19490,57 @@ fn sqlite_declared_endpoint(
     Some((expression, join, type_expression, identity_expression))
 }
 
+fn sqlite_joined_entity_attribute_projections(
+    schema: &[serde_json::Value],
+    join_alias: &str,
+    side: &str,
+    endpoint_join: Option<&str>,
+) -> Vec<String> {
+    let Some(endpoint_join) = endpoint_join else {
+        return Vec::new();
+    };
+    // Resolve the target from the actual join so projections never reference an absent alias.
+    let Some(target_object) = schema.iter().find(|object| {
+        object["name"].as_str().is_some_and(|name| {
+            let join_prefix = format!(
+                "LEFT JOIN {} AS {} ON ",
+                quote_sql_identifier(name),
+                quote_sql_identifier(join_alias),
+            );
+            endpoint_join
+                .get(..join_prefix.len())
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case(&join_prefix))
+        })
+    }) else {
+        return Vec::new();
+    };
+    let Some(columns) = target_object["columns"].as_array() else {
+        return Vec::new();
+    };
+    let prefixes = ["entity_attribute_", "attribute_", "property_"];
+    let mut attributes = HashSet::new();
+    columns
+        .iter()
+        .filter_map(|column| {
+            let name = column["name"].as_str()?;
+            let attribute = prefixes.iter().find_map(|prefix| {
+                name.get(..prefix.len())
+                    .filter(|value| value.eq_ignore_ascii_case(prefix))
+                    .and_then(|_| name.get(prefix.len()..))
+                    .filter(|attribute| !attribute.trim().is_empty())
+            })?;
+            if !attributes.insert(attribute.to_ascii_lowercase()) {
+                return None;
+            }
+            Some(format!(
+                "\"{join_alias}\".{} AS {}",
+                quote_sql_identifier(name),
+                quote_sql_identifier(&format!("{side}_attribute:{attribute}")),
+            ))
+        })
+        .collect()
+}
+
 fn sqlite_endpoint_expression(
     link_object: &serde_json::Value,
     schema: &[serde_json::Value],
@@ -19556,6 +19628,45 @@ fn sqlite_query_projection(query: &str, alias: &str) -> Option<String> {
         let expression = expression.strip_prefix("SELECT ").unwrap_or(expression);
         Some(expression.to_owned())
     })
+}
+
+fn sqlite_query_attribute_projections(query: &str) -> Vec<(String, String)> {
+    let prefixes = [
+        "source_attribute:",
+        "target_attribute:",
+        "connection_attribute:",
+    ];
+    let mut projections = Vec::new();
+    for line in query.lines() {
+        let line = line.trim().trim_end_matches(',');
+        let lowercase_line = line.to_ascii_lowercase();
+        for prefix in prefixes {
+            let marker = format!(" as \"{prefix}");
+            let Some(marker_position) = lowercase_line.rfind(&marker) else {
+                continue;
+            };
+            let alias_start = marker_position + marker.len();
+            let Some(alias_length) = line[alias_start..].find('"') else {
+                continue;
+            };
+            let attribute = &line[alias_start..alias_start + alias_length];
+            if attribute.trim().is_empty() {
+                continue;
+            }
+            projections.push((
+                format!("{prefix}{attribute}"),
+                line[..marker_position].trim().to_owned(),
+            ));
+            break;
+        }
+    }
+    projections.sort_by(|left, right| {
+        left.0
+            .to_ascii_lowercase()
+            .cmp(&right.0.to_ascii_lowercase())
+            .then_with(|| left.0.cmp(&right.0))
+    });
+    projections
 }
 
 fn sqlite_query_templates(schema: &[serde_json::Value]) -> Vec<(String, String)> {
@@ -19736,33 +19847,52 @@ fn sqlite_query_templates(schema: &[serde_json::Value]) -> Vec<(String, String)>
         }
         if let Some(columns) = object["columns"].as_array() {
             let mut template_attribute_names = HashSet::new();
+            let attribute_prefixes = [
+                ("source_attribute_", "source_attribute:"),
+                ("target_attribute_", "target_attribute:"),
+                ("connection_attribute_", "connection_attribute:"),
+                ("link_attribute_", "connection_attribute:"),
+            ];
             for column in columns {
                 let Some(name) = column["name"].as_str() else {
                     continue;
                 };
-                let attribute = name
-                    .get(..21)
-                    .filter(|prefix| prefix.eq_ignore_ascii_case("connection_attribute_"))
-                    .and_then(|_| name.get(21..))
-                    .or_else(|| {
-                        name.get(..15)
-                            .filter(|prefix| prefix.eq_ignore_ascii_case("link_attribute_"))
-                            .and_then(|_| name.get(15..))
-                    })
-                    .filter(|name| !name.trim().is_empty());
-                let Some(attribute) = attribute else {
+                let Some((alias_prefix, attribute)) =
+                    attribute_prefixes
+                        .iter()
+                        .find_map(|(prefix, alias_prefix)| {
+                            name.get(..prefix.len())
+                                .filter(|value| value.eq_ignore_ascii_case(prefix))
+                                .and_then(|_| name.get(prefix.len()..))
+                                .filter(|attribute| !attribute.trim().is_empty())
+                                .map(|attribute| (*alias_prefix, attribute))
+                        })
+                else {
                     continue;
                 };
-                if !template_attribute_names.insert(attribute.to_ascii_lowercase()) {
+                if !template_attribute_names.insert((alias_prefix, attribute.to_ascii_lowercase()))
+                {
                     continue;
                 }
                 selected.push(format!(
                     "\"link_row\".{} AS {}",
                     quote_sql_identifier(name),
-                    quote_sql_identifier(&format!("connection_attribute:{attribute}"))
+                    quote_sql_identifier(&format!("{alias_prefix}{attribute}"))
                 ));
             }
         }
+        selected.extend(sqlite_joined_entity_attribute_projections(
+            schema,
+            "source_entity",
+            "source",
+            source_join.as_deref(),
+        ));
+        selected.extend(sqlite_joined_entity_attribute_projections(
+            schema,
+            "target_entity",
+            "target",
+            target_join.as_deref(),
+        ));
         for (canonical, aliases, joined_expression) in [
             (
                 "source_type",
