@@ -5402,10 +5402,12 @@ fn delta_order(kinds: &[DeltaKind]) -> u8 {
 }
 
 fn automation_run_matches_filter(run: &AutomationRun, filter: &str, failures_only: bool) -> bool {
+    let result = if run.success { "PASS" } else { "FAIL" };
     (!failures_only || !run.success)
         && (filter.is_empty()
             || format!(
-                "{} {} {} {} {} {} {} {}",
+                "{} {} {} {} {} {} {} {} {}",
+                result,
                 run.job_name,
                 run.database_path,
                 run.series,
