@@ -5492,6 +5492,19 @@ fn automation_outcome_json(
             .unwrap_or_default() as usize;
     let connection_count = snapshot.map(|snapshot| snapshot.connections.len());
     let skipped_rows = snapshot.map(|snapshot| snapshot.skipped_rows);
+    let result_quality = snapshot.map(|snapshot| {
+        if snapshot.connections.is_empty() {
+            if snapshot.skipped_rows == 0 {
+                "empty_result"
+            } else {
+                "all_rows_skipped"
+            }
+        } else if snapshot.skipped_rows == 0 {
+            "usable"
+        } else {
+            "partially_skipped"
+        }
+    });
     serde_json::json!({
         "schema_version": 1,
         "status": if success { "PASS" } else { "FAIL" },
@@ -5503,6 +5516,8 @@ fn automation_outcome_json(
         "series": job.series,
         "message": message,
         "query_valid": snapshot.is_some(),
+        "result_quality": result_quality,
+        "has_usable_connections": connection_count.is_some_and(|count| count > 0),
         "capture_limits_pass": snapshot.map(|_| {
             automation_limits_pass(
                 connection_count.unwrap_or_default(),
@@ -9825,6 +9840,21 @@ fn validate_enabled_automation_jobs_cli(
             )
         } else {
             app.status.clone()
+        };
+        let message = if queries_only
+            && let Some(snapshot) = snapshot
+            && snapshot.connections.is_empty()
+        {
+            format!(
+                "{message} · {} · NO USABLE CONNECTIONS",
+                if snapshot.skipped_rows == 0 {
+                    "EMPTY QUERY RESULT"
+                } else {
+                    "ALL RETURNED ROWS SKIPPED"
+                }
+            )
+        } else {
+            message
         };
         let previous = snapshot
             .and_then(|_| previous_snapshot_index(&app.case, snapshot_count_before))
