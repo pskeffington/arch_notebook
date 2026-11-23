@@ -296,6 +296,12 @@ enum AutomationWorkerResult {
         selected_snapshot: Option<(String, usize)>,
         selected_link: Option<usize>,
     },
+    FailedCase {
+        case: CaseFile,
+        disk_case_json: String,
+        error: String,
+        selected_link: Option<usize>,
+    },
     UnsavedCase {
         case: CaseFile,
         status: String,
@@ -2790,6 +2796,8 @@ impl App {
             .cloned();
         let progress = Arc::new(Mutex::new("Waiting for the case lock".to_owned()));
         let worker_progress = Arc::clone(&progress);
+        let durable_checkpoint = Arc::new(Mutex::new(None::<(CaseFile, String)>));
+        let worker_checkpoint = Arc::clone(&durable_checkpoint);
         let (sender, receiver) = mpsc::channel();
         let spawn_result = thread::Builder::new()
             .name("arch-notebook-automation".into())
@@ -2861,6 +2869,9 @@ impl App {
                             .map_err(|error| error.to_string())?;
                         save_case_atomically(path, &worker.case)?;
                         worker.disk_case_json = Some(serialized.clone());
+                        if let Ok(mut checkpoint) = worker_checkpoint.lock() {
+                            *checkpoint = Some((worker.case.clone(), serialized));
+                        }
                         let run = worker
                             .case
                             .automation_runs
@@ -2929,6 +2940,27 @@ impl App {
                         selected_link: worker.selected_link,
                     })
                 })();
+                let result = match result {
+                    Err(error) => match worker_checkpoint.lock() {
+                        Ok(checkpoint) => {
+                            if let Some((case, disk_case_json)) = checkpoint.clone() {
+                                let selected_link = selected_link_record
+                                    .as_ref()
+                                    .and_then(|selected| refreshed_link_index(&case.links, selected));
+                                Ok(AutomationWorkerResult::FailedCase {
+                                    case,
+                                    disk_case_json,
+                                    error,
+                                    selected_link,
+                                })
+                            } else {
+                                Err(error)
+                            }
+                        }
+                        Err(_) => Err(error),
+                    },
+                    result => result,
+                };
                 let _ = sender.send(result);
             });
         match spawn_result {
@@ -5593,6 +5625,20 @@ impl eframe::App for App {
                                 self.sql_snapshot_index = Some(index);
                             }
                             self.status = status;
+                            self.invalidate_network_groups();
+                        }
+                        AutomationWorkerResult::FailedCase {
+                            case,
+                            disk_case_json,
+                            error,
+                            selected_link,
+                        } => {
+                            self.case = case;
+                            self.disk_case_json = Some(disk_case_json);
+                            self.saved_case_json = self.current_case_json();
+                            self.selected_link = selected_link;
+                            self.status =
+                                format!("AUTOMATION FAILED · {error} · SAVED CHECKPOINTS RELOADED");
                             self.invalidate_network_groups();
                         }
                         AutomationWorkerResult::UnsavedCase {
