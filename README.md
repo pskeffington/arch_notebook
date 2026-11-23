@@ -173,7 +173,7 @@ bash "$app_bundle/Contents/Resources/install-macos-automation.sh" \
   "$app_bundle"
 ```
 
-The installer writes and validates a per-user LaunchAgent plist, then loads it for the current login session. It runs once when loaded and then at the selected interval. The bundled runner rotates each log at 5 MiB and keeps five older files; inspect `~/Library/Logs/arch-notebook-automation.log` and `~/Library/Logs/arch-notebook-automation-error.log`. To remove the schedule, run `launchctl bootout "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.archnotebook.automation.plist"` and remove that plist. Keep the SQLite source available at the configured path when automation runs.
+The installer writes and validates a per-user LaunchAgent plist, then loads it for the current login session. It runs once when loaded and then at the selected interval. The bundled runner keeps its logs private to the current account, rotates each at 5 MiB, and retains five older files; inspect `~/Library/Logs/arch-notebook-automation.log` and `~/Library/Logs/arch-notebook-automation-error.log`. To remove the schedule, run `launchctl bootout "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.archnotebook.automation.plist"` and remove that plist. Keep the SQLite source available at the configured path when automation runs.
 
 ## Other notebook workflows
 
