@@ -3811,12 +3811,13 @@ impl App {
         else {
             return;
         };
-        let has_parameters = !self.sql_parameter_text.trim().is_empty();
+        let cleared_parameters = !self.sql_parameter_text.trim().is_empty();
         self.sql_query = query;
+        self.sql_parameter_text.clear();
         self.sql_validation_preview = None;
-        self.status = if has_parameters {
+        self.status = if cleared_parameters {
             format!(
-                "SQL QUERY BUILT FROM {object_name} · EXISTING PARAMETER VALUES KEPT FOR REVIEW; RECONNECT THEM TO THE QUERY BEFORE VALIDATING"
+                "SQL QUERY BUILT FROM {object_name} · OLD PARAMETERS CLEARED; ADD REQUIRED BINDINGS BEFORE VALIDATING"
             )
         } else {
             format!("SQL QUERY BUILT FROM {object_name}")
