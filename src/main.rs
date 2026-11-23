@@ -10826,23 +10826,29 @@ impl eframe::App for App {
                     }
                     entity_types.sort_by_key(|kind| kind.to_ascii_lowercase());
                     ui.menu_button("＋ Entity", |ui| {
-                        ui.label("Choose an entity type");
-                        ui.separator();
-                        for kind in &entity_types {
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.new_entity_type_text)
+                                .hint_text("Search or add entity type"),
+                        );
+                        let type_filter = self.new_entity_type_text.trim().to_ascii_lowercase();
+                        let matching_types = entity_types
+                            .iter()
+                            .filter(|kind| kind.to_ascii_lowercase().contains(&type_filter))
+                            .collect::<Vec<_>>();
+                        for kind in matching_types {
                             if ui.button(format!("＋ {kind}")).clicked() {
                                 self.add_entity_with_type(kind);
+                                self.new_entity_type_text.clear();
                                 ui.close_menu();
                             }
                         }
-                        ui.separator();
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.new_entity_type_text)
-                                .hint_text("Custom entity type"),
-                        );
                         let custom_type = self.new_entity_type_text.trim().to_owned();
                         if ui
                             .add_enabled(
-                                !custom_type.is_empty(),
+                                !custom_type.is_empty()
+                                    && !entity_types
+                                        .iter()
+                                        .any(|kind| kind.eq_ignore_ascii_case(&custom_type)),
                                 egui::Button::new("＋ Add custom type"),
                             )
                             .clicked()
@@ -10899,21 +10905,10 @@ impl eframe::App for App {
                             return;
                         }
                         ui.label("Relationship type");
-                        egui::ComboBox::from_id_salt("new_link_label")
-                            .selected_text(&self.new_link_label)
-                            .show_ui(ui, |ui| {
-                                for label in &link_types {
-                                    ui.selectable_value(
-                                        &mut self.new_link_label,
-                                        label.clone(),
-                                        label,
-                                    );
-                                }
-                            });
                         ui.horizontal(|ui| {
                             ui.add(
                                 egui::TextEdit::singleline(&mut self.new_link_type_text)
-                                    .hint_text("Custom relationship type"),
+                                    .hint_text("Search or add relationship type"),
                             );
                             let custom_type = self.new_link_type_text.trim().to_owned();
                             if ui
@@ -10927,6 +10922,22 @@ impl eframe::App for App {
                                 self.new_link_type_text.clear();
                             }
                         });
+                        let type_filter = self.new_link_type_text.trim().to_ascii_lowercase();
+                        let matching_types = link_types
+                            .iter()
+                            .filter(|label| label.to_ascii_lowercase().contains(&type_filter))
+                            .collect::<Vec<_>>();
+                        egui::ComboBox::from_id_salt("new_link_label")
+                            .selected_text(&self.new_link_label)
+                            .show_ui(ui, |ui| {
+                                for label in matching_types {
+                                    ui.selectable_value(
+                                        &mut self.new_link_label,
+                                        label.clone(),
+                                        label,
+                                    );
+                                }
+                            });
                         let entity_label = |id: Option<Uuid>| {
                             id.and_then(|id| link_entities.iter().find(|(entity, _)| *entity == id))
                                 .map(|(_, label)| label.as_str())
