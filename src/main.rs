@@ -1917,13 +1917,7 @@ impl App {
                 }
                 let row = csv::StringRecord::from(values);
                 let included = row_filters.iter().all(|(index, operator, expected)| {
-                    let value = row.get(*index).unwrap_or("");
-                    match operator {
-                        ImportFilterOperator::Equals => value == expected,
-                        ImportFilterOperator::Contains => value.contains(expected),
-                        ImportFilterOperator::IsEmpty => value.trim().is_empty(),
-                        ImportFilterOperator::IsNotEmpty => !value.trim().is_empty(),
-                    }
+                    import_filter_matches(row.get(*index).unwrap_or(""), *operator, expected)
                 });
                 if !included {
                     skipped += 1;
@@ -9250,26 +9244,118 @@ impl eframe::App for App {
                                 }
                             });
                             for row in &self.import_preview {
-                                ui.horizontal_wrapped(|ui| {
-                                    for (column_index, value) in row.iter().enumerate() {
-                                        let mut normalized = if self.import_column_mapping.trim_whitespace {
-                                            value.trim().to_owned()
-                                        } else {
-                                            value.clone()
-                                        };
-                                        for transform in &self.import_column_mapping.value_transforms {
-                                            if self.import_headers.get(column_index).is_some_and(|header| header.eq_ignore_ascii_case(&transform.column)) {
+                                let normalized_values: Vec<String> = row
+                                    .iter()
+                                    .enumerate()
+                                    .map(|(column_index, value)| {
+                                        let mut normalized =
+                                            if self.import_column_mapping.trim_whitespace {
+                                                value.trim().to_owned()
+                                            } else {
+                                                value.clone()
+                                            };
+                                        for transform in
+                                            &self.import_column_mapping.value_transforms
+                                        {
+                                            if self.import_headers.get(column_index).is_some_and(
+                                                |header| {
+                                                    header.eq_ignore_ascii_case(&transform.column)
+                                                },
+                                            ) {
                                                 normalized = match transform.operation {
-                                                    ImportTransformOperation::Replace if !transform.find.is_empty() => normalized.replace(&transform.find, &transform.replace),
+                                                    ImportTransformOperation::Replace
+                                                        if !transform.find.is_empty() =>
+                                                    {
+                                                        normalized
+                                                            .replace(&transform.find, &transform.replace)
+                                                    }
                                                     ImportTransformOperation::Replace => normalized,
-                                                    ImportTransformOperation::ReplaceExact if normalized == transform.find => transform.replace.clone(),
-                                                    ImportTransformOperation::ReplaceExact => normalized,
-                                                    ImportTransformOperation::Lowercase => normalized.to_lowercase(),
-                                                    ImportTransformOperation::Uppercase => normalized.to_uppercase(),
+                                                    ImportTransformOperation::ReplaceExact
+                                                        if normalized == transform.find =>
+                                                    {
+                                                        transform.replace.clone()
+                                                    }
+                                                    ImportTransformOperation::ReplaceExact => {
+                                                        normalized
+                                                    }
+                                                    ImportTransformOperation::Lowercase => {
+                                                        normalized.to_lowercase()
+                                                    }
+                                                    ImportTransformOperation::Uppercase => {
+                                                        normalized.to_uppercase()
+                                                    }
                                                 };
                                             }
                                         }
-                                        ui.label(normalized).on_hover_text(format!("Original: {value}"));
+                                        normalized
+                                    })
+                                    .collect();
+                                let preview_filters: Vec<(&ImportRowFilter, Option<usize>)> =
+                                    self.import_column_mapping
+                                        .row_filters
+                                        .iter()
+                                        .filter(|filter| {
+                                            !(filter.column.is_empty() && filter.value.is_empty())
+                                        })
+                                        .map(|filter| {
+                                            (
+                                                filter,
+                                                self.import_headers.iter().position(|header| {
+                                                    header.eq_ignore_ascii_case(&filter.column)
+                                                }),
+                                            )
+                                        })
+                                        .collect();
+                                let preview_filters_valid = preview_filters.iter().all(
+                                    |(filter, index)| {
+                                        (filter.column.is_empty() && filter.value.is_empty())
+                                            || index.is_some()
+                                    },
+                                );
+                                let included = preview_filters_valid
+                                    && preview_filters.iter().all(|(filter, index)| {
+                                        index.is_none_or(|index| {
+                                            import_filter_matches(
+                                                normalized_values
+                                                    .get(index)
+                                                    .map(String::as_str)
+                                                    .unwrap_or(""),
+                                                filter.operator,
+                                                &filter.value,
+                                            )
+                                        })
+                                    });
+                                ui.horizontal_wrapped(|ui| {
+                                    let (status, color, tooltip) = if !preview_filters_valid {
+                                        (
+                                            "FILTER NEEDS REVIEW",
+                                            egui::Color32::from_rgb(236, 174, 83),
+                                            "A saved row filter refers to a column that is not in this file.",
+                                        )
+                                    } else if included {
+                                        (
+                                            "INCLUDED",
+                                            egui::Color32::from_rgb(102, 190, 146),
+                                            "This sample row passes the current filters.",
+                                        )
+                                    } else {
+                                        (
+                                            "FILTERED OUT",
+                                            egui::Color32::from_rgb(232, 116, 97),
+                                            "This sample row does not pass the current filters.",
+                                        )
+                                    };
+                                    ui.colored_label(color, status).on_hover_text(tooltip);
+                                    for (column_index, (value, normalized)) in
+                                        row.iter().zip(&normalized_values).enumerate()
+                                    {
+                                        ui.label(normalized).on_hover_text(format!(
+                                            "Original: {value} · Column {}",
+                                            self.import_headers
+                                                .get(column_index)
+                                                .map(String::as_str)
+                                                .unwrap_or("unknown")
+                                        ));
                                         ui.separator();
                                     }
                                 });
@@ -9753,6 +9839,15 @@ where
         }
     }
     Ok(())
+}
+
+fn import_filter_matches(value: &str, operator: ImportFilterOperator, expected: &str) -> bool {
+    match operator {
+        ImportFilterOperator::Equals => value == expected,
+        ImportFilterOperator::Contains => value.contains(expected),
+        ImportFilterOperator::IsEmpty => value.trim().is_empty(),
+        ImportFilterOperator::IsNotEmpty => !value.trim().is_empty(),
+    }
 }
 
 fn delimited_header_signature(headers: &[String]) -> Vec<String> {
