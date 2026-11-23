@@ -494,6 +494,12 @@ struct CaseFile {
     graphml_source_catalogs: Vec<serde_json::Value>,
 }
 
+struct DelimitedImportInspection {
+    headers: Vec<String>,
+    preview: Vec<Vec<String>>,
+    record_count: usize,
+}
+
 struct App {
     case: CaseFile,
     selected: Option<Uuid>,
@@ -515,6 +521,9 @@ struct App {
     import_path: String,
     import_headers: Vec<String>,
     import_preview: Vec<Vec<String>>,
+    import_record_count: usize,
+    import_inspection_worker: Option<Receiver<Result<DelimitedImportInspection, String>>>,
+    import_inspection_cancel: Option<Arc<AtomicBool>>,
     import_column_mapping: ImportColumnMapping,
     import_spec_name: String,
     selected_import_spec: Option<Uuid>,
@@ -561,6 +570,7 @@ struct App {
     automation_job_import_database_path: String,
     automation_job_import_series: String,
     automation_failed_runs_only: bool,
+    automation_runs_needing_review: bool,
     sql_snapshot_source: Option<String>,
     sql_snapshot_index: Option<usize>,
     sql_comparison_baseline_id: Option<Uuid>,
@@ -901,6 +911,9 @@ impl Default for App {
             import_path: data_dir.join("sample_relationships.csv").to_string_lossy().into_owned(),
             import_headers: Vec::new(),
             import_preview: Vec::new(),
+            import_record_count: 0,
+            import_inspection_worker: None,
+            import_inspection_cancel: None,
             import_column_mapping: ImportColumnMapping::default(),
             import_spec_name: String::new(),
             selected_import_spec: None,
@@ -953,6 +966,7 @@ impl Default for App {
             automation_job_import_database_path: String::new(),
             automation_job_import_series: String::new(),
             automation_failed_runs_only: false,
+            automation_runs_needing_review: false,
             sql_snapshot_source: None,
             sql_snapshot_index: None,
             sql_comparison_baseline_id: None,
@@ -1189,6 +1203,9 @@ impl App {
             import_path: String::new(),
             import_headers: Vec::new(),
             import_preview: Vec::new(),
+            import_record_count: 0,
+            import_inspection_worker: None,
+            import_inspection_cancel: None,
             import_column_mapping: ImportColumnMapping::default(),
             import_spec_name: String::new(),
             selected_import_spec: None,
@@ -1235,6 +1252,7 @@ impl App {
             automation_job_import_database_path: String::new(),
             automation_job_import_series: String::new(),
             automation_failed_runs_only: false,
+            automation_runs_needing_review: false,
             sql_snapshot_source: None,
             sql_snapshot_index: None,
             sql_comparison_baseline_id: None,
@@ -1485,127 +1503,136 @@ impl App {
     }
 
     fn inspect_delimited_import(&mut self) {
-        let result = (|| -> Result<(Vec<String>, Vec<Vec<String>>), String> {
-            let mut reader = csv::ReaderBuilder::new()
-                .delimiter(delimited_text_delimiter(&self.import_path))
-                .from_path(&self.import_path)
-                .map_err(|error| error.to_string())?;
-            let headers = reader
-                .headers()
-                .map(|headers| headers.iter().map(str::to_owned).collect::<Vec<String>>())
-                .map_err(|error| error.to_string())?;
-            validate_delimited_headers(headers.iter())?;
-            let preview = reader
-                .records()
-                .take(4)
-                .map(|record| record.map(|record| record.iter().map(str::to_owned).collect()))
-                .collect::<Result<Vec<Vec<String>>, csv::Error>>()
-                .map_err(|error| error.to_string())?;
-            Ok((headers, preview))
-        })();
-        match result {
-            Ok((headers, preview)) => {
-                let signature = delimited_header_signature(&headers);
-                let matching_specs: Vec<ImportSpecification> = self
-                    .case
-                    .import_specifications
-                    .iter()
-                    .filter(|spec| spec.header_signature == signature)
-                    .cloned()
-                    .collect();
-                let matching_spec = (matching_specs.len() == 1).then(|| matching_specs[0].clone());
-                self.selected_import_spec = matching_spec.as_ref().map(|spec| spec.id);
-                self.import_spec_name = matching_spec
-                    .as_ref()
-                    .map(|spec| spec.name.clone())
-                    .unwrap_or_default();
-                let infer = |aliases: &[&str]| {
-                    headers
-                        .iter()
-                        .find(|header| {
-                            aliases
-                                .iter()
-                                .any(|alias| header.eq_ignore_ascii_case(alias))
-                        })
-                        .cloned()
-                        .unwrap_or_default()
-                };
-                let inferred_mapping = ImportColumnMapping {
-                    trim_whitespace: false,
-                    row_filters: Vec::new(),
-                    value_transforms: Vec::new(),
-                    source: infer(&["source", "from", "entity_a"]),
-                    target: infer(&["target", "to", "entity_b"]),
-                    source_type: infer(&["source_type", "from_type", "entity_a_type"]),
-                    target_type: infer(&["target_type", "to_type", "entity_b_type"]),
-                    relationship: infer(&["relationship", "link", "type"]),
-                    date: infer(&["date", "datetime"]),
-                    confidence: infer(&["confidence"]),
-                    direction: infer(&["directed", "direction"]),
-                    connection_id: infer(&[
-                        "connection_id",
-                        "link_id",
-                        "relationship_id",
-                        "record_id",
-                        "id",
-                    ]),
-                    notes: infer(&["notes", "description"]),
-                    source_notes: infer(&["source_notes"]),
-                    source_reference: infer(&[
-                        "source_reference",
-                        "evidence",
-                        "reference",
-                        "source_id",
-                    ]),
-                    ingest_source: infer(&["ingest_source"]),
-                    record_type: infer(&["record_type"]),
-                    source_entity_id: infer(&["source_entity_id"]),
-                    target_entity_id: infer(&["target_entity_id"]),
-                    source_external_ids: infer(&["source_external_ids_json"]),
-                    target_external_ids: infer(&["target_external_ids_json"]),
-                    source_detail: infer(&["source_detail_json"]),
-                    target_detail: infer(&["target_detail_json"]),
-                    source_aliases: infer(&["source_aliases_json"]),
-                    target_aliases: infer(&["target_aliases_json"]),
-                    source_color: infer(&["source_color"]),
-                    target_color: infer(&["target_color"]),
-                    source_x: infer(&["source_x"]),
-                    source_y: infer(&["source_y"]),
-                    target_x: infer(&["target_x"]),
-                    target_y: infer(&["target_y"]),
-                    source_position_locked: infer(&["source_position_locked"]),
-                    target_position_locked: infer(&["target_position_locked"]),
-                    entity_attributes: Vec::new(),
-                };
-                self.import_column_mapping = matching_spec
-                    .map(|spec| {
-                        let mut mapping = spec.mapping;
-                        remap_import_mapping_headers(&mut mapping, &headers);
-                        mapping
-                    })
-                    .unwrap_or(inferred_mapping);
-                self.import_headers = headers;
-                self.import_preview = preview;
-                self.show_import_wizard = true;
-                self.status = if matching_specs.len() > 1 {
-                    format!(
-                        "IMPORT DESIGN · {} COLUMNS DETECTED · SELECT A SAVED DESIGN",
-                        self.import_headers.len()
-                    )
-                } else if self.selected_import_spec.is_some() {
-                    format!(
-                        "SAVED IMPORT DESIGN APPLIED · {} COLUMNS",
-                        self.import_headers.len()
-                    )
-                } else {
-                    format!(
-                        "IMPORT DESIGN · {} COLUMNS DETECTED",
-                        self.import_headers.len()
-                    )
-                };
-            }
-            Err(error) => self.status = format!("IMPORT INSPECTION FAILED · {error}"),
+        if self.import_inspection_worker.is_some() {
+            return;
         }
+        let input_path = PathBuf::from(self.import_path.trim());
+        if input_path.as_os_str().is_empty() {
+            self.status = "IMPORT INSPECTION FAILED · enter a CSV/TSV path".into();
+            return;
+        }
+        let (sender, receiver) = mpsc::channel();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let worker_cancel = Arc::clone(&cancel);
+        let spawn_result = thread::Builder::new()
+            .name("arch-notebook-delimited-inspection".into())
+            .spawn(move || {
+                let _ = sender.send(inspect_delimited_file(&input_path, &worker_cancel));
+            });
+        match spawn_result {
+            Ok(_) => {
+                self.import_record_count = 0;
+                self.import_preview.clear();
+                self.import_inspection_worker = Some(receiver);
+                self.import_inspection_cancel = Some(cancel);
+                self.status = "IMPORT INSPECTION RUNNING · READING CSV/TSV ROWS".into();
+            }
+            Err(error) => {
+                self.status = format!("IMPORT INSPECTION FAILED · could not start worker: {error}");
+            }
+        }
+    }
+
+    fn apply_delimited_import_inspection(&mut self, inspection: DelimitedImportInspection) {
+        let DelimitedImportInspection {
+            headers,
+            preview,
+            record_count,
+        } = inspection;
+        let signature = delimited_header_signature(&headers);
+        let matching_specs: Vec<ImportSpecification> = self
+            .case
+            .import_specifications
+            .iter()
+            .filter(|spec| spec.header_signature == signature)
+            .cloned()
+            .collect();
+        let matching_spec = (matching_specs.len() == 1).then(|| matching_specs[0].clone());
+        self.selected_import_spec = matching_spec.as_ref().map(|spec| spec.id);
+        self.import_spec_name = matching_spec
+            .as_ref()
+            .map(|spec| spec.name.clone())
+            .unwrap_or_default();
+        let infer = |aliases: &[&str]| {
+            headers
+                .iter()
+                .find(|header| {
+                    aliases
+                        .iter()
+                        .any(|alias| header.eq_ignore_ascii_case(alias))
+                })
+                .cloned()
+                .unwrap_or_default()
+        };
+        let inferred_mapping = ImportColumnMapping {
+            trim_whitespace: false,
+            row_filters: Vec::new(),
+            value_transforms: Vec::new(),
+            source: infer(&["source", "from", "entity_a"]),
+            target: infer(&["target", "to", "entity_b"]),
+            source_type: infer(&["source_type", "from_type", "entity_a_type"]),
+            target_type: infer(&["target_type", "to_type", "entity_b_type"]),
+            relationship: infer(&["relationship", "link", "type"]),
+            date: infer(&["date", "datetime"]),
+            confidence: infer(&["confidence"]),
+            direction: infer(&["directed", "direction"]),
+            connection_id: infer(&[
+                "connection_id",
+                "link_id",
+                "relationship_id",
+                "record_id",
+                "id",
+            ]),
+            notes: infer(&["notes", "description"]),
+            source_notes: infer(&["source_notes"]),
+            source_reference: infer(&["source_reference", "evidence", "reference", "source_id"]),
+            ingest_source: infer(&["ingest_source"]),
+            record_type: infer(&["record_type"]),
+            source_entity_id: infer(&["source_entity_id"]),
+            target_entity_id: infer(&["target_entity_id"]),
+            source_external_ids: infer(&["source_external_ids_json"]),
+            target_external_ids: infer(&["target_external_ids_json"]),
+            source_detail: infer(&["source_detail_json"]),
+            target_detail: infer(&["target_detail_json"]),
+            source_aliases: infer(&["source_aliases_json"]),
+            target_aliases: infer(&["target_aliases_json"]),
+            source_color: infer(&["source_color"]),
+            target_color: infer(&["target_color"]),
+            source_x: infer(&["source_x"]),
+            source_y: infer(&["source_y"]),
+            target_x: infer(&["target_x"]),
+            target_y: infer(&["target_y"]),
+            source_position_locked: infer(&["source_position_locked"]),
+            target_position_locked: infer(&["target_position_locked"]),
+            entity_attributes: Vec::new(),
+        };
+        self.import_column_mapping = matching_spec
+            .map(|spec| {
+                let mut mapping = spec.mapping;
+                remap_import_mapping_headers(&mut mapping, &headers);
+                mapping
+            })
+            .unwrap_or(inferred_mapping);
+        self.import_headers = headers;
+        self.import_preview = preview;
+        self.import_record_count = record_count;
+        self.show_import_wizard = true;
+        self.status = if matching_specs.len() > 1 {
+            format!(
+                "IMPORT DESIGN · {} COLUMNS DETECTED · SELECT A SAVED DESIGN",
+                self.import_headers.len()
+            )
+        } else if self.selected_import_spec.is_some() {
+            format!(
+                "SAVED IMPORT DESIGN APPLIED · {} COLUMNS",
+                self.import_headers.len()
+            )
+        } else {
+            format!(
+                "IMPORT DESIGN · {} COLUMNS DETECTED",
+                self.import_headers.len()
+            )
+        };
     }
 
     fn save_import_specification(&mut self) {
@@ -6411,9 +6438,15 @@ fn delta_order(kinds: &[DeltaKind]) -> u8 {
     .unwrap_or(usize::MAX) as u8
 }
 
-fn automation_run_matches_filter(run: &AutomationRun, filter: &str, failures_only: bool) -> bool {
+fn automation_run_matches_filter(
+    run: &AutomationRun,
+    filter: &str,
+    failures_only: bool,
+    unreviewed_failures_only: bool,
+) -> bool {
     let result = if run.success { "PASS" } else { "FAIL" };
     (!failures_only || !run.success)
+        && (!unreviewed_failures_only || (!run.success && run.analyst_note.trim().is_empty()))
         && (filter.is_empty()
             || format!(
                 "{} {} {} {} {} {} {} {} {} {}",
@@ -6760,6 +6793,37 @@ fn shortest_path(case: &CaseFile, start: Uuid, goal: Uuid) -> Option<Vec<Uuid>> 
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
+        if let Some(inspection_state) = self
+            .import_inspection_worker
+            .as_ref()
+            .map(Receiver::try_recv)
+        {
+            match inspection_state {
+                Ok(Ok(inspection)) => {
+                    self.import_inspection_worker = None;
+                    self.import_inspection_cancel = None;
+                    self.apply_delimited_import_inspection(inspection);
+                }
+                Ok(Err(error)) => {
+                    self.import_inspection_worker = None;
+                    self.import_inspection_cancel = None;
+                    self.status = if error == "inspection cancelled" {
+                        "IMPORT INSPECTION CANCELLED".into()
+                    } else {
+                        format!("IMPORT INSPECTION FAILED · {error}")
+                    };
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.import_inspection_worker = None;
+                    self.import_inspection_cancel = None;
+                    self.status =
+                        "IMPORT INSPECTION FAILED · background worker stopped unexpectedly".into();
+                }
+                Err(mpsc::TryRecvError::Empty) => {
+                    ctx.request_repaint_after(Duration::from_millis(250));
+                }
+            }
+        }
         if let Some(schedule_state) = self
             .automation_schedule_worker
             .as_ref()
@@ -7127,7 +7191,16 @@ impl eframe::App for App {
                             }
                         }
                     });
-                    if ui.button("Import CSV/TSV").clicked(){self.inspect_delimited_import();}
+                    if self.import_inspection_worker.is_some() {
+                        ui.label("Inspecting CSV/TSV…");
+                        if ui.button("Cancel inspection").clicked() {
+                            if let Some(cancel) = &self.import_inspection_cancel {
+                                cancel.store(true, Ordering::Relaxed);
+                            }
+                        }
+                    } else if ui.button("Import CSV/TSV").clicked() {
+                        self.inspect_delimited_import();
+                    }
                     if ui.button("Import GraphML").clicked(){self.import_graphml();}
                     if ui.button("Export CSV/TSV").clicked(){self.export_delimited();}
                     if ui.button("Export GraphML").clicked(){self.export_graphml();}
@@ -7277,7 +7350,7 @@ impl eframe::App for App {
                         if self.page==WorkspacePage::Data {
                             ui.horizontal(|ui|{ui.label(egui::RichText::new("CASE RECORDS").strong().color(cyan));ui.selectable_value(&mut self.data_mode,DataMode::Entities,"Entities");ui.selectable_value(&mut self.data_mode,DataMode::Relationships,"Connections");ui.selectable_value(&mut self.data_mode,DataMode::SqlRegressions,"SQL regressions");ui.selectable_value(&mut self.data_mode,DataMode::Automation,"Automation");if self.data_mode==DataMode::Entities||self.data_mode==DataMode::Relationships{ui.label(egui::RichText::new("CSV/TSV carries connection identity, provenance, entity properties and colors").small().color(muted));}});
                             ui.horizontal(|ui|{ui.label("Case file");ui.add(egui::TextEdit::singleline(&mut self.case_path_input).desired_width(260.0));ui.label("Description");ui.add(egui::TextEdit::singleline(&mut self.case.description).desired_width(260.0));});
-                            ui.horizontal(|ui|{ui.label("Import path");ui.add(egui::TextEdit::singleline(&mut self.import_path).desired_width(180.0));ui.label("Export path");ui.add(egui::TextEdit::singleline(&mut self.export_path).desired_width(180.0));ui.label("GraphML");ui.add(egui::TextEdit::singleline(&mut self.graphml_export_path).desired_width(180.0));});
+                            ui.horizontal(|ui|{ui.label("Import path");ui.add_enabled(self.import_inspection_worker.is_none(),egui::TextEdit::singleline(&mut self.import_path).desired_width(180.0));ui.label("Export path");ui.add(egui::TextEdit::singleline(&mut self.export_path).desired_width(180.0));ui.label("GraphML");ui.add(egui::TextEdit::singleline(&mut self.graphml_export_path).desired_width(180.0));});
                             if self.data_mode==DataMode::Automation {
                                 let automation_case_saved =
                                     self.disk_case_json.is_some() && !self.has_unsaved_changes();
@@ -7644,9 +7717,14 @@ impl eframe::App for App {
                                             .desired_width(300.0),
                                     );
                                     ui.checkbox(&mut self.automation_failed_runs_only, "Failures only");
+                                    ui.checkbox(
+                                        &mut self.automation_runs_needing_review,
+                                        "Unreviewed failures",
+                                    );
                                     if ui.small_button("Clear history filters").clicked() {
                                         self.automation_run_filter.clear();
                                         self.automation_failed_runs_only = false;
+                                        self.automation_runs_needing_review = false;
                                     }
                                 });
                                 let run_filter = self.automation_run_filter.trim().to_lowercase();
@@ -7659,6 +7737,7 @@ impl eframe::App for App {
                                             run,
                                             &run_filter,
                                             self.automation_failed_runs_only,
+                                            self.automation_runs_needing_review,
                                         )
                                     })
                                     .count();
@@ -7682,6 +7761,7 @@ impl eframe::App for App {
                                                 run,
                                                 &run_filter,
                                                 self.automation_failed_runs_only,
+                                                self.automation_runs_needing_review,
                                             )
                                         })
                                     {
@@ -9204,6 +9284,11 @@ impl eframe::App for App {
                 .show(ctx, |ui| {
                     ui.label(format!("Map columns from {} to chart properties.", self.import_path));
                     ui.label(egui::RichText::new("Existing header names are detected automatically. Choose a different column when the file uses its own schema.").small());
+                    ui.label(egui::RichText::new(format!(
+                        "{} data rows · preview shows the first {}",
+                        self.import_record_count,
+                        self.import_preview.len()
+                    )).small().color(muted));
                     ui.add_space(6.0);
                     ui.checkbox(
                         &mut self.import_column_mapping.trim_whitespace,
@@ -9828,6 +9913,39 @@ fn delimited_text_delimiter(path: &str) -> u8 {
         "tsv" | "tab" => b'\t',
         _ => b',',
     }
+}
+
+fn inspect_delimited_file(
+    path: &Path,
+    cancel: &AtomicBool,
+) -> Result<DelimitedImportInspection, String> {
+    let delimiter = delimited_text_delimiter(&path.to_string_lossy());
+    let mut reader = csv::ReaderBuilder::new()
+        .delimiter(delimiter)
+        .from_path(path)
+        .map_err(|error| error.to_string())?;
+    let headers = reader
+        .headers()
+        .map(|headers| headers.iter().map(str::to_owned).collect::<Vec<String>>())
+        .map_err(|error| error.to_string())?;
+    validate_delimited_headers(headers.iter())?;
+    let mut preview = Vec::new();
+    let mut record_count = 0;
+    for record in reader.records() {
+        if cancel.load(Ordering::Relaxed) {
+            return Err("inspection cancelled".into());
+        }
+        let record = record.map_err(|error| error.to_string())?;
+        record_count += 1;
+        if preview.len() < 4 {
+            preview.push(record.iter().map(str::to_owned).collect());
+        }
+    }
+    Ok(DelimitedImportInspection {
+        headers,
+        preview,
+        record_count,
+    })
 }
 
 fn validate_delimited_headers<I>(headers: I) -> Result<(), String>
