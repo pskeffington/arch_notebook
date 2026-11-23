@@ -572,6 +572,7 @@ struct App {
     automation_job_import_series: String,
     automation_failed_runs_only: bool,
     automation_runs_needing_review: bool,
+    automation_runs_with_unreviewed_regressions: bool,
     sql_snapshot_source: Option<String>,
     sql_snapshot_index: Option<usize>,
     sql_comparison_baseline_id: Option<Uuid>,
@@ -969,6 +970,7 @@ impl Default for App {
             automation_job_import_series: String::new(),
             automation_failed_runs_only: false,
             automation_runs_needing_review: false,
+            automation_runs_with_unreviewed_regressions: false,
             sql_snapshot_source: None,
             sql_snapshot_index: None,
             sql_comparison_baseline_id: None,
@@ -1256,6 +1258,7 @@ impl App {
             automation_job_import_series: String::new(),
             automation_failed_runs_only: false,
             automation_runs_needing_review: false,
+            automation_runs_with_unreviewed_regressions: false,
             sql_snapshot_source: None,
             sql_snapshot_index: None,
             sql_comparison_baseline_id: None,
@@ -6449,14 +6452,27 @@ fn delta_order(kinds: &[DeltaKind]) -> u8 {
 }
 
 fn automation_run_matches_filter(
+    case: &CaseFile,
     run: &AutomationRun,
     filter: &str,
     failures_only: bool,
     unreviewed_failures_only: bool,
+    unreviewed_regressions_only: bool,
 ) -> bool {
     let result = if run.success { "PASS" } else { "FAIL" };
+    let has_unreviewed_regression = if unreviewed_regressions_only {
+        let snapshot_index = run
+            .snapshot_id
+            .and_then(|id| case.snapshots.iter().position(|snapshot| snapshot.id == id))
+            .or(run.snapshot_index);
+        snapshot_index.is_some_and(|index| automation_snapshot_regression_count(case, index) > 0)
+            && run.analyst_note.trim().is_empty()
+    } else {
+        true
+    };
     (!failures_only || !run.success)
         && (!unreviewed_failures_only || (!run.success && run.analyst_note.trim().is_empty()))
+        && has_unreviewed_regression
         && (filter.is_empty()
             || format!(
                 "{} {} {} {} {} {} {} {} {} {}",
@@ -6473,6 +6489,25 @@ fn automation_run_matches_filter(
             )
             .to_lowercase()
             .contains(filter))
+}
+
+fn automation_snapshot_regression_count(case: &CaseFile, snapshot_index: usize) -> usize {
+    let Some(current) = case.snapshots.get(snapshot_index) else {
+        return 0;
+    };
+    previous_snapshot_index(case, snapshot_index)
+        .and_then(|index| case.snapshots.get(index))
+        .map(|baseline| {
+            compare_snapshots(baseline, current)
+                .iter()
+                .filter(|delta| {
+                    delta.kinds.iter().any(|kind| {
+                        matches!(kind, DeltaKind::Removed | DeltaKind::ConfidenceDeclined)
+                    })
+                })
+                .count()
+        })
+        .unwrap_or_default()
 }
 
 fn automation_regression_count(case: &CaseFile, source_key: &str) -> usize {
@@ -7737,10 +7772,15 @@ impl eframe::App for App {
                                         &mut self.automation_runs_needing_review,
                                         "Unreviewed failures",
                                     );
+                                    ui.checkbox(
+                                        &mut self.automation_runs_with_unreviewed_regressions,
+                                        "Unreviewed regressions",
+                                    ).on_hover_text("Show captures with removals or confidence declines and no analyst comment, even when the job passed.");
                                     if ui.small_button("Clear history filters").clicked() {
                                         self.automation_run_filter.clear();
                                         self.automation_failed_runs_only = false;
                                         self.automation_runs_needing_review = false;
+                                        self.automation_runs_with_unreviewed_regressions = false;
                                     }
                                 });
                                 let run_filter = self.automation_run_filter.trim().to_lowercase();
@@ -7750,10 +7790,12 @@ impl eframe::App for App {
                                     .iter()
                                     .filter(|run| {
                                         automation_run_matches_filter(
+                                            &self.case,
                                             run,
                                             &run_filter,
                                             self.automation_failed_runs_only,
                                             self.automation_runs_needing_review,
+                                            self.automation_runs_with_unreviewed_regressions,
                                         )
                                     })
                                     .count();
@@ -7774,10 +7816,12 @@ impl eframe::App for App {
                                         .rev()
                                         .filter(|run| {
                                             automation_run_matches_filter(
+                                                &self.case,
                                                 run,
                                                 &run_filter,
                                                 self.automation_failed_runs_only,
                                                 self.automation_runs_needing_review,
+                                                self.automation_runs_with_unreviewed_regressions,
                                             )
                                         })
                                     {
