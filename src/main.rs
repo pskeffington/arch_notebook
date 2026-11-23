@@ -17682,6 +17682,8 @@ fn graphml_import_payload(path: &str) -> Result<GraphMlImportPayload, String> {
             .unwrap_or("")
             .trim()
             .to_ascii_lowercase();
+        // Use resolved entity IDs instead of file edge positions so unrelated edge reordering
+        // keeps imported records matched; the occurrence suffix distinguishes parallel edges.
         let (identity_source, identity_target) = if !directed && from > to {
             (to, from)
         } else {
