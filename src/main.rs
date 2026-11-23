@@ -19571,6 +19571,12 @@ fn sqlite_query_templates(schema: &[serde_json::Value]) -> Vec<(String, String)>
         "source_person_name",
         "from_person_name",
         "origin",
+        "origin_name",
+        "originator",
+        "initiator",
+        "subject",
+        "src",
+        "source_node",
     ];
     let source_id_aliases = [
         "source_entity_id",
@@ -19583,6 +19589,9 @@ fn sqlite_query_templates(schema: &[serde_json::Value]) -> Vec<(String, String)>
         "source_node_id",
         "from_node_id",
         "source_id",
+        "source_key",
+        "origin_id",
+        "src_id",
     ];
     let target_aliases = [
         "target",
@@ -19596,6 +19605,11 @@ fn sqlite_query_templates(schema: &[serde_json::Value]) -> Vec<(String, String)>
         "target_person_name",
         "to_person_name",
         "destination",
+        "destination_name",
+        "recipient",
+        "object",
+        "dst",
+        "target_node",
     ];
     let target_id_aliases = [
         "target_entity_id",
@@ -19608,6 +19622,9 @@ fn sqlite_query_templates(schema: &[serde_json::Value]) -> Vec<(String, String)>
         "to_person_id",
         "target_node_id",
         "to_node_id",
+        "target_key",
+        "destination_id",
+        "dst_id",
     ];
     let fields: [(&str, &[&str]); 7] = [
         (
@@ -19617,12 +19634,34 @@ fn sqlite_query_templates(schema: &[serde_json::Value]) -> Vec<(String, String)>
                 "link_id",
                 "edge_id",
                 "relationship_id",
+                "relationship_key",
                 "record_id",
+                "edge_key",
                 "id",
             ],
         ),
-        ("relationship", &["relationship", "link_type", "relation"]),
-        ("date", &["date", "event_date", "datetime", "timestamp"]),
+        (
+            "relationship",
+            &[
+                "relationship",
+                "relationship_type",
+                "relation_type",
+                "link_type",
+                "relation",
+                "predicate",
+            ],
+        ),
+        (
+            "date",
+            &[
+                "date",
+                "event_date",
+                "occurred_at",
+                "event_timestamp",
+                "datetime",
+                "timestamp",
+            ],
+        ),
         ("confidence", &["confidence", "strength"]),
         ("directed", &["directed", "is_directed", "direction"]),
         (
