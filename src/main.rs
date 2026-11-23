@@ -10021,6 +10021,7 @@ fn list_automation_runs_cli(
             outcome["rerun_of"] = serde_json::json!(run.rerun_of);
             if !run.configuration_recorded {
                 outcome["limits"] = serde_json::Value::Null;
+                outcome["capture_limits_pass"] = serde_json::Value::Null;
                 outcome["parameters"] = serde_json::Value::Null;
                 outcome["minimum_connections"] = serde_json::Value::Null;
                 outcome["maximum_connections"] = serde_json::Value::Null;
