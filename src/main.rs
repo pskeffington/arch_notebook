@@ -2872,6 +2872,7 @@ impl App {
                             .map_err(|error| error.to_string())?;
                         save_case_atomically(path, &worker.case)?;
                         worker.disk_case_json = Some(serialized.clone());
+                        // Publish recovery state only after the atomic replacement succeeds.
                         if let Ok(mut checkpoint) = worker_checkpoint.lock() {
                             *checkpoint = Some((
                                 worker.case.clone(),
@@ -2951,6 +2952,7 @@ impl App {
                     })
                 })();
                 let result = match result {
+                    // Return the last saved case when a later job fails, keeping the open UI in sync.
                     Err(error) => match worker_checkpoint.lock() {
                         Ok(checkpoint) => {
                             if let Some((case, disk_case_json, selected_snapshot)) =
