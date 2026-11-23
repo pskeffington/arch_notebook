@@ -50,7 +50,7 @@ Select `/tmp/sample_connections.sqlite` as the source for the disposable copy, o
 
 In **Data → Automation**, **Unreviewed regressions** filters to captures with removals or confidence declines and no analyst comment, including runs that passed configured limits. **Unreviewed failures** remains available for failures without comments. Run-history search includes effective SQL parameter names and values, making ad-hoc and batch override runs discoverable by the values they used.
 
-Schedule install, check, and remove results remain visible in the Automation panel for the case that was acted on. Install output includes per-job SQL preflight diagnostics so failed queries and unusable result sets can be corrected before scheduling.
+Use **Preflight enabled jobs** to check every enabled query read-only and inspect per-job diagnostics before installing a schedule. Schedule install, check, remove, and preflight results remain visible in the Automation panel for the case that was acted on. Install repeats preflight before changing the scheduler, so the final check still reflects the current saved case.
 
 For an ad-hoc desktop run, expand **One-run SQL parameter overrides**. Enter `name=value` lines for a single job, or scope each line as `Job name or UUID::name=value` for a batch. Overrides are retained in each run's effective configuration for replay and audit, then clear from the editor. They do not modify saved jobs or scheduled captures.
 

@@ -235,6 +235,34 @@ fn check_automation_schedule_command(case_path: &Path) -> Result<String, String>
     }
 }
 
+fn preflight_automation_schedule_command(case_path: &Path) -> Result<String, String> {
+    let executable =
+        env::current_exe().map_err(|error| format!("cannot locate app executable: {error}"))?;
+    let output = Command::new(executable)
+        .arg("--check-enabled-job-queries")
+        .arg(case_path)
+        .arg("--require-usable")
+        .output()
+        .map_err(|error| format!("could not start SQL query preflight: {error}"))?;
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+    if output.status.success() {
+        Ok(if stdout.is_empty() {
+            "ENABLED SQL JOBS PASSED PREFLIGHT".into()
+        } else {
+            stdout
+        })
+    } else {
+        let details = match (stdout.is_empty(), stderr.is_empty()) {
+            (false, false) => format!("{stdout}\n{stderr}"),
+            (false, true) => stdout,
+            (true, false) => stderr,
+            (true, true) => format!("preflight exited with {}", output.status),
+        };
+        Err(details)
+    }
+}
+
 struct SqlQueryDeadline {
     cancel: mpsc::Sender<()>,
     worker: Option<thread::JoinHandle<()>>,
@@ -1376,6 +1404,31 @@ impl App {
         self.status = "CHECKING SQL AUTOMATION SCHEDULE".into();
         thread::spawn(move || {
             let result = check_automation_schedule_command(&case_path);
+            let _ = sender.send((case_label, result));
+        });
+    }
+
+    fn preflight_automation_schedule(&mut self) {
+        if self.automation_worker.is_some() || self.automation_schedule_worker.is_some() {
+            return;
+        }
+        if self.has_unsaved_changes() || self.disk_case_json.is_none() {
+            self.status = "SAVE CASE AND JOB CHANGES BEFORE PREFLIGHT".into();
+            return;
+        }
+        let case_path = PathBuf::from(self.case_path.trim());
+        if !case_path.is_file() {
+            self.status = "SAVE THE CASE TO A FILE BEFORE PREFLIGHT".into();
+            return;
+        }
+        let case_label = case_path.to_string_lossy().into_owned();
+        let (sender, receiver) = mpsc::channel();
+        self.automation_schedule_worker = Some(receiver);
+        self.automation_schedule_message = None;
+        self.automation_schedule_target_path = Some(case_label.clone());
+        self.status = "PREFLIGHTING ENABLED SQL JOBS".into();
+        thread::spawn(move || {
+            let result = preflight_automation_schedule_command(&case_path);
             let _ = sender.send((case_label, result));
         });
     }
@@ -6223,7 +6276,12 @@ fn parse_automation_parameter_overrides(
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
-        if let Some((selector, binding)) = line.split_once("::") {
+        let scope_separator = line
+            .find("::")
+            .filter(|separator| !line[..*separator].contains('='));
+        if let Some(separator) = scope_separator {
+            let selector = &line[..separator];
+            let binding = &line[separator + 2..];
             let selector = selector.trim();
             if selector.is_empty() {
                 return Err(format!(
@@ -7082,6 +7140,8 @@ impl eframe::App for App {
                         "SCHEDULE REMOVE FAILED"
                     } else if self.status.starts_with("CHECKING") {
                         "SCHEDULE CHECK FAILED"
+                    } else if self.status.starts_with("PREFLIGHTING") {
+                        "SQL PREFLIGHT FAILED"
                     } else {
                         "SCHEDULE INSTALL FAILED"
                     };
@@ -7096,6 +7156,8 @@ impl eframe::App for App {
                         "SCHEDULE REMOVE FAILED"
                     } else if self.status.starts_with("CHECKING") {
                         "SCHEDULE CHECK FAILED"
+                    } else if self.status.starts_with("PREFLIGHTING") {
+                        "SQL PREFLIGHT FAILED"
                     } else {
                         "SCHEDULE INSTALL FAILED"
                     };
@@ -7780,6 +7842,27 @@ impl eframe::App for App {
                                     if ui.add_enabled(ready, egui::Button::new("Install/update schedule")).clicked() {
                                         self.install_automation_schedule();
                                     }
+                                    let preflight_ready = automation_case_saved
+                                        && enabled_job_count > 0
+                                        && self.automation_worker.is_none()
+                                        && self.automation_schedule_worker.is_none()
+                                        && Path::new(self.case_path.trim()).is_file();
+                                    if ui
+                                        .add_enabled(
+                                            preflight_ready,
+                                            egui::Button::new("Preflight enabled jobs"),
+                                        )
+                                        .on_disabled_hover_text(
+                                            if enabled_job_count == 0 {
+                                                "Enable at least one job before SQL preflight."
+                                            } else {
+                                                "Save the case and job changes before SQL preflight."
+                                            },
+                                        )
+                                        .clicked()
+                                    {
+                                        self.preflight_automation_schedule();
+                                    }
                                     if ui
                                         .add_enabled(
                                             self.automation_worker.is_none()
@@ -7814,7 +7897,7 @@ impl eframe::App for App {
                                     };
                                     ui.label(
                                         egui::RichText::new(format!(
-                                            "LATEST SCHEDULE RESULT · {case_path}"
+                                            "LATEST SCHEDULE / PREFLIGHT RESULT · {case_path}"
                                         ))
                                         .small()
                                         .strong()
