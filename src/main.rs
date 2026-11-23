@@ -1661,6 +1661,14 @@ fn demo_case() -> CaseFile {
 }
 
 impl App {
+    fn reset_chart_creation_drafts(&mut self) {
+        self.new_link_from = None;
+        self.new_link_to = None;
+        self.new_link_label = "ASSOCIATED WITH".into();
+        self.new_entity_type_text.clear();
+        self.new_link_type_text.clear();
+    }
+
     fn add_entity_with_type(&mut self, kind: &str) {
         let item = Entity {
             id: Uuid::new_v4(),
@@ -2034,6 +2042,7 @@ impl App {
                     !self.automation_run_parameter_text.trim().is_empty();
                 normalize_snapshot_database_paths(&mut c, &requested_path);
                 self.case = c;
+                self.reset_chart_creation_drafts();
                 self.network_groups = None;
                 self.case_path = requested_path.clone();
                 self.case_path_input = requested_path;
@@ -7468,6 +7477,7 @@ impl App {
             graphml_source_catalogs: Vec::new(),
             saved_paths: Vec::new(),
         };
+        self.reset_chart_creation_drafts();
         self.network_groups = None;
         self.chart_focus_group = None;
         self.sql_snapshot_source = None;
