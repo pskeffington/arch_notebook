@@ -135,6 +135,11 @@ esac
 
 case_file="$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"
 app_bundle="${2:-/Applications/Arch Notebook.app}"
+if [[ ! -d "$app_bundle" ]]; then
+  echo "App bundle not found: $app_bundle" >&2
+  exit 1
+fi
+app_bundle="$(cd "$app_bundle" && pwd -P)"
 binary="$app_bundle/Contents/MacOS/arch-notebook"
 runner="$app_bundle/Contents/Resources/run-macos-automation.sh"
 if [[ ! -r "$case_file" || ! -f "$case_file" ]]; then
