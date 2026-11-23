@@ -1,6 +1,6 @@
 # Notebook workflows
 
-- Relationship properties can be imported/exported in CSV/TSV using `connection_attribute:<name>` columns, captured from SQL aliases with the same prefix, and exchanged through GraphML `attributes_json` or ordinary edge data keys. They are searchable and shown on the selected-link inspector; SQL-owned properties remain source-managed. SQL Review’s **Relationship properties** filter isolates captures where those values changed. KML line placemarks include them in ExtendedData.
+- Relationship properties can be imported/exported in CSV/TSV using `connection_attribute:<name>` columns, captured from SQL aliases with the same prefix, and exchanged through GraphML `attributes_json` or ordinary edge data keys. They are searchable and shown on the selected-link inspector; SQL-owned properties remain source-managed. SQL Review’s **Relationship properties** filter isolates captures where those values changed. The **Entity properties** filter separately shows changes to SQL supplied source and target attributes. KML line placemarks include relationship properties in ExtendedData.
 
 - The main workspace bar opens **Chart**, **Timeline**, **Connections**, **SQL Review**, **Automation**, **Entities**, and **Sources** directly. Keyboard shortcuts are Ctrl/Command+1 for Chart, +2 for Timeline, +3 for Connections, +4 for SQL Review, +5 for Automation, +6 for Entities, and +7 for Sources. The Data page’s **Case Records** row remains available for switching among record views while working in that page.
 

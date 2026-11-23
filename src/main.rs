@@ -1315,6 +1315,7 @@ enum DeltaKind {
     ConfidenceDeclined,
     DateChanged,
     EntityIdentityChanged,
+    EntityAttributesChanged,
     ConnectionAttributesChanged,
     Updated,
     DirectionChanged,
@@ -1329,6 +1330,7 @@ enum SnapshotDeltaFilter {
     All,
     Regressions,
     EntityIdentity,
+    EntityProperties,
     Direction,
     Evidence,
     SourceNotes,
@@ -4935,6 +4937,7 @@ impl App {
                                     DeltaKind::ConfidenceDeclined => "CONFIDENCE DOWN",
                                     DeltaKind::DateChanged => "DATE CHANGED",
                                     DeltaKind::EntityIdentityChanged => "ENTITY ID CHANGED",
+                                    DeltaKind::EntityAttributesChanged => "ENTITY PROPERTIES CHANGED",
                                     DeltaKind::ConnectionAttributesChanged => "RELATIONSHIP PROPERTIES CHANGED",
                                     DeltaKind::Updated => "CONNECTION DETAILS",
                                     DeltaKind::DirectionChanged => "DIRECTION CHANGED",
@@ -6991,6 +6994,7 @@ impl App {
                     "confidence_declined",
                     "date_changed",
                     "entity_identity_changed",
+                    "entity_properties_changed",
                     "connection_properties_changed",
                     "connection_details_changed",
                     "direction_changed",
@@ -7052,6 +7056,7 @@ impl App {
                         DeltaKind::ConfidenceDeclined => "CONFIDENCE DOWN",
                         DeltaKind::DateChanged => "DATE CHANGED",
                         DeltaKind::EntityIdentityChanged => "ENTITY ID CHANGED",
+                        DeltaKind::EntityAttributesChanged => "ENTITY PROPERTIES CHANGED",
                         DeltaKind::ConnectionAttributesChanged => "RELATIONSHIP PROPERTIES CHANGED",
                         DeltaKind::Updated => "CONNECTION DETAILS",
                         DeltaKind::DirectionChanged => "DIRECTION CHANGED",
@@ -7069,6 +7074,7 @@ impl App {
                         DeltaKind::ConfidenceDeclined,
                         DeltaKind::DateChanged,
                         DeltaKind::EntityIdentityChanged,
+                        DeltaKind::EntityAttributesChanged,
                         DeltaKind::ConnectionAttributesChanged,
                         DeltaKind::Updated,
                         DeltaKind::DirectionChanged,
@@ -7084,6 +7090,7 @@ impl App {
                                 || delta
                                     .kinds
                                     .contains(&DeltaKind::ConnectionAttributesChanged)
+                                || delta.kinds.contains(&DeltaKind::EntityAttributesChanged)
                         } else {
                             delta.kinds.contains(kind)
                         };
@@ -9503,6 +9510,11 @@ fn compare_snapshots(
                 if now.attributes != previous.attributes {
                     kinds.push(DeltaKind::ConnectionAttributesChanged);
                 }
+                if now.source_attributes != previous.source_attributes
+                    || now.target_attributes != previous.target_attributes
+                {
+                    kinds.push(DeltaKind::EntityAttributesChanged);
+                }
                 if now.source != previous.source
                     || now.source_type != previous.source_type
                     || now.target != previous.target
@@ -9510,8 +9522,6 @@ fn compare_snapshots(
                     || entity_identity_changed
                     || now.relationship != previous.relationship
                     || now.directed != previous.directed
-                    || now.source_attributes != previous.source_attributes
-                    || now.target_attributes != previous.target_attributes
                 {
                     kinds.push(DeltaKind::Updated);
                 }
@@ -9569,6 +9579,7 @@ fn connection_delta_matches_filter(
             has(DeltaKind::Removed) || has(DeltaKind::ConfidenceDeclined)
         }
         SnapshotDeltaFilter::EntityIdentity => has(DeltaKind::EntityIdentityChanged),
+        SnapshotDeltaFilter::EntityProperties => has(DeltaKind::EntityAttributesChanged),
         SnapshotDeltaFilter::ConnectionProperties => has(DeltaKind::ConnectionAttributesChanged),
         SnapshotDeltaFilter::Direction => has(DeltaKind::DirectionChanged),
         SnapshotDeltaFilter::Evidence => has(DeltaKind::EvidenceChanged),
@@ -9579,6 +9590,7 @@ fn connection_delta_matches_filter(
                 && !has(DeltaKind::DirectionChanged)
                 && !has(DeltaKind::EvidenceChanged)
                 && !has(DeltaKind::SourceNotesChanged)
+                && !has(DeltaKind::EntityAttributesChanged)
                 && !has(DeltaKind::ConnectionAttributesChanged)
         }
     };
@@ -9750,6 +9762,7 @@ fn delta_order(kinds: &[DeltaKind]) -> u8 {
         DeltaKind::ConfidenceDeclined,
         DeltaKind::DateChanged,
         DeltaKind::EntityIdentityChanged,
+        DeltaKind::EntityAttributesChanged,
         DeltaKind::ConnectionAttributesChanged,
         DeltaKind::Updated,
         DeltaKind::EvidenceChanged,
@@ -9826,6 +9839,7 @@ fn automation_snapshot_regression_count(case: &CaseFile, snapshot_index: usize) 
                             kind,
                             DeltaKind::Removed
                                 | DeltaKind::ConfidenceDeclined
+                                | DeltaKind::EntityAttributesChanged
                                 | DeltaKind::ConnectionAttributesChanged
                         )
                     })
@@ -10063,6 +10077,7 @@ fn snapshot_delta_json(
                 "confidence_declined": 0,
                 "date_changed": 0,
                 "entity_identity_changed": 0,
+                "entity_properties_changed": 0,
                 "connection_properties_changed": 0,
                 "connection_updated": 0,
                 "direction_changed": 0,
@@ -10090,6 +10105,7 @@ fn snapshot_delta_json(
                 || delta
                     .kinds
                     .contains(&DeltaKind::ConnectionAttributesChanged)
+                || delta.kinds.contains(&DeltaKind::EntityAttributesChanged)
         })
         .count();
     let changes: Vec<_> = deltas
@@ -10103,6 +10119,7 @@ fn snapshot_delta_json(
                     DeltaKind::ConfidenceDeclined => "confidence_declined",
                     DeltaKind::DateChanged => "date_changed",
                     DeltaKind::EntityIdentityChanged => "entity_identity_changed",
+                    DeltaKind::EntityAttributesChanged => "entity_properties_changed",
                     DeltaKind::ConnectionAttributesChanged => "connection_properties_changed",
                     DeltaKind::Updated => "connection_updated",
                     DeltaKind::DirectionChanged => "direction_changed",
@@ -10153,6 +10170,7 @@ fn snapshot_delta_json(
             "confidence_declined": count(DeltaKind::ConfidenceDeclined),
             "date_changed": count(DeltaKind::DateChanged),
             "entity_identity_changed": count(DeltaKind::EntityIdentityChanged),
+            "entity_properties_changed": count(DeltaKind::EntityAttributesChanged),
             "connection_properties_changed": count(DeltaKind::ConnectionAttributesChanged),
             "connection_updated": updated_count,
             "direction_changed": count(DeltaKind::DirectionChanged),
@@ -10357,6 +10375,7 @@ fn automation_regression_summary(case: &CaseFile, source_key: &str) -> String {
     let declined = count(DeltaKind::ConfidenceDeclined);
     let dates = count(DeltaKind::DateChanged);
     let identity_changes = count(DeltaKind::EntityIdentityChanged);
+    let entity_property_changes = count(DeltaKind::EntityAttributesChanged);
     let property_changes = count(DeltaKind::ConnectionAttributesChanged);
     let added = count(DeltaKind::Added);
     let increased = count(DeltaKind::ConfidenceIncreased);
@@ -10368,7 +10387,7 @@ fn automation_regression_summary(case: &CaseFile, source_key: &str) -> String {
         "NO CONNECTION CHANGES".into()
     } else {
         format!(
-            "SNAPSHOT DELTA · {removed} removed · {declined} confidence declines · {dates} date changes · {identity_changes} endpoint identity changes · {property_changes} relationship property changes · {details} connection detail changes · {direction} direction changes · {evidence} evidence changes · {source_notes} source note changes · {added} added · {increased} confidence increases"
+            "SNAPSHOT DELTA · {removed} removed · {declined} confidence declines · {dates} date changes · {identity_changes} endpoint identity changes · {entity_property_changes} entity property changes · {property_changes} relationship property changes · {details} connection detail changes · {direction} direction changes · {evidence} evidence changes · {source_notes} source note changes · {added} added · {increased} confidence increases"
         )
     }
 }
@@ -12637,11 +12656,12 @@ impl eframe::App for App {
                                                 ));
                                                 if let Some(previous) = previous {
                                                     ui.label(format!(
-                                                        "Compared with {} · removed {} · confidence declines {} · date changes {} · relationship property changes {} · updates {} · added {}",
+                                                        "Compared with {} · removed {} · confidence declines {} · date changes {} · entity property changes {} · relationship property changes {} · updates {} · added {}",
                                                         previous.captured_at,
                                                         counts["removed"].as_u64().unwrap_or(0),
                                                         counts["confidence_declined"].as_u64().unwrap_or(0),
                                                         counts["date_changed"].as_u64().unwrap_or(0),
+                                                        counts["entity_properties_changed"].as_u64().unwrap_or(0),
                                                         counts["connection_properties_changed"].as_u64().unwrap_or(0),
                                                         counts["connection_updated"].as_u64().unwrap_or(0),
                                                         counts["added"].as_u64().unwrap_or(0),
@@ -12655,7 +12675,7 @@ impl eframe::App for App {
                                                                 kinds.iter().any(|kind| {
                                                                     matches!(
                                                                         kind.as_str(),
-                                                                        Some("removed" | "confidence_declined" | "connection_attributes_changed")
+                                                                        Some("removed" | "confidence_declined" | "entity_properties_changed" | "connection_properties_changed")
                                                                     )
                                                                 })
                                                             })
@@ -12687,11 +12707,16 @@ impl eframe::App for App {
                                                                         .is_some_and(|kinds| {
                                                                             kinds.iter().any(|kind| kind == "removed")
                                                                         });
+                                                                    let has_entity_property_change = regression["kinds"]
+                                                                        .as_array()
+                                                                        .is_some_and(|kinds| kinds.iter().any(|kind| kind == "entity_properties_changed"));
                                                                     let has_property_change = regression["kinds"]
                                                                         .as_array()
-                                                                        .is_some_and(|kinds| kinds.iter().any(|kind| kind == "connection_attributes_changed"));
+                                                                        .is_some_and(|kinds| kinds.iter().any(|kind| kind == "connection_properties_changed"));
                                                                     let change = if is_removed {
                                                                         "REMOVED".to_owned()
+                                                                    } else if has_entity_property_change {
+                                                                        "ENTITY PROPERTIES CHANGED".to_owned()
                                                                     } else if has_property_change {
                                                                         "RELATIONSHIP PROPERTIES CHANGED".to_owned()
                                                                     } else {
@@ -13553,6 +13578,7 @@ impl eframe::App for App {
                                         let declined=count(DeltaKind::ConfidenceDeclined);
                                         let dates=count(DeltaKind::DateChanged);
                                         let identity_changes=count(DeltaKind::EntityIdentityChanged);
+                                        let entity_property_changes=count(DeltaKind::EntityAttributesChanged);
                                         let property_changes=count(DeltaKind::ConnectionAttributesChanged);
                                         let updated=count(DeltaKind::Updated);
                                         let direction=count(DeltaKind::DirectionChanged);
@@ -13560,13 +13586,14 @@ impl eframe::App for App {
                                         let source_notes=count(DeltaKind::SourceNotesChanged);
                                         let added=count(DeltaKind::Added);
                                         let increased=count(DeltaKind::ConfidenceIncreased);
-                                        ui.label(egui::RichText::new(format!("Baseline {} → current {} · {removed} removed · {declined} confidence declines · {dates} date changes · {identity_changes} endpoint identity changes · {property_changes} relationship property changes · {updated} connection detail changes · {direction} direction changes · {evidence} evidence changes · {source_notes} source note changes · {added} added · {increased} confidence increases",base.captured_at,current.captured_at)).strong().color(if removed+declined>0{egui::Color32::from_rgb(238,139,115)}else{cyan}));
+                                        ui.label(egui::RichText::new(format!("Baseline {} → current {} · {removed} removed · {declined} confidence declines · {dates} date changes · {identity_changes} endpoint identity changes · {entity_property_changes} entity property changes · {property_changes} relationship property changes · {updated} connection detail changes · {direction} direction changes · {evidence} evidence changes · {source_notes} source note changes · {added} added · {increased} confidence increases",base.captured_at,current.captured_at)).strong().color(if removed+declined>0{egui::Color32::from_rgb(238,139,115)}else{cyan}));
                                         ui.horizontal(|ui| {
                                             egui::ComboBox::from_id_salt("sql_delta_filter")
                                                 .selected_text(match self.sql_delta_filter {
                                                     SnapshotDeltaFilter::All => "All changes",
                                                     SnapshotDeltaFilter::Regressions => "Regressions",
                                                     SnapshotDeltaFilter::EntityIdentity => "Entity identity",
+                                                    SnapshotDeltaFilter::EntityProperties => "Entity properties",
                                                     SnapshotDeltaFilter::ConnectionProperties => "Relationship properties",
                                                     SnapshotDeltaFilter::Direction => "Direction",
                                                     SnapshotDeltaFilter::Evidence => "Evidence",
@@ -13577,6 +13604,7 @@ impl eframe::App for App {
                                                     ui.selectable_value(&mut self.sql_delta_filter, SnapshotDeltaFilter::All, "All changes");
                                                     ui.selectable_value(&mut self.sql_delta_filter, SnapshotDeltaFilter::Regressions, "Regressions");
                                                     ui.selectable_value(&mut self.sql_delta_filter, SnapshotDeltaFilter::EntityIdentity, "Entity identity");
+                                                    ui.selectable_value(&mut self.sql_delta_filter, SnapshotDeltaFilter::EntityProperties, "Entity properties");
                                                     ui.selectable_value(&mut self.sql_delta_filter, SnapshotDeltaFilter::ConnectionProperties, "Relationship properties");
                                                     ui.selectable_value(&mut self.sql_delta_filter, SnapshotDeltaFilter::Direction, "Direction");
                                                     ui.selectable_value(&mut self.sql_delta_filter, SnapshotDeltaFilter::Evidence, "Evidence");
@@ -13600,7 +13628,7 @@ impl eframe::App for App {
                                         egui::ScrollArea::both().show(ui,|ui|egui::Grid::new("sql_regression_table").striped(true).show(ui,|ui|{
                                             for heading in ["CHANGE","CONNECTION","CONFIDENCE","DATE","PROPERTIES","EVIDENCE","NOTES","CHART"]{ui.label(egui::RichText::new(heading).small().strong().color(cyan));}ui.end_row();
                                             for delta in visible_deltas {
-                                                let change=delta.kinds.iter().map(|kind|match kind{DeltaKind::Removed=>"REMOVED",DeltaKind::ConfidenceDeclined=>"CONFIDENCE DOWN",DeltaKind::DateChanged=>"DATE CHANGED",DeltaKind::EntityIdentityChanged=>"ENTITY ID CHANGED",DeltaKind::ConnectionAttributesChanged=>"RELATIONSHIP PROPERTIES CHANGED",DeltaKind::Updated=>"CONNECTION DETAILS",DeltaKind::DirectionChanged=>"DIRECTION CHANGED",DeltaKind::EvidenceChanged=>"EVIDENCE CHANGED",DeltaKind::SourceNotesChanged=>"SOURCE NOTES CHANGED",DeltaKind::Added=>"ADDED",DeltaKind::ConfidenceIncreased=>"CONFIDENCE UP"}).collect::<Vec<_>>().join(" · ");
+                                                let change=delta.kinds.iter().map(|kind|match kind{DeltaKind::Removed=>"REMOVED",DeltaKind::ConfidenceDeclined=>"CONFIDENCE DOWN",DeltaKind::DateChanged=>"DATE CHANGED",DeltaKind::EntityIdentityChanged=>"ENTITY ID CHANGED",DeltaKind::EntityAttributesChanged=>"ENTITY PROPERTIES CHANGED",DeltaKind::ConnectionAttributesChanged=>"RELATIONSHIP PROPERTIES CHANGED",DeltaKind::Updated=>"CONNECTION DETAILS",DeltaKind::DirectionChanged=>"DIRECTION CHANGED",DeltaKind::EvidenceChanged=>"EVIDENCE CHANGED",DeltaKind::SourceNotesChanged=>"SOURCE NOTES CHANGED",DeltaKind::Added=>"ADDED",DeltaKind::ConfidenceIncreased=>"CONFIDENCE UP"}).collect::<Vec<_>>().join(" · ");
                                                 let previous=delta.previous_connection.as_ref();
                                                 let current=(!delta.kinds.contains(&DeltaKind::Removed)).then_some(&delta.connection);
                                                 let describe_connection=|fact:&ConnectionFact|format!("{} [{}] — {} — {} [{}] {}",fact.source,fact.source_type,fact.relationship,fact.target,fact.target_type,if fact.directed{"→"}else{"↔"});
@@ -21074,8 +21102,11 @@ fn sqlite_query_templates(schema: &[serde_json::Value]) -> Vec<(String, String)>
                 "edge_type",
                 "connection_type",
                 "interaction_type",
+                "event_type",
                 "transaction_type",
                 "transfer_type",
+                "transaction_kind",
+                "transfer_kind",
                 "relation",
                 "predicate",
                 "action",
@@ -21086,26 +21117,62 @@ fn sqlite_query_templates(schema: &[serde_json::Value]) -> Vec<(String, String)>
             &[
                 "date",
                 "event_date",
+                "event_time",
+                "event_at",
                 "occurred_at",
+                "occurred_on",
                 "event_timestamp",
+                "transaction_date",
+                "transfer_date",
+                "effective_at",
+                "activity_date",
                 "datetime",
                 "timestamp",
             ],
         ),
-        ("confidence", &["confidence", "strength"]),
-        ("directed", &["directed", "is_directed", "direction"]),
+        (
+            "confidence",
+            &[
+                "confidence",
+                "confidence_score",
+                "confidence_level",
+                "strength",
+                "strength_score",
+                "reliability",
+            ],
+        ),
+        (
+            "directed",
+            &["directed", "is_directed", "edge_directed", "direction"],
+        ),
         (
             "source_reference",
             &[
                 "source_reference",
                 "evidence",
+                "evidence_url",
+                "evidence_uri",
                 "reference",
+                "citation",
+                "document_reference",
                 "source_document_id",
                 "evidence_id",
                 "source_id",
+                "source_uri",
+                "source_url",
             ],
         ),
-        ("notes", &["notes", "description"]),
+        (
+            "notes",
+            &[
+                "notes",
+                "description",
+                "comment",
+                "memo",
+                "details",
+                "summary",
+            ],
+        ),
     ];
     let mut templates = Vec::new();
     for object in schema {
@@ -21221,12 +21288,26 @@ fn sqlite_query_templates(schema: &[serde_json::Value]) -> Vec<(String, String)>
         for (canonical, aliases, joined_expression) in [
             (
                 "source_type",
-                &["source_type", "from_type", "entity_a_type"][..],
+                &[
+                    "source_type",
+                    "source_entity_type",
+                    "from_type",
+                    "from_entity_type",
+                    "entity_a_type",
+                    "source_kind",
+                ][..],
                 source_type_expression.clone(),
             ),
             (
                 "target_type",
-                &["target_type", "to_type", "entity_b_type"][..],
+                &[
+                    "target_type",
+                    "target_entity_type",
+                    "to_type",
+                    "to_entity_type",
+                    "entity_b_type",
+                    "target_kind",
+                ][..],
                 target_type_expression.clone(),
             ),
         ] {
@@ -21263,11 +21344,25 @@ fn sqlite_query_templates(schema: &[serde_json::Value]) -> Vec<(String, String)>
         ];
         for (aliases, joined_expression) in [
             (
-                &["source_type", "from_type", "entity_a_type"][..],
+                &[
+                    "source_type",
+                    "source_entity_type",
+                    "from_type",
+                    "from_entity_type",
+                    "entity_a_type",
+                    "source_kind",
+                ][..],
                 source_type_expression.as_ref(),
             ),
             (
-                &["target_type", "to_type", "entity_b_type"][..],
+                &[
+                    "target_type",
+                    "target_entity_type",
+                    "to_type",
+                    "to_entity_type",
+                    "entity_b_type",
+                    "target_kind",
+                ][..],
                 target_type_expression.as_ref(),
             ),
         ] {
@@ -21288,8 +21383,11 @@ fn sqlite_query_templates(schema: &[serde_json::Value]) -> Vec<(String, String)>
                 "edge_type",
                 "connection_type",
                 "interaction_type",
+                "event_type",
                 "transaction_type",
                 "transfer_type",
+                "transaction_kind",
+                "transfer_kind",
                 "relation",
                 "predicate",
                 "action",
@@ -21314,6 +21412,11 @@ fn sqlite_query_templates(schema: &[serde_json::Value]) -> Vec<(String, String)>
         }
         let mut seen_order_terms = HashSet::new();
         order_terms.retain(|term| seen_order_terms.insert(term.clone()));
+        // The identity and relationship terms above make the intended row order
+        // easy to read. Use every projected value as a final tie-break so rows
+        // that differ only in direction, dates, evidence, notes, or attributes
+        // do not inherit SQLite's unspecified scan order.
+        order_terms.extend((1..=selected.len()).map(|ordinal| ordinal.to_string()));
         query.push_str("\nORDER BY ");
         query.push_str(&order_terms.join(", "));
         query.push(';');
@@ -21657,6 +21760,7 @@ fn write_automation_runs_csv_atomically(
                 "skipped_rows",
                 "removed_connections",
                 "confidence_declines",
+                "entity_property_changes",
                 "relationship_property_changes",
                 "added_connections",
                 "delta_json",
@@ -21783,6 +21887,7 @@ fn write_automation_runs_csv_atomically(
                         .unwrap_or_default(),
                     count("removed"),
                     count("confidence_declined"),
+                    count("entity_properties_changed"),
                     count("connection_properties_changed"),
                     count("added"),
                     delta_json,
@@ -23523,6 +23628,9 @@ fn list_automation_runs_cli(
                 .unwrap_or_else(|| "skips unknown".into());
             let removed = run["delta"]["counts"]["removed"].as_u64();
             let declined = run["delta"]["counts"]["confidence_declined"].as_u64();
+            let entity_property_changes = run["delta"]["counts"]["entity_properties_changed"]
+                .as_u64()
+                .unwrap_or(0);
             let property_changes = run["delta"]["counts"]["connection_properties_changed"]
                 .as_u64()
                 .unwrap_or(0);
@@ -23530,7 +23638,7 @@ fn list_automation_runs_cli(
                 (Some(true), _, _) => "baseline".into(),
                 (_, Some(removed), Some(declined)) => {
                     format!(
-                        "{removed} removed · {declined} confidence declines · {property_changes} relationship property changes"
+                        "{removed} removed · {declined} confidence declines · {entity_property_changes} entity property changes · {property_changes} relationship property changes"
                     )
                 }
                 _ => "no comparison".into(),
