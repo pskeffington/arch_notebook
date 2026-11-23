@@ -56,7 +56,7 @@ log_dir="$HOME/Library/Logs"
 plist_path="$agent_dir/$label.plist"
 mkdir -p "$agent_dir" "$log_dir"
 
-python3 - "$plist_path" "$runner" "$binary" "$case_file" "$log_dir" "$label" "$schedule" <<'PY'
+candidate_plist="$(python3 - "$plist_path" "$runner" "$binary" "$case_file" "$log_dir" "$label" "$schedule" <<'PY'
 import os
 import plistlib
 import sys
@@ -78,7 +78,7 @@ try:
     with os.fdopen(fd, "wb") as output:
         plistlib.dump(payload, output, fmt=plistlib.FMT_XML, sort_keys=True)
     os.chmod(temporary, 0o644)
-    os.replace(temporary, destination)
+    print(temporary)
 except BaseException:
     try:
         os.unlink(temporary)
@@ -86,11 +86,47 @@ except BaseException:
         pass
     raise
 PY
+ )"
+backup_plist=""
+cleanup_candidate() {
+  [[ -z "$candidate_plist" || ! -e "$candidate_plist" ]] || rm -f "$candidate_plist"
+  [[ -z "$backup_plist" || ! -e "$backup_plist" ]] || rm -f "$backup_plist"
+}
+trap cleanup_candidate EXIT
+if [[ -e "$plist_path" ]]; then
+  backup_plist="$(mktemp "$agent_dir/.${label}.backup.XXXXXX")"
+  cp -p "$plist_path" "$backup_plist"
+fi
 
-plutil -lint "$plist_path"
+plutil -lint "$candidate_plist"
 gui_domain="gui/$(id -u)"
 launchctl bootout "$gui_domain" "$plist_path" >/dev/null 2>&1 || true
-launchctl bootstrap "$gui_domain" "$plist_path"
+if ! mv -f "$candidate_plist" "$plist_path"; then
+  echo "Could not install the new LaunchAgent plist; restoring the previous schedule." >&2
+  if [[ -n "$backup_plist" ]]; then
+    if ! launchctl bootstrap "$gui_domain" "$plist_path"; then
+      echo "The previous LaunchAgent plist remains in place but could not be loaded." >&2
+    fi
+  fi
+  exit 1
+fi
+candidate_plist=""
+if ! launchctl bootstrap "$gui_domain" "$plist_path"; then
+  echo "Could not load the new LaunchAgent; restoring the previous schedule." >&2
+  rm -f "$plist_path"
+  if [[ -n "$backup_plist" ]]; then
+    mv -f "$backup_plist" "$plist_path"
+    backup_plist=""
+    if ! launchctl bootstrap "$gui_domain" "$plist_path"; then
+      echo "The previous LaunchAgent plist was restored but could not be loaded." >&2
+    fi
+  fi
+  exit 1
+fi
+if [[ -n "$backup_plist" ]]; then
+  rm -f "$backup_plist"
+  backup_plist=""
+fi
 echo "Installed and loaded $plist_path"
 echo "The first run starts at login/load; later runs start $schedule."
 echo "Logs: $log_dir/arch-notebook-automation{,-error}.log"
