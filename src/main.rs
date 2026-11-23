@@ -464,6 +464,7 @@ struct SqlValidationPreview {
     regression_count: usize,
     change_count: usize,
     changes: Vec<ConnectionDelta>,
+    regression_changes: Vec<ConnectionDelta>,
     result_quality: String,
     minimum_connections: usize,
     maximum_connections: Option<usize>,
@@ -547,6 +548,7 @@ struct App {
     sql_query: String,
     sql_parameter_text: String,
     sql_validation_preview: Option<SqlValidationPreview>,
+    sql_validation_preview_regressions_only: bool,
     sql_schema_templates: Vec<(String, String)>,
     sql_schema_template_index: usize,
     sql_schema_template_source: Option<(String, String)>,
@@ -831,6 +833,7 @@ enum SnapshotDeltaFilter {
     Other,
 }
 
+#[derive(Clone)]
 struct ConnectionDelta {
     kinds: Vec<DeltaKind>,
     connection: ConnectionFact,
@@ -934,6 +937,7 @@ impl Default for App {
             sql_query: "SELECT connection_id, source, source_type, target, target_type, relationship, event_date AS date, confidence, directed, source_reference, notes FROM connection_observations WHERE snapshot_id = :snapshot_id ORDER BY connection_id;".into(),
             sql_parameter_text: "snapshot_id=baseline".into(),
             sql_validation_preview: None,
+            sql_validation_preview_regressions_only: false,
             sql_schema_templates: Vec::new(),
             sql_schema_template_index: 0,
             sql_schema_template_source: None,
@@ -1218,6 +1222,7 @@ impl App {
             sql_query: String::new(),
             sql_parameter_text: String::new(),
             sql_validation_preview: None,
+            sql_validation_preview_regressions_only: false,
             sql_schema_templates: Vec::new(),
             sql_schema_template_index: 0,
             sql_schema_template_source: None,
@@ -3097,6 +3102,17 @@ impl App {
                     .any(|kind| matches!(kind, DeltaKind::Removed | DeltaKind::ConfidenceDeclined))
             })
             .count();
+        let regression_changes = deltas
+            .iter()
+            .filter(|delta| {
+                delta
+                    .kinds
+                    .iter()
+                    .any(|kind| matches!(kind, DeltaKind::Removed | DeltaKind::ConfidenceDeclined))
+            })
+            .take(8)
+            .cloned()
+            .collect();
         let change_count = deltas.len();
         let changes = deltas.into_iter().take(8).collect();
         let validation_preview = candidate_snapshot
@@ -3113,6 +3129,7 @@ impl App {
                 regression_count,
                 change_count,
                 changes,
+                regression_changes,
                 result_quality: snapshot_result_quality(snapshot).into(),
                 minimum_connections: self.automation_minimum_connections,
                 maximum_connections: self.automation_maximum_connections,
@@ -3216,6 +3233,7 @@ impl App {
         maximum_connections: Option<usize>,
         maximum_regressions: Option<usize>,
         maximum_skipped_rows: Option<usize>,
+        regressions_only: &mut bool,
     ) {
         let Some(preview) = preview.filter(|preview| {
             preview.configured_database_path == database_path.trim()
@@ -3258,11 +3276,28 @@ impl App {
         if preview.has_baseline && preview.change_count > 0 {
             egui::CollapsingHeader::new(format!(
                 "CHANGE PREVIEW · {} OF {} CONNECTIONS",
-                preview.changes.len(),
-                preview.change_count
+                if *regressions_only {
+                    preview.regression_changes.len()
+                } else {
+                    preview.changes.len()
+                },
+                if *regressions_only {
+                    preview.regression_count
+                } else {
+                    preview.change_count
+                }
             ))
             .id_salt("sql_validation_changes")
             .show(ui, |ui| {
+                ui.add_enabled(
+                    preview.regression_count > 0,
+                    egui::Checkbox::new(regressions_only, "Regressions only"),
+                );
+                let visible_changes = if *regressions_only {
+                    &preview.regression_changes
+                } else {
+                    &preview.changes
+                };
                 egui::Grid::new("sql_validation_change_rows")
                     .striped(true)
                     .show(ui, |ui| {
@@ -3272,7 +3307,7 @@ impl App {
                         ui.strong("Before");
                         ui.strong("Current result");
                         ui.end_row();
-                        for delta in &preview.changes {
+                        for delta in visible_changes {
                             let change = delta
                                 .kinds
                                 .iter()
@@ -3289,7 +3324,18 @@ impl App {
                                 })
                                 .collect::<Vec<_>>()
                                 .join(" · ");
-                            ui.label(change);
+                            let before_details = delta.previous_connection.as_ref();
+                            let evidence_before = before_details
+                                .map(|connection| connection.source_reference.as_str())
+                                .unwrap_or("—");
+                            let notes_before = before_details
+                                .map(|connection| connection.notes.as_str())
+                                .unwrap_or("—");
+                            ui.label(change).on_hover_text(format!(
+                                "Evidence before: {evidence_before}\nEvidence current: {}\nSource notes before: {notes_before}\nSource notes current: {}",
+                                delta.connection.source_reference,
+                                delta.connection.notes
+                            ));
                             let direction = if delta.connection.directed {
                                 "→"
                             } else {
@@ -7361,6 +7407,7 @@ impl eframe::App for App {
                                     self.automation_maximum_connections,
                                     self.automation_maximum_regressions,
                                     self.automation_maximum_skipped_rows,
+                                    &mut self.sql_validation_preview_regressions_only,
                                 );
                                 let enabled_job_count = self
                                     .case
@@ -7595,6 +7642,7 @@ impl eframe::App for App {
                                                 job.maximum_connections,
                                                 job.maximum_regressions,
                                                 job.maximum_skipped_rows,
+                                                &mut self.sql_validation_preview_regressions_only,
                                             );
                                         });
                                 }
@@ -8041,6 +8089,7 @@ impl eframe::App for App {
                                     self.automation_maximum_connections,
                                     self.automation_maximum_regressions,
                                     self.automation_maximum_skipped_rows,
+                                    &mut self.sql_validation_preview_regressions_only,
                                 );
                                 if let Some(current)=current_snapshot.clone() {
                                     let chart_source_key = current.source_key.clone();
