@@ -7069,6 +7069,31 @@ fn previous_snapshot_index(case: &CaseFile, current_index: usize) -> Option<usiz
         .find(|index| case.snapshots[*index].source_key == current.source_key)
 }
 
+fn source_entity_ids(case: &CaseFile, source_key: &str) -> HashSet<Uuid> {
+    let database_path = case
+        .snapshots
+        .iter()
+        .rev()
+        .find(|snapshot| snapshot.source_key == source_key)
+        .map(|snapshot| snapshot.database_path.as_str());
+    let mut entity_ids: HashSet<Uuid> = case
+        .links
+        .iter()
+        .filter(|link| link.ingest_source.as_deref() == Some(source_key))
+        .flat_map(|link| [link.from, link.to])
+        .collect();
+    entity_ids.extend(case.entities.iter().filter_map(|entity| {
+        entity
+            .external_ids
+            .iter()
+            .any(|(identity_source, _)| {
+                identity_source == source_key || Some(identity_source.as_str()) == database_path
+            })
+            .then_some(entity.id)
+    }));
+    entity_ids
+}
+
 fn snapshot_delta_json(
     current: &ConnectionSnapshot,
     previous: Option<&ConnectionSnapshot>,
@@ -7877,22 +7902,7 @@ impl eframe::App for App {
                             .iter()
                             .filter(|link| link.ingest_source.as_deref() == Some(source_key.as_str()))
                             .count();
-                        let mut source_entities: HashSet<Uuid> = self
-                            .case
-                            .links
-                            .iter()
-                            .filter(|link| link.ingest_source.as_deref() == Some(source_key.as_str()))
-                            .flat_map(|link| [link.from, link.to])
-                            .collect();
-                        source_entities.extend(
-                            self.case
-                                .entities
-                                .iter()
-                                .filter(|entity| {
-                                    entity.external_ids.iter().any(|(key, _)| key == &source_key)
-                                })
-                                .map(|entity| entity.id),
-                        );
+                        let source_entities = source_entity_ids(&self.case, &source_key);
                         if let Some(snapshot) = source_snapshot {
                             ui.label(
                                 egui::RichText::new(format!(
@@ -8734,13 +8744,33 @@ impl eframe::App for App {
                                     }
                                 }
                                 for entity in &self.case.entities {
-                                    for (source_key, _) in &entity.external_ids {
-                                        if !source_key.is_empty() {
+                                    for (identity_source, _) in &entity.external_ids {
+                                        if identity_source.is_empty() {
+                                            continue;
+                                        }
+                                        let sql_source_keys: Vec<&str> = self
+                                            .case
+                                            .snapshots
+                                            .iter()
+                                            .filter(|snapshot| {
+                                                snapshot.database_path == *identity_source
+                                            })
+                                            .map(|snapshot| snapshot.source_key.as_str())
+                                            .collect();
+                                        if sql_source_keys.is_empty() {
                                             inventory
-                                                .entry(source_key.clone())
+                                                .entry(identity_source.clone())
                                                 .or_default()
                                                 .0
                                                 .insert(entity.id);
+                                        } else {
+                                            for source_key in sql_source_keys {
+                                                inventory
+                                                    .entry(source_key.to_owned())
+                                                    .or_default()
+                                                    .0
+                                                    .insert(entity.id);
+                                            }
                                         }
                                     }
                                 }
@@ -8750,7 +8780,7 @@ impl eframe::App for App {
                                 ui.label(egui::RichText::new("DATA SOURCES · chart provenance")
                                     .small().strong().color(cyan));
                                 ui.label(egui::RichText::new(
-                                    "Select imported chart items by their source, then inspect the matching connection records. Source records remain local to this case.",
+                                    "Review chart items by their source, then focus them on the chart or open the matching entity and connection records. Source records remain local to this case.",
                                 ).small().color(muted));
                                 if inventory.is_empty() {
                                     ui.label("No imported source records yet. SQL, CSV/TSV, and GraphML provenance appears here after import.");
@@ -8772,12 +8802,13 @@ impl eframe::App for App {
                                                     .map(|snapshot| format!("SQLite · {} · {}", snapshot.series, snapshot.database_path))
                                                     .unwrap_or_else(|| source_key.clone());
                                                 ui.label(&source_label).on_hover_text(source_key);
-                                                ui.label(entities.len().to_string());
+                                                let source_entity_ids = source_entity_ids(&self.case, source_key);
+                                                ui.label(source_entity_ids.len().to_string());
                                                 ui.label(link_count.to_string());
                                                 ui.horizontal(|ui| {
-                                                    if ui.small_button("Select chart items").clicked() {
+                                                    if ui.small_button("Highlight on chart").clicked() {
                                                         self.sql_source_focus = Some(source_key.clone());
-                                                        self.chart_fit_entities = Some(entities.iter().copied().collect());
+                                                        self.chart_fit_entities = Some(source_entity_ids.iter().copied().collect());
                                                         self.chart_fit_path = None;
                                                         self.chart_focus = None;
                                                         self.chart_focus_link = None;
@@ -8785,6 +8816,15 @@ impl eframe::App for App {
                                                         self.path_result.clear();
                                                         self.page = WorkspacePage::Chart;
                                                         self.show_timeline = false;
+                                                    }
+                                                    if !entities.is_empty() && ui.small_button("View entities").clicked() {
+                                                        self.data_query.clear();
+                                                        self.data_source_filter = Some(source_key.clone());
+                                                        self.data_mode = DataMode::Entities;
+                                                        self.page = WorkspacePage::Data;
+                                                        self.show_timeline = false;
+                                                        self.selected = None;
+                                                        self.selected_link = None;
                                                     }
                                                     if *link_count > 0 && ui.small_button("View connections").clicked() {
                                                         self.data_query.clear();
@@ -9191,7 +9231,7 @@ impl eframe::App for App {
                                 return;
                             }
                             ui.horizontal(|ui|{ui.add(egui::TextEdit::singleline(&mut self.data_query).hint_text(if self.data_mode==DataMode::Entities{"Filter entities…"}else{"Filter connections…"}).desired_width(240.0));if self.data_mode==DataMode::Relationships{let selected_entity=self.selected.is_some_and(|id|self.case.entities.iter().any(|entity|entity.id==id));ui.add_enabled(selected_entity,egui::Checkbox::new(&mut self.connections_for_selected,"Selected entity connections"));egui::ComboBox::from_id_salt("link_sort").selected_text(match self.link_sort {LinkSort::RecordId=>"Sort: record ID",LinkSort::Source=>"Sort: source",LinkSort::Date=>"Sort: date",LinkSort::Relationship=>"Sort: relationship",LinkSort::Target=>"Sort: target",LinkSort::Confidence=>"Sort: confidence",LinkSort::SourceReference=>"Sort: source reference"}).show_ui(ui,|ui|{ui.selectable_value(&mut self.link_sort,LinkSort::RecordId,"Record ID");ui.selectable_value(&mut self.link_sort,LinkSort::Source,"Source");ui.selectable_value(&mut self.link_sort,LinkSort::Relationship,"Relationship");ui.selectable_value(&mut self.link_sort,LinkSort::Target,"Target");ui.selectable_value(&mut self.link_sort,LinkSort::Date,"Date");ui.selectable_value(&mut self.link_sort,LinkSort::Confidence,"Confidence");ui.selectable_value(&mut self.link_sort,LinkSort::SourceReference,"Source reference");});}});
-                            if self.data_mode == DataMode::Relationships
+                            if matches!(self.data_mode, DataMode::Relationships | DataMode::Entities)
                                 && let Some(source_filter) = self.data_source_filter.clone()
                             {
                                 let source_snapshot = self
@@ -9227,6 +9267,10 @@ impl eframe::App for App {
                                 egui::ScrollArea::both().show(ui,|ui|egui::Grid::new("entities_table").striped(true).show(ui,|ui|{
                                     for h in ["ENTITY","TYPE","NOTES","CONNECTIONS","ALIASES","MERGED RECORDS","ATTRIBUTES"]{ui.label(egui::RichText::new(h).small().strong().color(cyan));}ui.end_row();
                                     let mut entities:Vec<&Entity>=self.case.entities.iter().collect();
+                                    if let Some(source_filter) = self.data_source_filter.as_deref() {
+                                        let source_entities = source_entity_ids(&self.case, source_filter);
+                                        entities.retain(|entity| source_entities.contains(&entity.id));
+                                    }
                                     entities.sort_by(|a,b|match self.entity_sort{EntitySort::Name=>a.name.to_lowercase().cmp(&b.name.to_lowercase()),EntitySort::Type=>a.kind.to_lowercase().cmp(&b.kind.to_lowercase()),EntitySort::Connections=>connected_counts.get(&b.id).copied().unwrap_or_default().cmp(&connected_counts.get(&a.id).copied().unwrap_or_default())});
                                     for entity in entities{if !format!("{} {} {} {:?} {:?}",entity.name,entity.kind,entity.detail,entity.attributes,entity.aliases).to_lowercase().contains(&self.data_query.to_lowercase()){continue;}let selected=self.selected==Some(entity.id);if ui.selectable_label(selected,&entity.name).clicked(){self.selected=Some(entity.id);self.selected_link=None;}ui.label(&entity.kind);ui.label(&entity.detail);let connection_count=connected_counts.get(&entity.id).copied().unwrap_or_default();if ui.selectable_label(false,connection_count.to_string()).on_hover_text("Open this entity's connections").clicked(){self.selected=Some(entity.id);self.selected_link=None;self.connections_for_selected=true;self.data_mode=DataMode::Relationships;}ui.label(entity.aliases.join(" · "));ui.label(entity.merged_records.len().to_string());ui.label(entity.attributes.iter().map(|(k,v)|format!("{k}: {v}")).collect::<Vec<_>>().join(" · "));ui.end_row();}
                                 }));
@@ -9345,26 +9389,11 @@ impl eframe::App for App {
                             .map(|pair| (pair[0], pair[1]))
                             .collect();
                         let path_entities: HashSet<Uuid> = self.path_result.iter().copied().collect();
-                        let mut focused_source_entities: HashSet<Uuid> = self
-                            .case
-                            .links
-                            .iter()
-                            .filter(|link| {
-                                self.sql_source_focus.as_deref() == link.ingest_source.as_deref()
-                            })
-                            .flat_map(|link| [link.from, link.to])
-                            .collect();
-                        focused_source_entities.extend(
-                            self.case
-                                .entities
-                                .iter()
-                                .filter(|entity| {
-                                    entity.external_ids.iter().any(|(source_key, _)| {
-                                        self.sql_source_focus.as_deref() == Some(source_key.as_str())
-                                    })
-                                })
-                                .map(|entity| entity.id),
-                        );
+                        let focused_source_entities = self
+                            .sql_source_focus
+                            .as_deref()
+                            .map(|source_key| source_entity_ids(&self.case, source_key))
+                            .unwrap_or_default();
                         let has_source_focus = self.sql_source_focus.is_some();
                         let has_group_focus = self.chart_focus_group.is_some();
                         for (link_index, link) in self.case.links.iter().enumerate() {
@@ -14569,6 +14598,7 @@ fn list_automation_runs_cli(
     case_path: &str,
     json_output: bool,
     job_filter: Option<&str>,
+    trigger_filter: Option<&str>,
     offset: usize,
     limit: Option<usize>,
 ) -> Result<(), String> {
@@ -14589,7 +14619,7 @@ fn list_automation_runs_cli(
             job_filter.is_none_or(|filter| {
                 run.job_name.eq_ignore_ascii_case(filter)
                     || run.job_id.to_string().eq_ignore_ascii_case(filter)
-            })
+            }) && trigger_filter.is_none_or(|filter| run.trigger.eq_ignore_ascii_case(filter))
         })
         .collect();
     let total = matching_runs.len();
@@ -14666,7 +14696,7 @@ fn list_automation_runs_cli(
             serde_json::to_string_pretty(&serde_json::json!({
                 "schema_version":1,
                 "case":case_path,
-                "filter":{"job":job_filter,"offset":offset,"limit":limit},
+                "filter":{"job":job_filter,"trigger":trigger_filter,"offset":offset,"limit":limit},
                 "total":total,
                 "returned":runs.len(),
                 "next_offset":(offset.saturating_add(runs.len()) < total)
@@ -14890,7 +14920,7 @@ fn main() -> eframe::Result<()> {
         .is_some_and(|arg| arg == "--help" || arg == "-h")
     {
         println!(
-            "Arch Notebook\n\nUsage:\n  arch-notebook\n  arch-notebook --inspect-sqlite <database.sqlite> [--json]\n  arch-notebook --import-graphml <case.json> <input.graphml> [--json]\n  arch-notebook --export-graphml <case.json> <output.graphml> [--json]\n  arch-notebook --export-sql-comparison <case.json> <baseline-snapshot-id> <current-snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --export-job <case.json> <job-name-or-id> <output.json> [--json]\n  arch-notebook --import-job <case.json> <input.json> [--name <job-name>] [--database <path>] [--series <label>] [--json]\n  arch-notebook --export-import-design <case.json> <design-name-or-id> <output.json> [--json]\n  arch-notebook --import-import-design <case.json> <input.json> [--name <design-name>] [--json]\n  arch-notebook --list-jobs <case.json> [--enabled-only] [--json]\n  arch-notebook --list-runs <case.json> [--json] [--job <name-or-id>] [--offset <count>] [--limit <count>]\n  arch-notebook --validate-job <case.json> <job-name-or-id> [--query-only] [--param name=value ...] [--json]\n  arch-notebook --validate-enabled-jobs <case.json> [--json] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --check-enabled-job-queries <case.json> [--json] [--require-usable] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --validate-run <case.json> <run-id> [--json]\n  arch-notebook --run-enabled-jobs <case.json> [--json] [--skip-recent-success] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --run-job <case.json> <job-name-or-id> [--param name=value ...] [--json]\n  arch-notebook --rerun-run <case.json> <run-id> [--json]\n\nJob and import design packages contain portable configuration, not case data or run history. Batch runs save snapshots and run history to the case file. JSON output is available for scheduler integration."
+            "Arch Notebook\n\nUsage:\n  arch-notebook\n  arch-notebook --inspect-sqlite <database.sqlite> [--json]\n  arch-notebook --import-graphml <case.json> <input.graphml> [--json]\n  arch-notebook --export-graphml <case.json> <output.graphml> [--json]\n  arch-notebook --export-sql-comparison <case.json> <baseline-snapshot-id> <current-snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --export-job <case.json> <job-name-or-id> <output.json> [--json]\n  arch-notebook --import-job <case.json> <input.json> [--name <job-name>] [--database <path>] [--series <label>] [--json]\n  arch-notebook --export-import-design <case.json> <design-name-or-id> <output.json> [--json]\n  arch-notebook --import-import-design <case.json> <input.json> [--name <design-name>] [--json]\n  arch-notebook --list-jobs <case.json> [--enabled-only] [--json]\n  arch-notebook --list-runs <case.json> [--json] [--job <name-or-id>] [--trigger <desktop|scheduled|cli|replay|legacy>] [--offset <count>] [--limit <count>]\n  arch-notebook --validate-job <case.json> <job-name-or-id> [--query-only] [--param name=value ...] [--json]\n  arch-notebook --validate-enabled-jobs <case.json> [--json] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --check-enabled-job-queries <case.json> [--json] [--require-usable] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --validate-run <case.json> <run-id> [--json]\n  arch-notebook --run-enabled-jobs <case.json> [--json] [--skip-recent-success] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --run-job <case.json> <job-name-or-id> [--param name=value ...] [--json]\n  arch-notebook --rerun-run <case.json> <run-id> [--json]\n\nJob and import design packages contain portable configuration, not case data or run history. Batch runs save snapshots and run history to the case file. JSON output is available for scheduler integration."
         );
         println!("  arch-notebook --annotate-run <case.json> <run-id> <comment> [--json]");
         return Ok(());
@@ -15161,16 +15191,18 @@ fn main() -> eframe::Result<()> {
     if args.first().is_some_and(|arg| arg == "--list-runs") {
         let Some(case_path) = args.get(1) else {
             report_cli_usage_error(
-                "usage: arch-notebook --list-runs <case.json> [--json] [--job <name-or-id>] [--offset <count>] [--limit <count>]",
+                "usage: arch-notebook --list-runs <case.json> [--json] [--job <name-or-id>] [--trigger <desktop|scheduled|cli|replay|legacy>] [--offset <count>] [--limit <count>]",
                 args.iter().any(|arg| arg == "--json"),
             );
         };
         let json_output = args.iter().any(|arg| arg == "--json");
         let mut job_filter = None;
+        let mut trigger_filter = None;
         let mut offset = 0usize;
         let mut limit = None;
         let mut seen_json = false;
         let mut seen_job = false;
+        let mut seen_trigger = false;
         let mut seen_offset = false;
         let mut seen_limit = false;
         let mut index = 2;
@@ -15185,6 +15217,27 @@ fn main() -> eframe::Result<()> {
                     };
                     job_filter = Some(value.clone());
                     seen_job = true;
+                }
+                "--trigger" if !seen_trigger => {
+                    index += 1;
+                    let Some(value) = args.get(index) else {
+                        report_cli_usage_error(
+                            "--trigger requires desktop, scheduled, cli, replay, or legacy",
+                            json_output,
+                        );
+                    };
+                    let normalized = value.to_ascii_lowercase();
+                    if !matches!(
+                        normalized.as_str(),
+                        "desktop" | "scheduled" | "cli" | "replay" | "legacy"
+                    ) {
+                        report_cli_usage_error(
+                            "--trigger requires desktop, scheduled, cli, replay, or legacy",
+                            json_output,
+                        );
+                    }
+                    trigger_filter = Some(normalized);
+                    seen_trigger = true;
                 }
                 "--offset" if !seen_offset => {
                     index += 1;
@@ -15222,15 +15275,20 @@ fn main() -> eframe::Result<()> {
                     seen_limit = true;
                 }
                 _ => report_cli_usage_error(
-                    "usage: arch-notebook --list-runs <case.json> [--json] [--job <name-or-id>] [--offset <count>] [--limit <count>]",
+                    "usage: arch-notebook --list-runs <case.json> [--json] [--job <name-or-id>] [--trigger <desktop|scheduled|cli|replay|legacy>] [--offset <count>] [--limit <count>]",
                     json_output,
                 ),
             }
             index += 1;
         }
-        if let Err(error) =
-            list_automation_runs_cli(case_path, json_output, job_filter.as_deref(), offset, limit)
-        {
+        if let Err(error) = list_automation_runs_cli(
+            case_path,
+            json_output,
+            job_filter.as_deref(),
+            trigger_filter.as_deref(),
+            offset,
+            limit,
+        ) {
             report_cli_error("run history listing failed", error, json_output);
         }
         return Ok(());
