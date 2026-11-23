@@ -683,6 +683,8 @@ struct App {
     query: String,
     status: String,
     show_timeline: bool,
+    timeline_range: Option<(i64, i64)>,
+    timeline_brush_anchor: Option<i64>,
     chart_zoom: f32,
     chart_pan: egui::Vec2,
     chart_pan_origin: egui::Vec2,
@@ -1089,6 +1091,8 @@ impl Default for App {
             query: String::new(),
             status,
             show_timeline: false,
+            timeline_range: None,
+            timeline_brush_anchor: None,
             chart_zoom: 1.0,
             chart_pan: egui::Vec2::ZERO,
             chart_pan_origin: egui::Vec2::ZERO,
@@ -1392,6 +1396,8 @@ impl App {
             query: String::new(),
             status: String::new(),
             show_timeline: false,
+            timeline_range: None,
+            timeline_brush_anchor: None,
             chart_zoom: 1.0,
             chart_pan: egui::Vec2::ZERO,
             chart_pan_origin: egui::Vec2::ZERO,
@@ -7771,6 +7777,10 @@ fn shortest_path(case: &CaseFile, start: Uuid, goal: Uuid) -> Option<Vec<Uuid>> 
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
+        if self.page != WorkspacePage::Chart || !self.show_timeline {
+            self.timeline_range = None;
+            self.timeline_brush_anchor = None;
+        }
         if let Some(inspection_state) = self
             .import_inspection_worker
             .as_ref()
@@ -10105,13 +10115,37 @@ impl eframe::App for App {
                             .unwrap_or_default();
                         let has_source_focus = self.sql_source_focus.is_some();
                         let has_group_focus = self.chart_focus_group.is_some();
+                        if let Some((first, last)) = timeline_date_domain(&self.case.links) {
+                            if let Some((start, end)) = self.timeline_range {
+                                self.timeline_range = Some((start.max(first), end.min(last)));
+                                if self.timeline_range.is_some_and(|(start, end)| start > end) {
+                                    self.timeline_range = None;
+                                }
+                            }
+                        } else {
+                            self.timeline_range = None;
+                        }
+                        let timeline_range = self.timeline_range;
+                        let active_time_entities: HashSet<Uuid> = timeline_range
+                            .map(|(start, end)| {
+                                self.case
+                                    .links
+                                    .iter()
+                                    .filter(|link| {
+                                        parse_iso_date_ordinal(&link.date)
+                                            .is_some_and(|date| (start..=end).contains(&date))
+                                    })
+                                    .flat_map(|link| [link.from, link.to])
+                                    .collect()
+                            })
+                            .unwrap_or_default();
                         for (link_index, link) in self.case.links.iter().enumerate() {
                             if let (Some(&a_index), Some(&b_index)) =
                                 (entity_indices.get(&link.from), entity_indices.get(&link.to))
                             {
                                 let a = &self.case.entities[a_index];
                                 let b = &self.case.entities[b_index];
-                                let ca=center(a);let cb=center(b);let in_path=path_edges.contains(&(link.from,link.to))||(!link.directed&&path_edges.contains(&(link.to,link.from)));let in_source=self.sql_source_focus.as_deref()==link.ingest_source.as_deref();let in_group=self.chart_focus_group.as_ref().is_some_and(|group|group.contains(&link.from)||group.contains(&link.to));let col=if self.selected_link==Some(link_index){cyan}else if in_path{egui::Color32::from_rgb(236,174,83)}else if in_source{egui::Color32::from_rgb(91,190,178)}else if in_group{egui::Color32::from_rgb(161,132,218)}else if has_source_focus||has_group_focus{egui::Color32::from_rgb(35,52,63)}else{egui::Color32::from_rgb(72,104,120)};
+                                let ca=center(a);let cb=center(b);let in_path=path_edges.contains(&(link.from,link.to))||(!link.directed&&path_edges.contains(&(link.to,link.from)));let in_source=self.sql_source_focus.as_deref()==link.ingest_source.as_deref();let in_group=self.chart_focus_group.as_ref().is_some_and(|group|group.contains(&link.from)||group.contains(&link.to));let in_time=timeline_range.is_none_or(|(start,end)|parse_iso_date_ordinal(&link.date).is_some_and(|date|(start..=end).contains(&date)));let col=if self.selected_link==Some(link_index){cyan}else if !in_time{egui::Color32::from_rgb(24,35,43)}else if in_path{egui::Color32::from_rgb(236,174,83)}else if in_source{egui::Color32::from_rgb(91,190,178)}else if in_group{egui::Color32::from_rgb(161,132,218)}else if has_source_focus||has_group_focus{egui::Color32::from_rgb(35,52,63)}else{egui::Color32::from_rgb(72,104,120)};
                                 let points = connection_curve_points(
                                     ca,
                                     cb,
@@ -10134,14 +10168,14 @@ impl eframe::App for App {
                                 }
                                 let mid=points[points.len()/2]; let label_rect=egui::Rect::from_center_size(mid,egui::vec2(110.0,18.0)*self.chart_zoom);
                                 p.rect_filled(label_rect,3.0,if self.selected_link==Some(link_index){egui::Color32::from_rgb(34,61,70)}else{egui::Color32::from_rgb(19,31,41)});
-                                p.text(mid,egui::Align2::CENTER_CENTER,&link.label,egui::FontId::proportional(9.0*self.chart_zoom),if in_source{cyan}else if in_group{egui::Color32::from_rgb(190,169,227)}else if has_source_focus||has_group_focus{egui::Color32::from_rgb(65,78,87)}else{muted});
+                                p.text(mid,egui::Align2::CENTER_CENTER,&link.label,egui::FontId::proportional(9.0*self.chart_zoom),if !in_time{egui::Color32::from_rgb(45,57,64)}else if in_source{cyan}else if in_group{egui::Color32::from_rgb(190,169,227)}else if has_source_focus||has_group_focus{egui::Color32::from_rgb(65,78,87)}else{muted});
                             }
                         }
                         for e in &self.case.entities {
                             let c=center(e); let fill=egui::Color32::from_rgb(e.color[0],e.color[1],e.color[2]);
                             let r=egui::Rect::from_center_size(c,egui::vec2(142.0,56.0)*self.chart_zoom);
                             let picked=self.selected==Some(e.id);
-                            let on_path=path_entities.contains(&e.id);let in_source=focused_source_entities.contains(&e.id);let in_group=self.chart_focus_group.as_ref().is_some_and(|group|group.contains(&e.id));let dimmed=(has_source_focus&&!in_source)||(has_group_focus&&!in_group);p.rect_filled(r,7.0,if on_path{egui::Color32::from_rgb(55,48,38)}else if in_group{egui::Color32::from_rgb(48,38,61)}else if in_source{egui::Color32::from_rgb(34,53,60)}else if dimmed{egui::Color32::from_rgb(17,27,35)}else{egui::Color32::from_rgb(25,39,51)});p.rect_stroke(r,7.0,egui::Stroke::new(if picked{2.0_f32}else{1.0_f32},if picked{cyan}else if on_path{egui::Color32::from_rgb(236,174,83)}else if in_group{egui::Color32::from_rgb(161,132,218)}else if in_source{egui::Color32::from_rgb(91,190,178)}else if dimmed{egui::Color32::from_rgb(35,48,56)}else{fill}),egui::StrokeKind::Inside);
+                            let on_path=path_entities.contains(&e.id);let in_source=focused_source_entities.contains(&e.id);let in_group=self.chart_focus_group.as_ref().is_some_and(|group|group.contains(&e.id));let in_time=timeline_range.is_none_or(|_|active_time_entities.contains(&e.id));let dimmed=(has_source_focus&&!in_source)||(has_group_focus&&!in_group)||!in_time;p.rect_filled(r,7.0,if on_path{egui::Color32::from_rgb(55,48,38)}else if in_group{egui::Color32::from_rgb(48,38,61)}else if in_source{egui::Color32::from_rgb(34,53,60)}else if dimmed{egui::Color32::from_rgb(17,27,35)}else{egui::Color32::from_rgb(25,39,51)});p.rect_stroke(r,7.0,egui::Stroke::new(if picked{2.0_f32}else{1.0_f32},if picked{cyan}else if on_path{egui::Color32::from_rgb(236,174,83)}else if in_group{egui::Color32::from_rgb(161,132,218)}else if in_source{egui::Color32::from_rgb(91,190,178)}else if dimmed{egui::Color32::from_rgb(35,48,56)}else{fill}),egui::StrokeKind::Inside);
                             p.circle_filled(c+egui::vec2(-58.0,0.0)*self.chart_zoom,6.0*self.chart_zoom,if dimmed{egui::Color32::from_rgb(53,66,73)}else{fill});
                             p.text(c+egui::vec2(-44.0,-8.0)*self.chart_zoom,egui::Align2::LEFT_CENTER,&e.name,egui::FontId::proportional(12.0*self.chart_zoom),if dimmed{egui::Color32::from_rgb(81,95,103)}else{egui::Color32::WHITE});
                             p.text(c+egui::vec2(-44.0,11.0)*self.chart_zoom,egui::Align2::LEFT_CENTER,&e.kind,egui::FontId::proportional(8.0*self.chart_zoom),if dimmed{egui::Color32::from_rgb(68,82,90)}else{muted});
@@ -10261,15 +10295,23 @@ impl eframe::App for App {
                                     rect.left_bottom() - egui::vec2(0.0, 105.0),
                                     egui::vec2(rect.width(), 105.0),
                                 );
-                                self.selected_link = timeline_event_positions(
-                                    &self.case.links,
-                                    timeline_rect,
-                                )
-                                .into_iter()
-                                .map(|(index, point)| (index, point.distance(pos)))
-                                .min_by(|a, b| a.1.total_cmp(&b.1))
-                                .filter(|(_, distance)| *distance < 24.0)
-                                .map(|(index, _)| index);
+                                let clear_rect = egui::Rect::from_min_size(
+                                    timeline_rect.right_top() + egui::vec2(-100.0, 4.0),
+                                    egui::vec2(92.0, 18.0),
+                                );
+                                if clear_rect.contains(pos) {
+                                    self.timeline_range = None;
+                                } else {
+                                    self.selected_link = timeline_event_positions(
+                                        &self.case.links,
+                                        timeline_rect,
+                                    )
+                                    .into_iter()
+                                    .map(|(index, point)| (index, point.distance(pos)))
+                                    .min_by(|a, b| a.1.total_cmp(&b.1))
+                                    .filter(|(_, distance)| *distance < 24.0)
+                                    .map(|(index, _)| index);
+                                }
                                 self.selected = None;
                             } else {
                                 let lanes = link_lane_offsets(&self.case.links);
@@ -10316,14 +10358,113 @@ impl eframe::App for App {
                                 }
                             }
                         }
-                        if response.drag_started() { if let Some(pos)=response.interact_pointer_pos(){self.chart_navigator_dragging=navigator_rect.contains(pos);if !self.chart_navigator_dragging{if let Some(entity)=self.case.entities.iter().find(|e|center(e).distance(pos)<75.0*self.chart_zoom){self.selected=Some(entity.id);self.selected_link=None;}else{self.selected=None;self.chart_pan_origin=self.chart_pan;}}} }
-                        if response.dragged() && !self.chart_navigator_dragging { if let Some(pos)=response.interact_pointer_pos(){if let Some(id)=self.selected{if let Some(e)=self.case.entities.iter_mut().find(|e|e.id==id){let local=(pos-rect.center()-self.chart_pan)/self.chart_zoom+rect.size()*0.5;e.x=(local.x/rect.width()).clamp(0.05,0.95);e.y=(local.y/rect.height()).clamp(0.08,0.92);}}else{self.chart_pan=self.chart_pan_origin+response.drag_delta();}} }
+                        if response.drag_started() {
+                            if let Some(pos) = response.interact_pointer_pos() {
+                                self.chart_navigator_dragging = navigator_rect.contains(pos);
+                                let timeline_rect = egui::Rect::from_min_size(
+                                    rect.left_bottom() - egui::vec2(0.0, 105.0),
+                                    egui::vec2(rect.width(), 105.0),
+                                );
+                                let clear_rect = egui::Rect::from_min_size(
+                                    timeline_rect.right_top() + egui::vec2(-100.0, 4.0),
+                                    egui::vec2(92.0, 18.0),
+                                );
+                                if self.show_timeline && timeline_rect.contains(pos) && !clear_rect.contains(pos) {
+                                    self.timeline_brush_anchor = timeline_date_at_x(
+                                        &self.case.links,
+                                        timeline_rect,
+                                        pos.x,
+                                    );
+                                    if let Some(day) = self.timeline_brush_anchor {
+                                        self.timeline_range = Some((day, day));
+                                        self.selected = None;
+                                        self.selected_link = None;
+                                    }
+                                } else if !self.chart_navigator_dragging {
+                                    if let Some(entity) = self
+                                        .case
+                                        .entities
+                                        .iter()
+                                        .find(|entity| center(entity).distance(pos) < 75.0 * self.chart_zoom)
+                                    {
+                                        self.selected = Some(entity.id);
+                                        self.selected_link = None;
+                                    } else {
+                                        self.selected = None;
+                                        self.chart_pan_origin = self.chart_pan;
+                                    }
+                                }
+                            }
+                        }
+                        if response.dragged() && !self.chart_navigator_dragging {
+                            if let Some(pos) = response.interact_pointer_pos() {
+                                if let Some(anchor) = self.timeline_brush_anchor {
+                                    let timeline_rect = egui::Rect::from_min_size(
+                                        rect.left_bottom() - egui::vec2(0.0, 105.0),
+                                        egui::vec2(rect.width(), 105.0),
+                                    );
+                                    if let Some(day) = timeline_date_at_x(
+                                        &self.case.links,
+                                        timeline_rect,
+                                        pos.x,
+                                    ) {
+                                        self.timeline_range = Some((anchor.min(day), anchor.max(day)));
+                                    }
+                                } else if let Some(id) = self.selected {
+                                    if let Some(entity) = self.case.entities.iter_mut().find(|entity| entity.id == id) {
+                                        let local = (pos - rect.center() - self.chart_pan) / self.chart_zoom + rect.size() * 0.5;
+                                        entity.x = (local.x / rect.width()).clamp(0.05, 0.95);
+                                        entity.y = (local.y / rect.height()).clamp(0.08, 0.92);
+                                    }
+                                } else {
+                                    self.chart_pan = self.chart_pan_origin + response.drag_delta();
+                                }
+                            }
+                        }
+                        if !ctx.input(|input| input.pointer.any_down()) {
+                            self.timeline_brush_anchor = None;
+                        }
                         if self.chart_navigator_dragging && !ctx.input(|input| input.pointer.any_down()) {
                             self.chart_navigator_dragging = false;
                         }
                         if self.show_timeline {
                             let tr=egui::Rect::from_min_size(rect.left_bottom()-egui::vec2(0.0,105.0),egui::vec2(rect.width(),105.0));
                             p.rect_filled(tr,4.0,egui::Color32::from_rgb(20,32,43));p.text(tr.left_top()+egui::vec2(14.0,14.0),egui::Align2::LEFT_TOP,"EVENT TIMELINE",egui::FontId::proportional(10.0),cyan);
+                            let clear_rect = egui::Rect::from_min_size(
+                                tr.right_top() + egui::vec2(-100.0, 4.0),
+                                egui::vec2(92.0, 18.0),
+                            );
+                            let range_label = self.timeline_range.and_then(|(start, end)| {
+                                Some((timeline_date_text(&self.case.links, start)?, timeline_date_text(&self.case.links, end)?))
+                            });
+                            if let Some((start, end)) = self.timeline_range
+                                && let (Some(start_x), Some(end_x)) = (
+                                    timeline_date_x(&self.case.links, tr, start),
+                                    timeline_date_x(&self.case.links, tr, end),
+                                )
+                            {
+                                let band = egui::Rect::from_min_max(
+                                    egui::pos2(start_x.min(end_x), tr.top() + 25.0),
+                                    egui::pos2(start_x.max(end_x).max(start_x.min(end_x) + 3.0), tr.bottom() - 18.0),
+                                );
+                                p.rect_filled(band, 2.0, egui::Color32::from_rgba_unmultiplied(77, 176, 190, 60));
+                                p.rect_stroke(band, 2.0, egui::Stroke::new(1.0_f32, cyan), egui::StrokeKind::Inside);
+                            }
+                            p.text(
+                                tr.left_top() + egui::vec2(112.0, 14.0),
+                                egui::Align2::LEFT_TOP,
+                                range_label.map(|(start, end)| format!("TIME FILTER · {start} → {end}")).unwrap_or_else(|| {
+                                    if timeline_date_domain(&self.case.links).is_some() {
+                                        "DRAG ACROSS THE AXIS TO FILTER THE CHART".into()
+                                    } else {
+                                        "APPROXIMATE ORDER · DATE RANGE FILTER UNAVAILABLE".into()
+                                    }
+                                }),
+                                egui::FontId::proportional(8.0),
+                                muted,
+                            );
+                            p.rect_stroke(clear_rect, 3.0, egui::Stroke::new(0.8_f32, egui::Color32::from_rgb(57, 83, 98)), egui::StrokeKind::Inside);
+                            p.text(clear_rect.center(), egui::Align2::CENTER_CENTER, "CLEAR RANGE", egui::FontId::proportional(7.0), if self.timeline_range.is_some() { cyan } else { muted });
                             let y=tr.center().y+5.0;p.line_segment([egui::pos2(tr.left()+25.0,y),egui::pos2(tr.right()-25.0,y)],(1.0,muted));
                             let timeline_events = timeline_event_positions(&self.case.links,tr);
                             if let Some((first, last)) = timeline_date_bounds(&self.case.links) {
@@ -11561,6 +11702,41 @@ fn timeline_date_bounds(links: &[Link]) -> Option<(&str, &str)> {
         .collect();
     dated.sort_by_key(|(_, ordinal)| *ordinal);
     Some((dated.first()?.0, dated.last()?.0))
+}
+
+fn timeline_date_domain(links: &[Link]) -> Option<(i64, i64)> {
+    let ordinals: Vec<i64> = links
+        .iter()
+        .map(|link| parse_iso_date_ordinal(&link.date))
+        .collect::<Option<_>>()?;
+    Some((*ordinals.iter().min()?, *ordinals.iter().max()?))
+}
+
+fn timeline_date_x(links: &[Link], rect: egui::Rect, ordinal: i64) -> Option<f32> {
+    let (first, last) = timeline_date_domain(links)?;
+    let width = (rect.width() - 50.0).max(0.0);
+    Some(if first == last {
+        rect.center().x
+    } else {
+        rect.left() + 25.0 + (ordinal - first) as f32 / (last - first) as f32 * width
+    })
+}
+
+fn timeline_date_at_x(links: &[Link], rect: egui::Rect, x: f32) -> Option<i64> {
+    let (first, last) = timeline_date_domain(links)?;
+    if first == last {
+        return Some(first);
+    }
+    let width = (rect.width() - 50.0).max(1.0);
+    let fraction = ((x - rect.left() - 25.0) / width).clamp(0.0, 1.0);
+    Some(first + ((last - first) as f32 * fraction).round() as i64)
+}
+
+fn timeline_date_text(links: &[Link], ordinal: i64) -> Option<&str> {
+    links
+        .iter()
+        .find(|link| parse_iso_date_ordinal(&link.date) == Some(ordinal))
+        .map(|link| link.date.as_str())
 }
 
 fn save_case_atomically(path: &Path, case: &CaseFile) -> Result<(), String> {

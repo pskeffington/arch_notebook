@@ -91,7 +91,11 @@ version=v0.1.0
 release_dir="$PWD/arch-notebook-$version"
 mkdir -p "$release_dir"
 gh release download "$version" --dir "$release_dir"
-(cd "$release_dir" && sha256sum --check SHA256SUMS)
+if command -v sha256sum >/dev/null 2>&1; then
+  (cd "$release_dir" && sha256sum --check SHA256SUMS)
+else
+  (cd "$release_dir" && shasum -a 256 --check SHA256SUMS)
+fi
 ```
 
 On Linux, continue with the generic archive steps above or install the Arch package with `pacman -U` on an Arch system. Keep the downloaded checksum file with the artifacts for later verification.
