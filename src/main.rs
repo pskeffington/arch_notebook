@@ -596,6 +596,8 @@ struct AutomationRun {
     #[serde(default)]
     analyst_note: String,
     #[serde(default)]
+    regressions_reviewed: Option<bool>,
+    #[serde(default)]
     snapshot_index: Option<usize>,
     #[serde(default)]
     snapshot_id: Option<Uuid>,
@@ -4819,6 +4821,7 @@ impl App {
             success,
             message,
             analyst_note: String::new(),
+            regressions_reviewed: None,
             snapshot_index,
             snapshot_id,
             rerun_of: None,
@@ -7290,7 +7293,9 @@ fn automation_run_matches_filter(
             .and_then(|id| case.snapshots.iter().position(|snapshot| snapshot.id == id))
             .or(run.snapshot_index);
         snapshot_index.is_some_and(|index| automation_snapshot_regression_count(case, index) > 0)
-            && run.analyst_note.trim().is_empty()
+            && !run
+                .regressions_reviewed
+                .unwrap_or_else(|| !run.analyst_note.trim().is_empty())
     } else {
         true
     };
@@ -9052,6 +9057,7 @@ impl eframe::App for App {
                                 let mut review_snapshot = None;
                                 let mut review_changes = None;
                                 let mut focus_regression: Option<(Uuid, ConnectionFact)> = None;
+                                let mut set_regression_review: Option<(Uuid, bool)> = None;
                                 let mut replay_run = None;
                                 let mut load_run = None;
                                 let mut save_run_note = None;
@@ -9170,15 +9176,24 @@ impl eframe::App for App {
                                                         })
                                                         .collect();
                                                     if !regressions.is_empty() {
+                                                        let is_reviewed = run
+                                                            .regressions_reviewed
+                                                            .unwrap_or_else(|| !run.analyst_note.trim().is_empty());
                                                         egui::Frame::new()
                                                             .fill(egui::Color32::from_rgb(43, 35, 34))
                                                             .inner_margin(8.0)
                                                             .show(ui, |ui| {
-                                                                ui.label(egui::RichText::new(format!(
-                                                                    "REGRESSION DETAILS · showing {} of {}",
-                                                                    regressions.len().min(5),
-                                                                    regressions.len()
-                                                                )).small().strong().color(egui::Color32::from_rgb(238, 139, 115)));
+                                                                ui.horizontal(|ui| {
+                                                                    ui.label(egui::RichText::new(format!(
+                                                                        "REGRESSION DETAILS · showing {} of {} · {}",
+                                                                        regressions.len().min(5),
+                                                                        regressions.len(),
+                                                                        if is_reviewed { "REVIEWED" } else { "NEEDS REVIEW" }
+                                                                    )).small().strong().color(egui::Color32::from_rgb(238, 139, 115)));
+                                                                    if ui.small_button(if is_reviewed { "Reopen review" } else { "Mark reviewed" }).clicked() {
+                                                                        set_regression_review = Some((run.id, !is_reviewed));
+                                                                    }
+                                                                });
                                                                 for regression in regressions.iter().take(5) {
                                                                     let fact = &regression["connection"];
                                                                     let is_removed = regression["kinds"]
@@ -9313,6 +9328,20 @@ impl eframe::App for App {
                                         run.analyst_note = note;
                                         self.status = "AUTOMATION RUN COMMENT UPDATED · SAVE CASE TO KEEP IT".into();
                                     }
+                                }
+                                if let Some((run_id, reviewed)) = set_regression_review
+                                    && let Some(run) = self
+                                        .case
+                                        .automation_runs
+                                        .iter_mut()
+                                        .find(|run| run.id == run_id)
+                                {
+                                    run.regressions_reviewed = Some(reviewed);
+                                    self.status = if reviewed {
+                                        "SQL REGRESSION REVIEW MARKED · SAVE CASE TO KEEP IT".into()
+                                    } else {
+                                        "SQL REGRESSION REVIEW REOPENED · SAVE CASE TO KEEP IT".into()
+                                    };
                                 }
                                 if let Some(run_id) = replay_run {
                                     self.replay_saved_automation_run(run_id);
@@ -15480,6 +15509,7 @@ fn list_automation_runs_cli(
             outcome["parameter_overrides"] = serde_json::json!(run.parameter_overrides);
             outcome["rerun_of"] = serde_json::json!(run.rerun_of);
             outcome["analyst_note"] = serde_json::json!(run.analyst_note);
+            outcome["regressions_reviewed"] = serde_json::json!(run.regressions_reviewed);
             if !run.configuration_recorded {
                 outcome["limits"] = serde_json::Value::Null;
                 outcome["capture_limits_pass"] = serde_json::Value::Null;
