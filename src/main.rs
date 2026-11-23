@@ -2861,10 +2861,40 @@ impl App {
                             .map_err(|error| error.to_string())?;
                         save_case_atomically(path, &worker.case)?;
                         worker.disk_case_json = Some(serialized.clone());
+                        let run = worker
+                            .case
+                            .automation_runs
+                            .last()
+                            .filter(|run| run.job_id == job.id)
+                            .ok_or_else(|| "automation checkpoint is missing its run record".to_owned())?;
+                        let snapshot = run.snapshot_id.and_then(|id| {
+                            worker.case.snapshots.iter().find(|snapshot| snapshot.id == id)
+                        });
+                        let summary = snapshot.map_or_else(
+                            || "no snapshot".to_owned(),
+                            |snapshot| {
+                                let regressions = run
+                                    .snapshot_index
+                                    .and_then(|index| previous_snapshot_index(&worker.case, index))
+                                    .and_then(|index| worker.case.snapshots.get(index))
+                                    .map(|baseline| {
+                                        compare_snapshots(baseline, snapshot)
+                                            .iter()
+                                            .filter(|delta| delta.kinds.iter().any(|kind| matches!(kind, DeltaKind::Removed | DeltaKind::ConfidenceDeclined)))
+                                            .count()
+                                    })
+                                    .unwrap_or_default();
+                                format!(
+                                    "{} connections · {} skipped · {regressions} regressions",
+                                    snapshot.connections.len(), snapshot.skipped_rows
+                                )
+                            },
+                        );
                         update_progress(format!(
-                            "Saved checkpoint {} of {job_count} · {}",
+                            "Saved checkpoint {} of {job_count} · {} · {} · {summary}",
                             index + 1,
-                            job.name
+                            job.name,
+                            if run.success { "PASS" } else { "FAIL" },
                         ));
                     }
                     let status = if batch {
