@@ -37,14 +37,7 @@ if ! command -v python3 >/dev/null 2>&1; then
   echo "python3 is required to write the LaunchAgent plist." >&2
   exit 1
 fi
-if ! job_list_json=$("$binary" --list-jobs "$case_file" --enabled-only --json); then
-  echo "Arch Notebook could not read the case file: $case_file" >&2
-  exit 1
-fi
-if ! python3 -c 'import json, sys; raise SystemExit(0 if json.load(sys.stdin).get("enabled", 0) > 0 else 1)' <<<"$job_list_json"; then
-  echo "Enable at least one automation job in the case before installing its LaunchAgent." >&2
-  exit 1
-fi
+# One locked preflight checks that enabled jobs exist and their queries work.
 if ! "$binary" --check-enabled-job-queries "$case_file"; then
   echo "One or more enabled SQL jobs failed preflight; fix the job, database, or query before installing the LaunchAgent." >&2
   exit 1
