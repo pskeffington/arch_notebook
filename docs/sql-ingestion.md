@@ -9,6 +9,8 @@ sqlite3 /tmp/relational-transfers.sqlite < archive/research.databases/relational
 arch-notebook --inspect-sqlite /tmp/relational-transfers.sqlite --json
 ```
 
+The schema builder recognizes the transfer table’s sender/recipient account foreign keys and uses `owner_name` for endpoint labels, so it can suggest a joined query from this fixture.
+
 The query keeps account identity stable across refreshes, gives each transfer its own connection identity, and exposes fields for chart inspection and regression comparison:
 
 ```sql
