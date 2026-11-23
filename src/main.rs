@@ -9355,7 +9355,7 @@ impl eframe::App for App {
                                         (
                                             "TRANSFORM NEEDS REVIEW",
                                             egui::Color32::from_rgb(236, 174, 83),
-                                            "A transform needs a valid column and replace text before import.",
+                                            "A transform needs a valid column; replace transforms also need search text.",
                                         )
                                     } else if !preview_filters_valid {
                                         (
