@@ -4009,6 +4009,10 @@ impl App {
                     return;
                 }
             };
+        if let Err(error) = validate_automation_parameter_override_values(&parameter_overrides) {
+            self.status = format!("AUTOMATION OVERRIDE INVALID · {error}");
+            return;
+        }
         if !parameter_overrides.global.is_empty() && job_ids.len() != 1 {
             self.status = "SHARED OVERRIDES NEED ONE JOB · USE job::name=value FOR A BATCH".into();
             return;
@@ -6688,6 +6692,18 @@ fn parse_automation_parameter_overrides(
     Ok(overrides)
 }
 
+fn validate_automation_parameter_override_values(
+    overrides: &AutomationParameterOverrides,
+) -> Result<(), String> {
+    for (name, value) in &overrides.global {
+        sql_parameter_value(name, value)?;
+    }
+    for (_, name, value) in &overrides.scoped {
+        sql_parameter_value(name, value)?;
+    }
+    Ok(())
+}
+
 fn format_sql_parameters(parameters: &[(String, String)]) -> String {
     parameters
         .iter()
@@ -8156,6 +8172,12 @@ impl eframe::App for App {
                                     &self.automation_run_parameter_text,
                                 );
                                 let run_overrides_valid = run_parameter_overrides.is_ok();
+                                let run_override_values_valid = run_parameter_overrides
+                                    .as_ref()
+                                    .is_ok_and(|overrides| {
+                                        validate_automation_parameter_override_values(overrides)
+                                            .is_ok()
+                                    });
                                 let has_shared_run_overrides = run_parameter_overrides
                                     .as_ref()
                                     .is_ok_and(|overrides| !overrides.global.is_empty());
@@ -8181,6 +8203,22 @@ impl eframe::App for App {
                                     .default_open(!self.automation_run_parameter_text.is_empty())
                                     .show(ui, |ui| {
                                         ui.label(egui::RichText::new("For one job, enter name=value lines. For batches, scope each line as Job name or UUID::name=value. Effective values are recorded for replay and auditing; saved jobs and scheduled runs do not change.").small().color(muted));
+                                        if let Err(error) = &run_parameter_overrides {
+                                            ui.colored_label(egui::Color32::from_rgb(222, 112, 104), error);
+                                        } else if let Some(error) = run_parameter_overrides
+                                            .as_ref()
+                                            .ok()
+                                            .and_then(|overrides| validate_automation_parameter_override_values(overrides).err())
+                                        {
+                                            ui.colored_label(egui::Color32::from_rgb(222, 112, 104), format!("Invalid typed value · {error}"));
+                                        } else if let Ok(overrides) = &run_parameter_overrides {
+                                            for (name, value) in &overrides.global {
+                                                ui.label(format!("Shared override · {name} = {value}"));
+                                            }
+                                            for (selector, name, value) in &overrides.scoped {
+                                                ui.label(format!("{selector} · {name} = {value}"));
+                                            }
+                                        }
                                         ui.horizontal(|ui| {
                                             ui.add(egui::TextEdit::multiline(&mut self.automation_run_parameter_text)
                                                 .desired_width(canvas_w - 130.0)
@@ -8316,14 +8354,15 @@ impl eframe::App for App {
                                             enabled_job_count > 0
                                                 && automation_case_saved
                                                 && run_overrides_valid
+                                                && run_override_values_valid
                                                 && (enabled_job_count == 1
                                                     || !has_shared_run_overrides),
                                             egui::Button::new("Run enabled jobs and save"),
                                         )
                                         .on_disabled_hover_text(if !automation_case_saved {
                                             "Save the case and job changes before running automation."
-                                        } else if !run_overrides_valid {
-                                            "Fix the one-run override lines before running automation."
+                                        } else if !run_overrides_valid || !run_override_values_valid {
+                                            "Fix the one-run override syntax or typed values before running automation."
                                         } else if enabled_job_count == 0 {
                                             "Enable at least one job before running the batch."
                                         } else {
@@ -8493,14 +8532,15 @@ impl eframe::App for App {
                                             !visible_enabled_jobs.is_empty()
                                                 && automation_case_saved
                                                 && run_overrides_valid
+                                                && run_override_values_valid
                                                 && (visible_enabled_jobs.len() == 1
                                                     || !has_shared_run_overrides),
                                             egui::Button::new("Run visible enabled jobs and save"),
                                         )
                                         .on_disabled_hover_text(if !automation_case_saved {
                                             "Save the case and job changes before running automation."
-                                        } else if !run_overrides_valid {
-                                            "Fix the one-run override lines before running automation."
+                                        } else if !run_overrides_valid || !run_override_values_valid {
+                                            "Fix the one-run override syntax or typed values before running automation."
                                         } else if visible_enabled_jobs.is_empty() {
                                             "Enable a visible job before running this batch."
                                         } else {
@@ -9004,6 +9044,7 @@ impl eframe::App for App {
                                     ui.label("No imported source records yet. SQL, CSV/TSV, and GraphML provenance appears here after import.");
                                 }
                                 let mut automation_job_to_open = None;
+                                let mut snapshot_to_review = None;
                                 egui::ScrollArea::both().auto_shrink([false, false]).show(ui, |ui| {
                                     egui::Grid::new("data_source_inventory")
                                         .striped(true)
@@ -9072,11 +9113,27 @@ impl eframe::App for App {
                                                     {
                                                         automation_job_to_open = Some(job.id);
                                                     }
+                                                    if source_snapshot.is_some()
+                                                        && ui.small_button("Review SQL").clicked()
+                                                    {
+                                                        snapshot_to_review = source_snapshot.map(|snapshot| snapshot.id);
+                                                    }
                                                 });
                                                 ui.end_row();
                                             }
                                         });
                                 });
+                                if let Some(snapshot_id) = snapshot_to_review
+                                    && let Some(index) = self.case.snapshots.iter().position(|snapshot| snapshot.id == snapshot_id)
+                                {
+                                    self.sql_snapshot_source = Some(self.case.snapshots[index].source_key.clone());
+                                    self.sql_snapshot_index = Some(index);
+                                    self.sql_delta_filter = SnapshotDeltaFilter::All;
+                                    self.sql_delta_search.clear();
+                                    self.data_mode = DataMode::SqlRegressions;
+                                    self.page = WorkspacePage::Data;
+                                    self.show_timeline = false;
+                                }
                                 if let Some(job_id) = automation_job_to_open {
                                     self.edit_automation_job(job_id);
                                     self.data_mode = DataMode::Automation;
