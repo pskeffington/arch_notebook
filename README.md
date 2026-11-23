@@ -66,7 +66,7 @@ Set the maximum to 0 to reject any skipped row. Older jobs default to no skipped
 
 Use SQLite named parameters when a scheduled query needs a changing period, tenant, or threshold instead of editing the SQL each run. Enter one `name=value` per line in **SQL parameters** and reference it in the query with `:name`, `@name`, or `$name`. Unprefixed values bind as text; type a value with `text:`, `int:`, `real:`, `bool:`, or `null:` when SQLite should receive text, a 64-bit integer, a finite real, 0/1, or NULL. For example, use `snapshot_id=current`, `min_confidence=int:2`, and `include_unknown=bool:false`; `null:` binds SQL NULL and `text:null` binds the literal text `null`. Parameters are saved with the automation job, each immutable snapshot, and each run for reproducibility. For a one-off CLI run or preflight, repeat `--param name=value` to override or add parameter values without changing the saved job. For example, use `WHERE snapshot_id = :snapshot_id` with `snapshot_id=current`.
 
-Desktop batch runs save an atomic checkpoint after each job, then save the final batch summary. The command-line runner also saves after each job, preserving completed run history if a later query stalls or the process is interrupted.
+Desktop batch runs save an atomic checkpoint after each job, then save the final batch summary. If a later job or checkpoint step fails, the open app reloads the latest saved checkpoint and keeps the regression view focused on its newest snapshot. The command-line runner also saves after each job, preserving completed run history if a later query stalls or the process is interrupted.
 
 ```sh
 cargo run --offline -- --run-enabled-jobs harbor-light.case.json
