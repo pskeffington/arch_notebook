@@ -3840,6 +3840,7 @@ impl App {
         {
             self.sql_cleared_parameter_draft = None;
         }
+        self.show_cleared_sql_parameter_draft(ui);
         if self.sql_schema_template_source.as_ref() != Some(&current_source) {
             self.sql_schema_templates.clear();
             self.sql_schema_objects.clear();
@@ -4025,6 +4026,27 @@ impl App {
                             }
                         });
                     }
+                    ui.collapsing("Review connection-field mappings", |ui| {
+                        for (label, alias) in [
+                            ("Source type", "source_type"),
+                            ("Target type", "target_type"),
+                            ("Relationship", "relationship"),
+                            ("Date", "date"),
+                            ("Confidence", "confidence"),
+                            ("Direction", "directed"),
+                            ("Evidence reference", "source_reference"),
+                            ("Source notes", "notes"),
+                        ] {
+                            ui.horizontal(|ui| {
+                                ui.label(format!("{label}:"));
+                                if let Some(expression) = sqlite_query_projection(query, alias) {
+                                    ui.monospace(expression);
+                                } else {
+                                    ui.label("Not detected");
+                                }
+                            });
+                        }
+                    });
                     let attribute_projections = sqlite_query_attribute_projections(query);
                     ui.add_space(4.0);
                     if attribute_projections.is_empty() {
@@ -4071,6 +4093,22 @@ impl App {
                 .small(),
             );
         }
+        let apply_label = if template_matches_query {
+            "Selected query template is already applied"
+        } else if clears_parameters {
+            "Replace query and clear SQL parameters"
+        } else {
+            "Use selected query template"
+        };
+        if ui
+            .add_enabled(!template_matches_query, egui::Button::new(apply_label))
+            .clicked()
+        {
+            self.apply_sql_schema_template();
+        }
+    }
+
+    fn show_cleared_sql_parameter_draft(&mut self, ui: &mut egui::Ui) {
         if let Some((_, saved_parameters)) = self.sql_cleared_parameter_draft.clone() {
             ui.label("Previous SQL parameter values are saved here as an inactive draft.");
             ui.horizontal(|ui| {
@@ -4089,19 +4127,7 @@ impl App {
                     self.status = "PRIOR SQL PARAMETER DRAFT DISCARDED".into();
                 }
             });
-        }
-        let apply_label = if template_matches_query {
-            "Selected query template is already applied"
-        } else if clears_parameters {
-            "Replace query and clear SQL parameters"
-        } else {
-            "Use selected query template"
-        };
-        if ui
-            .add_enabled(!template_matches_query, egui::Button::new(apply_label))
-            .clicked()
-        {
-            self.apply_sql_schema_template();
+            ui.add_space(4.0);
         }
     }
 
@@ -11291,7 +11317,10 @@ impl eframe::App for App {
                                     if ui.button(if recovered_job_draft { "Save recovered job" } else if editing_saved_job { "Save job changes" } else { "Add job" }).clicked() { self.save_automation_job(); }
                                     if self.editing_automation_job.is_some() && ui.button(if recovered_job_draft { "Discard recovered draft" } else { "Cancel edit" }).clicked() { self.cancel_automation_job_edit(); }
                                 });
-                                if !self.sql_schema_templates.is_empty() || !self.sql_schema_objects.is_empty() {
+                                if !self.sql_schema_templates.is_empty()
+                                    || !self.sql_schema_objects.is_empty()
+                                    || self.sql_cleared_parameter_draft.is_some()
+                                {
                                     self.show_sql_schema_template_picker(ui);
                                 }
                                 ui.label(egui::RichText::new("A regression is a removed connection or confidence decline. Confidence floors, connection totals, regressions, additions, relationship-property changes, and skipped rows are evaluated independently; failed runs retain their captured snapshots.").small().color(muted));
@@ -12980,7 +13009,10 @@ impl eframe::App for App {
                                         self.save_sql_as_automation_job();
                                     }
                                 });
-                                if !self.sql_schema_templates.is_empty() || !self.sql_schema_objects.is_empty() {
+                                if !self.sql_schema_templates.is_empty()
+                                    || !self.sql_schema_objects.is_empty()
+                                    || self.sql_cleared_parameter_draft.is_some()
+                                {
                                     self.show_sql_schema_template_picker(ui);
                                 }
                                 Self::show_sql_validation_preview(
