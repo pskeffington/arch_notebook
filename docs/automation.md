@@ -82,10 +82,11 @@ List configured jobs as JSON without changing the case file:
 cargo run --offline -- --list-jobs harbor-light.case.json
 ```
 
-Add `--json` to get a schema-versioned object containing each job’s UUID, enabled state, database, series, SQL query and parameters, limits, and compact latest-run status/timestamps/message/snapshot ID. The latest-run object includes `schema_adaptation`: `required` is true when the saved failure matches a missing-table or missing-column error, `kind` identifies that error class, `reference` contains the referenced table or column when available, and `hint` suggests inspecting the current SQLite schema. These fields are null or false when the latest run does not need schema adaptation. The response also includes total, enabled, and returned counts. Use `--enabled-only` to inspect just the batch set; it can be combined with `--json`. Without `--json`, output remains a JSON array for compatibility.
+Add `--json` to get a schema-versioned object containing each job’s UUID, enabled state, database, series, SQL query and parameters, limits, and compact latest-run status/timestamps/message/snapshot ID. The latest-run object includes `schema_adaptation`: `required` is true when the saved failure matches a missing-table or missing-column error, `kind` identifies that error class, `reference` contains the referenced table or column when available, and `hint` suggests inspecting the current SQLite schema. These fields are null or false when the latest run does not need schema adaptation. The response also includes total, enabled, and returned counts. Use `--enabled-only` to inspect just the batch set or `--schema-adaptation-needed` to return jobs whose latest run failed with a recognized missing-table or missing-column error; the filters can be combined. In JSON, `total` and `enabled` describe the full job set and `returned` describes the filtered list. Without `--json`, output remains a JSON array for compatibility.
 
 ```sh
 cargo run --offline -- --list-jobs harbor-light.case.json --enabled-only --json
+cargo run --offline -- --list-jobs harbor-light.case.json --schema-adaptation-needed --json
 ```
 
 Automation run history keeps a separate analyst comment for review context without changing the captured SQL result or machine-generated run message. In **Automation**, expand a run, edit **Analyst comment**, then choose **Save comment** and save the case. For scheduler or review scripts, add or replace a comment using the run UUID from `--list-runs`:

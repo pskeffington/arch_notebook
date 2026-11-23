@@ -2,7 +2,14 @@
 
 ## Map relational records into a network
 
-For a common transaction schema with `accounts(id, owner_name, institution)` and `transfers(id, sender_account_id, recipient_account_id, occurred_at, amount, status)`, join each event to its endpoint records and return one row per relationship. This query keeps account identity stable across refreshes, gives each transfer its own connection identity, and exposes fields for chart inspection and regression comparison:
+For a common transaction schema with `accounts(id, owner_name, institution)` and `transfers(id, sender_account_id, recipient_account_id, occurred_at, amount, status)`, join each event to its endpoint records and return one row per relationship. A disposable synthetic database matching this schema is provided in `archive/research.databases/relational_transfers.sql`:
+
+```sh
+sqlite3 /tmp/relational-transfers.sqlite < archive/research.databases/relational_transfers.sql
+arch-notebook --inspect-sqlite /tmp/relational-transfers.sqlite --json
+```
+
+The query keeps account identity stable across refreshes, gives each transfer its own connection identity, and exposes fields for chart inspection and regression comparison:
 
 ```sql
 SELECT
@@ -32,6 +39,15 @@ ORDER BY transfer.occurred_at, transfer.id;
 ```
 
 Set **SQL parameters** to `start_date=text:2025-01-01` and `end_date=text:2025-02-01` (one per line). The half-open interval includes the start and excludes the end, so adjacent monthly captures do not overlap. Reuse the query and snapshot series while changing the parameter values to compare periods. The transfer ID matches parallel transfers independently; the account IDs preserve endpoint identity even if an owner name changes. If source IDs are only unique within a tenant or database partition, include that scope in the entity ID expression, such as `CAST(transfer.tenant_id AS TEXT) || ':' || CAST(sender.id AS TEXT)`. Check that the source columns use compatible date formatting and that each connection ID is unique in the selected period before capture.
+
+To walk through two periods, capture January with the values above, then capture February using `start_date=text:2025-02-01` and `end_date=text:2025-03-01` with the same database and series. To turn the query into a recurring job, save it from **Automation** with a stable series, then replace the two parameter predicates with SQLite's UTC calendar-month window. Remove the `start_date` and `end_date` values from **SQL parameters** before validating, because the recurring query no longer uses those bindings:
+
+```sql
+WHERE transfer.occurred_at >= date('now', 'start of month', '-1 month')
+  AND transfer.occurred_at < date('now', 'start of month')
+```
+
+Each scheduled capture then reads the previous complete UTC month without changing the saved SQL text or parameters. Choose a schedule that runs after the source has finished loading that month; run history retains the capture time and immutable query result for review.
 
 SQL queries can also capture custom relationship properties by aliasing values as `connection_attribute:<name>`, for example `transaction.amount AS "connection_attribute:amount"`. They persist with immutable snapshots, appear in validation and before/after comparisons, and are included in snapshot and comparison CSV/TSV exports. Use the **Relationship properties** filter to isolate captures where these values changed. Properties appear in chart search and the selected-link inspector; SQL-owned values refresh from each query and are read-only there. The schema query builder recognizes columns prefixed `connection_attribute_` or `link_attribute_` and aliases them for capture.
 

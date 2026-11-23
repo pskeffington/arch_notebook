@@ -21394,6 +21394,7 @@ fn list_automation_jobs_cli(
     case_path: &str,
     json_output: bool,
     enabled_only: bool,
+    schema_adaptation_needed: bool,
 ) -> Result<(), String> {
     let content =
         fs::read_to_string(case_path).map_err(|error| format!("cannot read case: {error}"))?;
@@ -21408,7 +21409,18 @@ fn list_automation_jobs_cli(
     let jobs: Vec<serde_json::Value> = case
         .automation_jobs
         .iter()
-        .filter(|job| !enabled_only || job.enabled)
+        .filter(|job| {
+            (!enabled_only || job.enabled)
+                && (!schema_adaptation_needed
+                    || case
+                        .automation_runs
+                        .iter()
+                        .rev()
+                        .find(|run| run.job_id == job.id)
+                        .is_some_and(|run| {
+                            !run.success && sql_schema_adaptation_kind(&run.message).is_some()
+                        }))
+        })
         .map(|job| {
             let latest_run = case
                 .automation_runs
@@ -21462,7 +21474,10 @@ fn list_automation_jobs_cli(
             serde_json::to_string_pretty(&serde_json::json!({
                 "schema_version": 1,
                 "case": case_path,
-                "filter": {"enabled_only": enabled_only},
+                "filter": {
+                    "enabled_only": enabled_only,
+                    "schema_adaptation_needed": schema_adaptation_needed,
+                },
                 "total": total,
                 "enabled": enabled,
                 "returned": jobs.len(),
@@ -22952,7 +22967,7 @@ fn main() -> eframe::Result<()> {
         .is_some_and(|arg| arg == "--help" || arg == "-h")
     {
         println!(
-            "Arch Notebook\n\nUsage:\n  arch-notebook\n  arch-notebook --version [--json]\n  arch-notebook --inspect-sqlite <database.sqlite> [--json]\n  arch-notebook --import-graphml <case.json> <input.graphml> [--json]\n  arch-notebook --export-graphml <case.json> <output.graphml> [--json]\n  arch-notebook --export-kml <case.json> <output.kml> [--json]\n  arch-notebook --export-sql-snapshot <case.json> <snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --export-sql-series <case.json> <snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --export-sql-comparison <case.json> <baseline-snapshot-id> <current-snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --export-job <case.json> <job-name-or-id> <output.json> [--json]\n  arch-notebook --export-path <case.json> <path-name-or-id> <output.json> [--json]\n  arch-notebook --import-path <case.json> <input.json> [--name <path-name>] [--json]\n  arch-notebook --import-job <case.json> <input.json> [--name <job-name>] [--database <path>] [--series <label>] [--param name=value ...] [--json]\n  arch-notebook --export-import-design <case.json> <design-name-or-id> <output.json> [--json]\n  arch-notebook --import-import-design <case.json> <input.json> [--name <design-name>] [--json]\n  arch-notebook --list-jobs <case.json> [--enabled-only] [--json]\n  arch-notebook --list-batches <case.json> [--json]\n  arch-notebook --list-runs <case.json> [--json] [--job <name-or-id>] [--trigger <desktop|scheduled|cli|replay|legacy>] [--schema-adaptation-needed] [--offset <count>] [--limit <count>]\n  arch-notebook --export-runs <case.json> <output.csv|tsv> [--job <name-or-id>] [--trigger <desktop|scheduled|cli|replay|legacy>] [--schema-adaptation-needed] [--offset <count>] [--limit <count>] [--json]\n  arch-notebook --explain-job <case.json> <job-name-or-id> [--param name=value ...] [--json]\n  arch-notebook --validate-job <case.json> <job-name-or-id> [--query-only] [--param name=value ...] [--json]\n  arch-notebook --validate-enabled-jobs <case.json> [--json] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --check-enabled-job-queries <case.json> [--json] [--require-usable] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --validate-run <case.json> <run-id> [--json]\n  arch-notebook --run-enabled-jobs <case.json> [--json] [--resume-batch <batch-id>] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --run-job <case.json> <job-name-or-id> [--param name=value ...] [--resume-batch <batch-id>] [--json]\n  arch-notebook --rerun-run <case.json> <run-id> [--json]\n\nJob and import design packages contain portable configuration, not case data or run history. Batch runs save snapshots and run history to the case file. JSON output is available for scheduler integration."
+            "Arch Notebook\n\nUsage:\n  arch-notebook\n  arch-notebook --version [--json]\n  arch-notebook --inspect-sqlite <database.sqlite> [--json]\n  arch-notebook --import-graphml <case.json> <input.graphml> [--json]\n  arch-notebook --export-graphml <case.json> <output.graphml> [--json]\n  arch-notebook --export-kml <case.json> <output.kml> [--json]\n  arch-notebook --export-sql-snapshot <case.json> <snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --export-sql-series <case.json> <snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --export-sql-comparison <case.json> <baseline-snapshot-id> <current-snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --export-job <case.json> <job-name-or-id> <output.json> [--json]\n  arch-notebook --export-path <case.json> <path-name-or-id> <output.json> [--json]\n  arch-notebook --import-path <case.json> <input.json> [--name <path-name>] [--json]\n  arch-notebook --import-job <case.json> <input.json> [--name <job-name>] [--database <path>] [--series <label>] [--param name=value ...] [--json]\n  arch-notebook --export-import-design <case.json> <design-name-or-id> <output.json> [--json]\n  arch-notebook --import-import-design <case.json> <input.json> [--name <design-name>] [--json]\n  arch-notebook --list-jobs <case.json> [--enabled-only] [--schema-adaptation-needed] [--json]\n  arch-notebook --list-batches <case.json> [--json]\n  arch-notebook --list-runs <case.json> [--json] [--job <name-or-id>] [--trigger <desktop|scheduled|cli|replay|legacy>] [--schema-adaptation-needed] [--offset <count>] [--limit <count>]\n  arch-notebook --export-runs <case.json> <output.csv|tsv> [--job <name-or-id>] [--trigger <desktop|scheduled|cli|replay|legacy>] [--schema-adaptation-needed] [--offset <count>] [--limit <count>] [--json]\n  arch-notebook --explain-job <case.json> <job-name-or-id> [--param name=value ...] [--json]\n  arch-notebook --validate-job <case.json> <job-name-or-id> [--query-only] [--param name=value ...] [--json]\n  arch-notebook --validate-enabled-jobs <case.json> [--json] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --check-enabled-job-queries <case.json> [--json] [--require-usable] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --validate-run <case.json> <run-id> [--json]\n  arch-notebook --run-enabled-jobs <case.json> [--json] [--resume-batch <batch-id>] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --run-job <case.json> <job-name-or-id> [--param name=value ...] [--resume-batch <batch-id>] [--json]\n  arch-notebook --rerun-run <case.json> <run-id> [--json]\n\nJob and import design packages contain portable configuration, not case data or run history. Batch runs save snapshots and run history to the case file. JSON output is available for scheduler integration."
         );
         println!("  arch-notebook --annotate-run <case.json> <run-id> <comment> [--json]");
         println!(
@@ -23304,13 +23319,15 @@ fn main() -> eframe::Result<()> {
     }
     if args.first().is_some_and(|arg| arg == "--list-jobs") {
         let json_output = args.iter().any(|arg| arg == "--json");
-        let usage = "usage: arch-notebook --list-jobs <case.json> [--enabled-only] [--json]";
+        let usage = "usage: arch-notebook --list-jobs <case.json> [--enabled-only] [--schema-adaptation-needed] [--json]";
         let Some(case_path) = args.get(1) else {
             report_cli_usage_error(usage, json_output);
         };
         let mut enabled_only = false;
+        let mut schema_adaptation_needed = false;
         let mut seen_json = false;
         let mut seen_enabled_only = false;
+        let mut seen_schema_adaptation_needed = false;
         for option in args.iter().skip(2) {
             match option.as_str() {
                 "--json" if !seen_json => seen_json = true,
@@ -23318,10 +23335,19 @@ fn main() -> eframe::Result<()> {
                     seen_enabled_only = true;
                     enabled_only = true;
                 }
+                "--schema-adaptation-needed" if !seen_schema_adaptation_needed => {
+                    seen_schema_adaptation_needed = true;
+                    schema_adaptation_needed = true;
+                }
                 _ => report_cli_usage_error(usage, json_output),
             }
         }
-        if let Err(error) = list_automation_jobs_cli(case_path, json_output, enabled_only) {
+        if let Err(error) = list_automation_jobs_cli(
+            case_path,
+            json_output,
+            enabled_only,
+            schema_adaptation_needed,
+        ) {
             report_cli_error("job listing failed", error, json_output);
         }
         return Ok(());

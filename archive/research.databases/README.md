@@ -6,6 +6,7 @@ This directory holds small, fictional fixtures used to demonstrate SQLite ingest
 
 - `sample_connections.sql` is the editable source of the baseline/current example. It intentionally drops and recreates only `connection_observations` in the destination database.
 - `sample_connections.sqlite` is the ready-to-open SQLite copy of that example. The app opens source databases read-only; regenerate this fixture only as an explicit archive maintenance change.
+- `relational_transfers.sql` creates a synthetic `accounts`/`transfers` schema for the relational SQL ingestion walkthrough. It intentionally replaces only those two tables in its destination database; build it in `/tmp` as shown in the guide.
 - `sample_relationships.csv` is the matching tabular import/export example.
 
 To rebuild the SQLite fixture from the repository root, write to a temporary file first, inspect it, then replace the tracked fixture as part of a reviewed change:
