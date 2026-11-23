@@ -8263,7 +8263,17 @@ impl eframe::App for App {
                         egui::ScrollArea::vertical().show(ui,|ui| for ent in sorted {
                             if !self.query.is_empty() && !format!("{} {} {}",ent.name,ent.kind,ent.detail).to_lowercase().contains(&self.query.to_lowercase()) {continue;}
                             let chosen=self.selected==Some(ent.id);
-                            if ui.selectable_label(chosen,format!("● {}",ent.name)).clicked(){self.selected=Some(ent.id);self.selected_link=None;}
+                            if ui.selectable_label(chosen,format!("● {}",ent.name)).clicked(){
+                                self.selected=Some(ent.id);
+                                self.selected_link=None;
+                                self.chart_focus=Some(ent.id);
+                                self.chart_focus_link=None;
+                                self.chart_fit_entities=None;
+                                self.chart_fit_path=None;
+                                self.chart_focus_group=None;
+                                self.sql_source_focus=None;
+                                self.path_result.clear();
+                            }
                         });
                     });
                     });
