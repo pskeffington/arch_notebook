@@ -524,6 +524,7 @@ struct App {
     import_record_count: usize,
     import_inspection_worker: Option<Receiver<Result<DelimitedImportInspection, String>>>,
     import_inspection_cancel: Option<Arc<AtomicBool>>,
+    import_inspection_progress: Option<Arc<std::sync::atomic::AtomicUsize>>,
     import_column_mapping: ImportColumnMapping,
     import_spec_name: String,
     selected_import_spec: Option<Uuid>,
@@ -914,6 +915,7 @@ impl Default for App {
             import_record_count: 0,
             import_inspection_worker: None,
             import_inspection_cancel: None,
+            import_inspection_progress: None,
             import_column_mapping: ImportColumnMapping::default(),
             import_spec_name: String::new(),
             selected_import_spec: None,
@@ -1206,6 +1208,7 @@ impl App {
             import_record_count: 0,
             import_inspection_worker: None,
             import_inspection_cancel: None,
+            import_inspection_progress: None,
             import_column_mapping: ImportColumnMapping::default(),
             import_spec_name: String::new(),
             selected_import_spec: None,
@@ -1514,10 +1517,16 @@ impl App {
         let (sender, receiver) = mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));
         let worker_cancel = Arc::clone(&cancel);
+        let progress = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let worker_progress = Arc::clone(&progress);
         let spawn_result = thread::Builder::new()
             .name("arch-notebook-delimited-inspection".into())
             .spawn(move || {
-                let _ = sender.send(inspect_delimited_file(&input_path, &worker_cancel));
+                let _ = sender.send(inspect_delimited_file(
+                    &input_path,
+                    &worker_cancel,
+                    &worker_progress,
+                ));
             });
         match spawn_result {
             Ok(_) => {
@@ -1525,6 +1534,7 @@ impl App {
                 self.import_preview.clear();
                 self.import_inspection_worker = Some(receiver);
                 self.import_inspection_cancel = Some(cancel);
+                self.import_inspection_progress = Some(progress);
                 self.status = "IMPORT INSPECTION RUNNING · READING CSV/TSV ROWS".into();
             }
             Err(error) => {
@@ -6802,11 +6812,13 @@ impl eframe::App for App {
                 Ok(Ok(inspection)) => {
                     self.import_inspection_worker = None;
                     self.import_inspection_cancel = None;
+                    self.import_inspection_progress = None;
                     self.apply_delimited_import_inspection(inspection);
                 }
                 Ok(Err(error)) => {
                     self.import_inspection_worker = None;
                     self.import_inspection_cancel = None;
+                    self.import_inspection_progress = None;
                     self.status = if error == "inspection cancelled" {
                         "IMPORT INSPECTION CANCELLED".into()
                     } else {
@@ -6816,6 +6828,7 @@ impl eframe::App for App {
                 Err(mpsc::TryRecvError::Disconnected) => {
                     self.import_inspection_worker = None;
                     self.import_inspection_cancel = None;
+                    self.import_inspection_progress = None;
                     self.status =
                         "IMPORT INSPECTION FAILED · background worker stopped unexpectedly".into();
                 }
@@ -7192,7 +7205,10 @@ impl eframe::App for App {
                         }
                     });
                     if self.import_inspection_worker.is_some() {
-                        ui.label("Inspecting CSV/TSV…");
+                        let scanned = self.import_inspection_progress.as_ref().map_or(0, |progress| {
+                            progress.load(Ordering::Relaxed)
+                        });
+                        ui.label(format!("Inspecting CSV/TSV · {scanned} rows scanned"));
                         if ui.button("Cancel inspection").clicked() {
                             if let Some(cancel) = &self.import_inspection_cancel {
                                 cancel.store(true, Ordering::Relaxed);
@@ -9918,6 +9934,7 @@ fn delimited_text_delimiter(path: &str) -> u8 {
 fn inspect_delimited_file(
     path: &Path,
     cancel: &AtomicBool,
+    progress: &std::sync::atomic::AtomicUsize,
 ) -> Result<DelimitedImportInspection, String> {
     let delimiter = delimited_text_delimiter(&path.to_string_lossy());
     let mut reader = csv::ReaderBuilder::new()
@@ -9937,6 +9954,7 @@ fn inspect_delimited_file(
         }
         let record = record.map_err(|error| error.to_string())?;
         record_count += 1;
+        progress.store(record_count, Ordering::Relaxed);
         if preview.len() < 4 {
             preview.push(record.iter().map(str::to_owned).collect());
         }
