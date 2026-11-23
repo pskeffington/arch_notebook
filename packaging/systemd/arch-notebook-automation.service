@@ -3,6 +3,6 @@ Description=Run Arch Notebook SQL automation jobs
 
 [Service]
 Type=oneshot
-TimeoutStartSec=1h
+TimeoutStartSec=infinity
 Environment=ARCH_NOTEBOOK_AUTOMATION_TRIGGER=scheduled
 ExecStart=/usr/bin/arch-notebook --run-enabled-jobs %h/.local/share/arch-notebook/harbor-light.case.json
