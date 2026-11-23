@@ -6621,12 +6621,13 @@ fn automation_run_matches_filter(
         && has_unreviewed_regression
         && (filter.is_empty()
             || format!(
-                "{} {} {} {} {} {} {} {} {} {}",
+                "{} {} {} {} {} {} {} {} {} {} {}",
                 result,
                 run.job_name,
                 run.database_path,
                 run.series,
                 run.query,
+                format_sql_parameters(&run.parameters),
                 run.message,
                 run.analyst_note,
                 run.started_at,
