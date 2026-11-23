@@ -10369,7 +10369,11 @@ impl eframe::App for App {
                                     timeline_rect.right_top() + egui::vec2(-100.0, 4.0),
                                     egui::vec2(92.0, 18.0),
                                 );
-                                if self.show_timeline && timeline_rect.contains(pos) && !clear_rect.contains(pos) {
+                                if self.show_timeline
+                                    && !self.chart_navigator_dragging
+                                    && timeline_rect.contains(pos)
+                                    && !clear_rect.contains(pos)
+                                {
                                     self.timeline_brush_anchor = timeline_date_at_x(
                                         &self.case.links,
                                         timeline_rect,
