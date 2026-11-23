@@ -415,6 +415,7 @@ struct GraphMlDocument {
 struct ImportColumnMapping {
     trim_whitespace: bool,
     row_filters: Vec<ImportRowFilter>,
+    value_transforms: Vec<ImportValueTransform>,
     source: String,
     target: String,
     source_type: String,
@@ -446,6 +447,23 @@ struct ImportColumnMapping {
     source_position_locked: String,
     target_position_locked: String,
     entity_attributes: Vec<ImportAttributeMapping>,
+}
+
+#[derive(Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+struct ImportValueTransform {
+    column: String,
+    operation: ImportTransformOperation,
+    find: String,
+    replace: String,
+}
+
+#[derive(Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+enum ImportTransformOperation {
+    #[default]
+    Replace,
+    Lowercase,
+    Uppercase,
 }
 
 #[derive(Clone, Default, Serialize, Deserialize)]
@@ -1147,6 +1165,7 @@ impl App {
                 let inferred_mapping = ImportColumnMapping {
                     trim_whitespace: false,
                     row_filters: Vec::new(),
+                    value_transforms: Vec::new(),
                     source: infer(&["source", "from", "entity_a"]),
                     target: infer(&["target", "to", "entity_b"]),
                     source_type: infer(&["source_type", "from_type", "entity_a_type"]),
@@ -1419,6 +1438,38 @@ impl App {
                     .ok_or_else(|| format!("row filter column is missing: {}", filter.column))?;
                 row_filters.push((index, filter.operator, filter.value.clone()));
             }
+            let mut value_transforms = Vec::new();
+            for transform in &mapping.value_transforms {
+                if transform.column.is_empty()
+                    && transform.find.is_empty()
+                    && transform.replace.is_empty()
+                {
+                    continue;
+                }
+                if transform.column.is_empty() {
+                    return Err("value transforms need a column".into());
+                }
+                let index = headers
+                    .iter()
+                    .position(|header| header.eq_ignore_ascii_case(&transform.column))
+                    .ok_or_else(|| {
+                        format!("value transform column is missing: {}", transform.column)
+                    })?;
+                if transform.operation == ImportTransformOperation::Replace
+                    && transform.find.is_empty()
+                {
+                    return Err(format!(
+                        "replace transform for {} needs text to find",
+                        transform.column
+                    ));
+                }
+                value_transforms.push((
+                    index,
+                    transform.operation,
+                    transform.find.clone(),
+                    transform.replace.clone(),
+                ));
+            }
             let mut created = 0;
             let mut updated = 0;
             let mut skipped = 0;
@@ -1472,11 +1523,27 @@ impl App {
             }
             for row in reader.records() {
                 let row = row.map_err(|e| e.to_string())?;
-                let row: csv::StringRecord = if mapping.trim_whitespace {
-                    row.iter().map(str::trim).collect()
-                } else {
-                    row
-                };
+                let mut values: Vec<String> = row
+                    .iter()
+                    .map(|value| {
+                        if mapping.trim_whitespace {
+                            value.trim().to_owned()
+                        } else {
+                            value.to_owned()
+                        }
+                    })
+                    .collect();
+                for (index, operation, find, replace) in &value_transforms {
+                    let value = values.get_mut(*index).ok_or_else(|| {
+                        format!("value transform column index is out of range: {index}")
+                    })?;
+                    *value = match operation {
+                        ImportTransformOperation::Replace => value.replace(find, replace),
+                        ImportTransformOperation::Lowercase => value.to_lowercase(),
+                        ImportTransformOperation::Uppercase => value.to_uppercase(),
+                    };
+                }
+                let row = csv::StringRecord::from(values);
                 let included = row_filters.iter().all(|(index, operator, expected)| {
                     let value = row.get(*index).unwrap_or("");
                     match operator {
@@ -7843,8 +7910,23 @@ impl eframe::App for App {
                             });
                             for row in &self.import_preview {
                                 ui.horizontal_wrapped(|ui| {
-                                    for value in row {
-                                        ui.label(value);
+                                    for (column_index, value) in row.iter().enumerate() {
+                                        let mut normalized = if self.import_column_mapping.trim_whitespace {
+                                            value.trim().to_owned()
+                                        } else {
+                                            value.clone()
+                                        };
+                                        for transform in &self.import_column_mapping.value_transforms {
+                                            if self.import_headers.get(column_index).is_some_and(|header| header.eq_ignore_ascii_case(&transform.column)) {
+                                                normalized = match transform.operation {
+                                                    ImportTransformOperation::Replace if !transform.find.is_empty() => normalized.replace(&transform.find, &transform.replace),
+                                                    ImportTransformOperation::Replace => normalized,
+                                                    ImportTransformOperation::Lowercase => normalized.to_lowercase(),
+                                                    ImportTransformOperation::Uppercase => normalized.to_uppercase(),
+                                                };
+                                            }
+                                        }
+                                        ui.label(normalized).on_hover_text(format!("Original: {value}"));
                                         ui.separator();
                                     }
                                 });
@@ -7981,6 +8063,52 @@ impl eframe::App for App {
                         }
                         if ui.small_button("＋ Row filter").clicked() {
                             self.import_column_mapping.row_filters.push(ImportRowFilter::default());
+                        }
+                        ui.separator();
+                        ui.label(egui::RichText::new("NORMALIZE COLUMN VALUES").strong());
+                        ui.label(egui::RichText::new("Transforms run before row filters and mapping; saved designs reuse them on later imports.").small());
+                        let mut remove_transform = None;
+                        for (index, transform) in self
+                            .import_column_mapping
+                            .value_transforms
+                            .iter_mut()
+                            .enumerate()
+                        {
+                            ui.horizontal(|ui| {
+                                egui::ComboBox::from_id_salt(("transform_column", index))
+                                    .selected_text(if transform.column.is_empty() { "Choose column" } else { &transform.column })
+                                    .show_ui(ui, |ui| {
+                                        ui.selectable_value(&mut transform.column, String::new(), "Choose column");
+                                        for header in &self.import_headers {
+                                            ui.selectable_value(&mut transform.column, header.clone(), header);
+                                        }
+                                    });
+                                egui::ComboBox::from_id_salt(("transform_operation", index))
+                                    .selected_text(match transform.operation {
+                                        ImportTransformOperation::Replace => "Replace text",
+                                        ImportTransformOperation::Lowercase => "Lowercase",
+                                        ImportTransformOperation::Uppercase => "Uppercase",
+                                    })
+                                    .show_ui(ui, |ui| {
+                                        ui.selectable_value(&mut transform.operation, ImportTransformOperation::Replace, "Replace text");
+                                        ui.selectable_value(&mut transform.operation, ImportTransformOperation::Lowercase, "Lowercase");
+                                        ui.selectable_value(&mut transform.operation, ImportTransformOperation::Uppercase, "Uppercase");
+                                    });
+                                if transform.operation == ImportTransformOperation::Replace {
+                                    ui.add(egui::TextEdit::singleline(&mut transform.find).hint_text("Find").desired_width(90.0));
+                                    ui.label("with");
+                                    ui.add(egui::TextEdit::singleline(&mut transform.replace).hint_text("Replace").desired_width(90.0));
+                                }
+                                if ui.small_button("×").clicked() {
+                                    remove_transform = Some(index);
+                                }
+                            });
+                        }
+                        if let Some(index) = remove_transform {
+                            self.import_column_mapping.value_transforms.remove(index);
+                        }
+                        if ui.small_button("＋ Value transform").clicked() {
+                            self.import_column_mapping.value_transforms.push(ImportValueTransform::default());
                         }
                     });
                     ui.add_space(8.0);
@@ -8322,6 +8450,9 @@ fn remap_import_mapping_headers(mapping: &mut ImportColumnMapping, headers: &[St
     }
     for filter in &mut mapping.row_filters {
         remap_import_column(&mut filter.column, headers);
+    }
+    for transform in &mut mapping.value_transforms {
+        remap_import_column(&mut transform.column, headers);
     }
 }
 
