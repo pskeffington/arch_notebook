@@ -460,6 +460,7 @@ struct SqlValidationPreview {
     captured_at: String,
     connection_count: usize,
     skipped_rows: usize,
+    result_quality: String,
     connections: Vec<ConnectionFact>,
 }
 
@@ -2933,6 +2934,18 @@ impl App {
         self.status = format!("AUTOMATION JOB ADDED · {name}");
     }
 
+    fn save_sql_as_automation_job(&mut self) {
+        let job_count = self.case.automation_jobs.len();
+        self.save_automation_job();
+        if self.case.automation_jobs.len() > job_count
+            && self.status.starts_with("AUTOMATION JOB ADDED")
+        {
+            self.page = WorkspacePage::Data;
+            self.show_timeline = false;
+            self.data_mode = DataMode::Automation;
+        }
+    }
+
     fn export_automation_job_package(&mut self, id: Uuid) {
         let Some(job) = self
             .case
@@ -3038,6 +3051,7 @@ impl App {
                 captured_at: snapshot.captured_at.clone(),
                 connection_count: snapshot.connections.len(),
                 skipped_rows: snapshot.skipped_rows,
+                result_quality: snapshot_result_quality(snapshot).into(),
                 connections: snapshot.connections.iter().take(8).cloned().collect(),
             });
         let validation_message = if self.status.starts_with("SQL SNAPSHOT INGESTED") {
@@ -3146,8 +3160,26 @@ impl App {
         }) else {
             return;
         };
+        let quality_color = match preview.result_quality.as_str() {
+            "empty_result" | "all_rows_skipped" => egui::Color32::from_rgb(232, 116, 97),
+            "partially_skipped" => egui::Color32::from_rgb(236, 174, 83),
+            _ => egui::Color32::from_rgb(102, 190, 146),
+        };
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("VALIDATION RESULT").small().strong());
+            ui.colored_label(
+                quality_color,
+                egui::RichText::new(snapshot_result_quality_label(&preview.result_quality))
+                    .strong(),
+            );
+            ui.label(format!(
+                "{} usable connections · {} skipped rows",
+                preview.connection_count, preview.skipped_rows
+            ));
+        });
         egui::CollapsingHeader::new(format!(
-            "VALIDATED ROW PREVIEW · {} CONNECTIONS",
+            "SQL ROW PREVIEW · {} OF {} CONNECTIONS",
+            preview.connections.len(),
             preview.connection_count
         ))
         .id_salt("sql_validation_preview")
@@ -6723,27 +6755,33 @@ impl eframe::App for App {
                 }
             }
         }
-        let (save, save_as, delete, escape, workspace_shortcut, automation_shortcut) =
-            ctx.input(|input| {
-                (
-                    input.key_pressed(egui::Key::S) && input.modifiers.command,
-                    input.key_pressed(egui::Key::S)
-                        && input.modifiers.command
-                        && input.modifiers.shift,
-                    input.key_pressed(egui::Key::Delete),
-                    input.key_pressed(egui::Key::Escape),
-                    if input.modifiers.command && input.key_pressed(egui::Key::Num1) {
-                        Some((WorkspacePage::Chart, false))
-                    } else if input.modifiers.command && input.key_pressed(egui::Key::Num2) {
-                        Some((WorkspacePage::Chart, true))
-                    } else if input.modifiers.command && input.key_pressed(egui::Key::Num3) {
-                        Some((WorkspacePage::Data, false))
-                    } else {
-                        None
-                    },
-                    input.modifiers.command && input.key_pressed(egui::Key::Num4),
-                )
-            });
+        let (
+            save,
+            save_as,
+            delete,
+            escape,
+            workspace_shortcut,
+            automation_shortcut,
+            sql_review_shortcut,
+        ) = ctx.input(|input| {
+            (
+                input.key_pressed(egui::Key::S) && input.modifiers.command,
+                input.key_pressed(egui::Key::S) && input.modifiers.command && input.modifiers.shift,
+                input.key_pressed(egui::Key::Delete),
+                input.key_pressed(egui::Key::Escape),
+                if input.modifiers.command && input.key_pressed(egui::Key::Num1) {
+                    Some((WorkspacePage::Chart, false))
+                } else if input.modifiers.command && input.key_pressed(egui::Key::Num2) {
+                    Some((WorkspacePage::Chart, true))
+                } else if input.modifiers.command && input.key_pressed(egui::Key::Num3) {
+                    Some((WorkspacePage::Data, false))
+                } else {
+                    None
+                },
+                input.modifiers.command && input.key_pressed(egui::Key::Num4),
+                input.modifiers.command && input.key_pressed(egui::Key::Num5),
+            )
+        });
         if save_as {
             self.save_as();
         } else if save {
@@ -6759,6 +6797,11 @@ impl eframe::App for App {
             self.page = WorkspacePage::Data;
             self.show_timeline = false;
             self.data_mode = DataMode::Automation;
+        }
+        if sql_review_shortcut && !ctx.wants_keyboard_input() {
+            self.page = WorkspacePage::Data;
+            self.show_timeline = false;
+            self.data_mode = DataMode::SqlRegressions;
         }
         if delete && self.pending_case_action.is_none() && !ctx.wants_keyboard_input() {
             self.delete_selected();
@@ -6813,6 +6856,13 @@ impl eframe::App for App {
                         self.page = WorkspacePage::Data;
                         self.show_timeline = false;
                         self.data_mode = DataMode::Automation;
+                    }
+                    let sql_review_active = self.page == WorkspacePage::Data
+                        && self.data_mode == DataMode::SqlRegressions;
+                    if ui.selectable_label(sql_review_active, "SQL REVIEW").clicked() {
+                        self.page = WorkspacePage::Data;
+                        self.show_timeline = false;
+                        self.data_mode = DataMode::SqlRegressions;
                     }
                     ui.separator();
                     if ui.button("＋ Entity").clicked() {
