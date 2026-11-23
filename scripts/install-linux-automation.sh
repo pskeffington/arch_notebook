@@ -253,6 +253,7 @@ Description=Run Arch Notebook SQL automation jobs
 [Service]
 Type=oneshot
 TimeoutStartSec=1h
+Environment=ARCH_NOTEBOOK_AUTOMATION_TRIGGER=scheduled
 ExecStart={command}
 """.format(command=" ".join(map(quote_exec_arg, [
     # Scheduler output goes to the journal; keep it to per-job summaries.

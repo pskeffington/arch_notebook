@@ -438,6 +438,8 @@ struct AutomationRun {
     enabled: bool,
     #[serde(default)]
     configuration_recorded: bool,
+    #[serde(default = "default_automation_run_trigger")]
+    trigger: String,
     started_at: String,
     finished_at: String,
     #[serde(default)]
@@ -452,6 +454,21 @@ struct AutomationRun {
     snapshot_id: Option<Uuid>,
     #[serde(default)]
     rerun_of: Option<Uuid>,
+}
+
+fn default_automation_run_trigger() -> String {
+    "legacy".into()
+}
+
+fn automation_run_trigger_label(trigger: &str) -> &str {
+    match trigger {
+        "desktop" => "Desktop",
+        "scheduled" => "Scheduled",
+        "cli" => "Command line",
+        "replay" => "Replay",
+        "legacy" => "Older run",
+        other => other,
+    }
 }
 
 struct SqlValidationPreview {
@@ -607,7 +624,9 @@ struct App {
     automation_worker: Option<Receiver<Result<AutomationWorkerResult, String>>>,
     automation_progress: Option<Arc<Mutex<String>>>,
     automation_schedule: String,
-    automation_schedule_worker: Option<Receiver<Result<String, String>>>,
+    automation_schedule_message: Option<(String, bool, String)>,
+    automation_schedule_target_path: Option<String>,
+    automation_schedule_worker: Option<Receiver<(String, Result<String, String>)>>,
 }
 
 enum AutomationWorkerResult {
@@ -996,6 +1015,8 @@ impl Default for App {
             automation_worker: None,
             automation_progress: None,
             automation_schedule: "hourly".into(),
+            automation_schedule_message: None,
+            automation_schedule_target_path: None,
             automation_schedule_worker: None,
         }
     }
@@ -1285,6 +1306,8 @@ impl App {
             automation_worker: None,
             automation_progress: None,
             automation_schedule: "hourly".into(),
+            automation_schedule_message: None,
+            automation_schedule_target_path: None,
             automation_schedule_worker: None,
         }
     }
@@ -1311,12 +1334,15 @@ impl App {
             return;
         }
         let schedule = self.automation_schedule.clone();
+        let case_label = case_path.to_string_lossy().into_owned();
         let (sender, receiver) = mpsc::channel();
         self.automation_schedule_worker = Some(receiver);
+        self.automation_schedule_message = None;
+        self.automation_schedule_target_path = Some(case_label.clone());
         self.status = format!("INSTALLING {schedule} SQL AUTOMATION SCHEDULE");
         thread::spawn(move || {
             let result = install_automation_schedule_command(&case_path, &schedule);
-            let _ = sender.send(result);
+            let _ = sender.send((case_label, result));
         });
     }
 
@@ -1325,12 +1351,15 @@ impl App {
             return;
         }
         let case_path = PathBuf::from(self.case_path.trim());
+        let case_label = case_path.to_string_lossy().into_owned();
         let (sender, receiver) = mpsc::channel();
         self.automation_schedule_worker = Some(receiver);
+        self.automation_schedule_message = None;
+        self.automation_schedule_target_path = Some(case_label.clone());
         self.status = "REMOVING SQL AUTOMATION SCHEDULE".into();
         thread::spawn(move || {
             let result = remove_automation_schedule_command(&case_path);
-            let _ = sender.send(result);
+            let _ = sender.send((case_label, result));
         });
     }
 
@@ -1339,12 +1368,15 @@ impl App {
             return;
         }
         let case_path = PathBuf::from(self.case_path.trim());
+        let case_label = case_path.to_string_lossy().into_owned();
         let (sender, receiver) = mpsc::channel();
         self.automation_schedule_worker = Some(receiver);
+        self.automation_schedule_message = None;
+        self.automation_schedule_target_path = Some(case_label.clone());
         self.status = "CHECKING SQL AUTOMATION SCHEDULE".into();
         thread::spawn(move || {
             let result = check_automation_schedule_command(&case_path);
-            let _ = sender.send(result);
+            let _ = sender.send((case_label, result));
         });
     }
 
@@ -3857,7 +3889,12 @@ impl App {
                             index + 1,
                             job.name
                         ));
-                        if worker.run_automation_job_cli(&job).0 {
+                        let trigger = if rerun_of.is_some() {
+                            "replay"
+                        } else {
+                            "desktop"
+                        };
+                        if worker.execute_automation_job(&job, trigger).0 {
                             passed += 1;
                         }
                         if let Some(run_id) = rerun_of
@@ -4016,7 +4053,11 @@ impl App {
     }
 
     fn run_automation_job_cli(&mut self, job: &AutomationJob) -> (bool, String) {
-        self.execute_automation_job(job)
+        let trigger = match env::var("ARCH_NOTEBOOK_AUTOMATION_TRIGGER").as_deref() {
+            Ok("scheduled") => "scheduled",
+            _ => "cli",
+        };
+        self.execute_automation_job(job, trigger)
     }
 
     fn replay_saved_automation_run(&mut self, run_id: Uuid) {
@@ -4031,7 +4072,7 @@ impl App {
         );
     }
 
-    fn execute_automation_job(&mut self, job: &AutomationJob) -> (bool, String) {
+    fn execute_automation_job(&mut self, job: &AutomationJob, trigger: &str) -> (bool, String) {
         let elapsed = Instant::now();
         let started_at = epoch_timestamp();
         if let Some(existing) = self.case.automation_jobs.iter().find(|existing| {
@@ -4054,6 +4095,7 @@ impl App {
                 elapsed.elapsed().as_millis() as u64,
                 false,
                 message.clone(),
+                trigger,
                 None,
             );
             return (false, message);
@@ -4140,6 +4182,7 @@ impl App {
             elapsed.elapsed().as_millis() as u64,
             success,
             message.clone(),
+            trigger,
             snapshot_index,
         );
         (success, message)
@@ -4152,6 +4195,7 @@ impl App {
         duration_ms: u64,
         success: bool,
         message: String,
+        trigger: &str,
         snapshot_index: Option<usize>,
     ) {
         let snapshot_id = snapshot_index
@@ -4171,6 +4215,7 @@ impl App {
             maximum_skipped_rows: job.maximum_skipped_rows,
             enabled: job.enabled,
             configuration_recorded: true,
+            trigger: trigger.to_owned(),
             started_at,
             finished_at: epoch_timestamp(),
             duration_ms: Some(duration_ms),
@@ -6621,9 +6666,10 @@ fn automation_run_matches_filter(
         && has_unreviewed_regression
         && (filter.is_empty()
             || format!(
-                "{} {} {} {} {} {} {} {} {} {} {}",
+                "{} {} {} {} {} {} {} {} {} {} {} {}",
                 result,
                 run.job_name,
+                run.trigger,
                 run.database_path,
                 run.series,
                 run.query,
@@ -7025,11 +7071,13 @@ impl eframe::App for App {
             .map(Receiver::try_recv)
         {
             match schedule_state {
-                Ok(Ok(message)) => {
+                Ok((case_path, Ok(message))) => {
                     self.automation_schedule_worker = None;
-                    self.status = message;
+                    self.automation_schedule_target_path = None;
+                    self.status = message.clone();
+                    self.automation_schedule_message = Some((case_path, true, message));
                 }
-                Ok(Err(error)) => {
+                Ok((case_path, Err(error))) => {
                     let verb = if self.status.starts_with("REMOVING") {
                         "SCHEDULE REMOVE FAILED"
                     } else if self.status.starts_with("CHECKING") {
@@ -7038,7 +7086,10 @@ impl eframe::App for App {
                         "SCHEDULE INSTALL FAILED"
                     };
                     self.automation_schedule_worker = None;
-                    self.status = format!("{verb} · {error}");
+                    self.automation_schedule_target_path = None;
+                    let message = format!("{verb} · {error}");
+                    self.status = message.clone();
+                    self.automation_schedule_message = Some((case_path, false, message));
                 }
                 Err(mpsc::TryRecvError::Disconnected) => {
                     let verb = if self.status.starts_with("REMOVING") {
@@ -7049,7 +7100,13 @@ impl eframe::App for App {
                         "SCHEDULE INSTALL FAILED"
                     };
                     self.automation_schedule_worker = None;
-                    self.status = format!("{verb} · background worker stopped unexpectedly");
+                    let case_path = self
+                        .automation_schedule_target_path
+                        .take()
+                        .unwrap_or_else(|| self.case_path.clone());
+                    let message = format!("{verb} · background worker stopped unexpectedly");
+                    self.status = message.clone();
+                    self.automation_schedule_message = Some((case_path, false, message));
                 }
                 Err(mpsc::TryRecvError::Empty) => {
                     ctx.request_repaint_after(Duration::from_millis(250));
@@ -7745,6 +7802,30 @@ impl eframe::App for App {
                                     }
                                 });
                                 ui.label(egui::RichText::new("Schedules are installed per case, so multiple cases can run independently. Install checks enabled queries read-only; Check and Remove apply to the case file currently open here.").small().color(muted));
+                                if self.automation_schedule_worker.is_none()
+                                    && let Some((case_path, succeeded, message)) =
+                                        self.automation_schedule_message.as_ref()
+                                    && case_path == &self.case_path
+                                {
+                                    let color = if *succeeded {
+                                        egui::Color32::from_rgb(102, 190, 146)
+                                    } else {
+                                        egui::Color32::from_rgb(232, 116, 97)
+                                    };
+                                    ui.label(
+                                        egui::RichText::new(format!(
+                                            "LATEST SCHEDULE RESULT · {case_path}"
+                                        ))
+                                        .small()
+                                        .strong()
+                                        .color(cyan),
+                                    );
+                                    egui::ScrollArea::vertical()
+                                        .max_height(96.0)
+                                        .show(ui, |ui| {
+                                            ui.label(egui::RichText::new(message).small().color(color));
+                                        });
+                                }
                                 ui.add_space(8.0);
                                 ui.horizontal(|ui| {
                                     ui.label(egui::RichText::new("JOBS").small().strong().color(cyan));
@@ -7948,7 +8029,7 @@ impl eframe::App for App {
                                     ui.label(egui::RichText::new("RUN HISTORY · newest first").small().strong().color(cyan));
                                     ui.add(
                                         egui::TextEdit::singleline(&mut self.automation_run_filter)
-                                            .hint_text("Find by job, result, database, series, SQL, or message")
+                                            .hint_text("Find by job, trigger, result, database, series, SQL, or message")
                                             .desired_width(300.0),
                                     );
                                     ui.checkbox(&mut self.automation_failed_runs_only, "Failures only");
@@ -8019,13 +8100,18 @@ impl eframe::App for App {
                                             .map(snapshot_result_quality_label)
                                             .unwrap_or("NO SNAPSHOT");
                                         egui::CollapsingHeader::new(format!(
-                                            "{result} · {quality} · {} · {}",
+                                            "{result} · {quality} · {} · {} · {}",
+                                            automation_run_trigger_label(&run.trigger),
                                             run.job_name,
                                             run.started_at
                                         ))
                                         .id_salt(("automation_run", run.id))
                                         .default_open(focus_run == Some(run.id))
                                         .show(ui, |ui| {
+                                            ui.label(format!(
+                                                "Trigger: {}",
+                                                automation_run_trigger_label(&run.trigger)
+                                            ));
                                             ui.label(format!("Finished {}", run.finished_at));
                                             if let Some(source_run) = run.rerun_of {
                                                 ui.label(format!("Replayed from run {source_run}"));
@@ -11820,6 +11906,7 @@ fn run_automation_cli(
         let run_id = run.map(|run| run.id);
         let duration_ms = run.and_then(|run| run.duration_ms);
         let snapshot_id = run.and_then(|run| run.snapshot_id);
+        let trigger = run.map(|run| run.trigger.as_str()).unwrap_or("cli");
         let snapshot =
             snapshot_id.and_then(|id| app.case.snapshots.iter().find(|snapshot| snapshot.id == id));
         let snapshot_index = snapshot_id.and_then(|id| {
@@ -11838,11 +11925,13 @@ fn run_automation_cli(
             ));
             if let Some(outcome) = outcomes.last_mut() {
                 outcome["duration_ms"] = serde_json::json!(duration_ms);
+                outcome["trigger"] = serde_json::json!(trigger);
             }
         } else {
             println!(
-                "{} · {} · {}",
+                "{} · {} · {} · {}",
                 if success { "PASS" } else { "FAIL" },
+                automation_run_trigger_label(trigger),
                 job.name,
                 message
             );
@@ -12016,7 +12105,7 @@ fn rerun_saved_automation_configuration_cli(
     let job = automation_job_from_run(prior_run)?;
     let mut app = App::automation_context(case, case_path);
     normalize_snapshot_database_paths(&mut app.case, &app.case_path);
-    let (success, message) = app.run_automation_job_cli(&job);
+    let (success, message) = app.execute_automation_job(&job, "replay");
     if let Some(run) = app.case.automation_runs.last_mut() {
         run.rerun_of = Some(run_id);
     }
@@ -12050,6 +12139,7 @@ fn rerun_saved_automation_configuration_cli(
             previous,
         );
         outcome["duration_ms"] = serde_json::json!(duration_ms);
+        outcome["trigger"] = serde_json::json!("replay");
         println!(
             "{}",
             serde_json::to_string_pretty(&serde_json::json!({
@@ -13593,6 +13683,7 @@ fn list_automation_runs_cli(
             outcome["duration_ms"] = serde_json::json!(run.duration_ms);
             outcome["enabled"] = serde_json::json!(run.enabled);
             outcome["configuration_recorded"] = serde_json::json!(run.configuration_recorded);
+            outcome["trigger"] = serde_json::json!(run.trigger);
             outcome["rerun_of"] = serde_json::json!(run.rerun_of);
             outcome["analyst_note"] = serde_json::json!(run.analyst_note);
             if !run.configuration_recorded {
@@ -13647,8 +13738,9 @@ fn list_automation_runs_cli(
                 .map(|duration| format!("{duration} ms"))
                 .unwrap_or_else(|| "duration unknown".into());
             println!(
-                "{} · {} · {} · {} · {} · {} · {} · {} · run {}",
+                "{} · {} · {} · {} · {} · {} · {} · {} · {} · run {}",
                 run["status"].as_str().unwrap_or("UNKNOWN"),
+                automation_run_trigger_label(run["trigger"].as_str().unwrap_or("legacy")),
                 quality,
                 run["job"].as_str().unwrap_or("(unknown job)"),
                 run["started_at"].as_str().unwrap_or("(unknown time)"),

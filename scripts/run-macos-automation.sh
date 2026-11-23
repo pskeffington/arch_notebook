@@ -42,4 +42,5 @@ rotate_log "$stdout_log" || exit 1
 rotate_log "$stderr_log" || exit 1
 touch "$stdout_log" "$stderr_log" || exit 1
 chmod 600 "$stdout_log" "$stderr_log" || exit 1
+export ARCH_NOTEBOOK_AUTOMATION_TRIGGER=scheduled
 exec "$binary" --run-enabled-jobs "$case_file" >>"$stdout_log" 2>>"$stderr_log"
