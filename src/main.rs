@@ -7788,7 +7788,7 @@ impl eframe::App for App {
                             ui.add(egui::Spinner::new());
                             ui.add_space(10.0);
                             ui.label(if self.status.starts_with("PREFLIGHTING") {
-                                "The app is checking each enabled query read-only against its configured database."
+                                "The app is checking each enabled query read-only with the current one-run parameters. No run history or job settings are saved."
                             } else if self.status.starts_with("REMOVING") {
                                 "The app is disabling and removing its per-user schedule."
                             } else if self.status.starts_with("CHECKING") {
