@@ -17479,7 +17479,8 @@ fn graphml_import_payload(path: &str) -> Result<GraphMlImportPayload, String> {
     }
 
     let mut edge_ids = std::collections::HashSet::new();
-    for (index, edge) in document.edges.iter_mut().enumerate() {
+    let mut generated_edge_id_occurrences = HashMap::<Vec<u8>, usize>::new();
+    for edge in &mut document.edges {
         if !edge.id.is_empty() && !edge_ids.insert(edge.id.clone()) {
             return Err(format!("GraphML edge ID is duplicated: {}", edge.id));
         }
@@ -17675,19 +17676,42 @@ fn graphml_import_payload(path: &str) -> Result<GraphMlImportPayload, String> {
         let ingest_source = graphml_property(edge, &["ingest_source"])
             .filter(|value| !value.is_empty())
             .map(str::to_owned)
-            .unwrap_or_else(|| format!("graphml:{path}"));
+            .unwrap_or_else(|| format!("graphml:{source_identity}"));
+        let directed = edge.directed.unwrap_or(document.default_directed);
+        let relationship_identity = graphml_property(edge, &["relationship", "label", "name"])
+            .unwrap_or("")
+            .trim()
+            .to_ascii_lowercase();
+        let (identity_source, identity_target) = if !directed && from > to {
+            (to, from)
+        } else {
+            (from, to)
+        };
+        let generated_id_material = serde_json::to_vec(&(
+            identity_source,
+            identity_target,
+            relationship_identity,
+            directed,
+        ))
+        .map_err(|error| error.to_string())?;
+        let occurrence = generated_edge_id_occurrences
+            .entry(generated_id_material.clone())
+            .or_default();
+        let generated_connection_id = format!(
+            "graphml:auto:{}:{}",
+            sha256_hex(&generated_id_material),
+            *occurrence
+        );
+        *occurrence += 1;
         let connection_id = graphml_property(edge, &["connection_id"])
             .filter(|value| !value.is_empty())
             .map(str::to_owned)
             .unwrap_or_else(|| {
-                format!(
-                    "graphml:{}",
-                    if edge.id.is_empty() {
-                        format!("edge-{index}")
-                    } else {
-                        edge.id.clone()
-                    }
-                )
+                if edge.id.is_empty() {
+                    generated_connection_id
+                } else {
+                    format!("graphml:{}", edge.id)
+                }
             });
         put(&mut row, "connection_id", connection_id);
         put(&mut row, "ingest_source", ingest_source);
