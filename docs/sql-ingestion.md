@@ -105,6 +105,8 @@ Use CSV/TSV as the supported handoff: create or select an Analyst’s Notebook i
 
 For a saved SQL capture, run `arch-notebook --export-sql-chart-csv case.json <snapshot-id> analyst-chart.csv --json` (use a `.tsv` destination for tab-separated output). This emits relationship rows in the chart import layout, expands endpoint and relationship properties into `source_attribute:<key>`, `target_attribute:<key>`, and `connection_attribute:<key>` columns, and stores stable SQL endpoint IDs as source-scoped external IDs. Repeated exports from the same SQL series can therefore be reconciled by the receiving import design. The command exports the selected immutable capture; it does not rerun the query or modify SQLite.
 
+In the desktop app, select a capture in **SQL Review**, enter a destination in **CSV/TSV export path**, and choose **Export chart import CSV/TSV**. The same button works for historical captures; it exports the selected capture rather than always using the latest one.
+
 IBM documents `.anx` as its standardized XML chart representation ([format guide](https://docs.i2group.com/anb/10.1.0/import_formats.html)). IBM distributes the ANX XSD and examples with the installed Analyst’s Notebook application ([schema location](https://www.ibm.com/support/pages/node/546669)). Arch Notebook does not currently read or write ANX, and GraphML is not a substitute for ANX. Add ANX support against an IBM-provided schema and fixture so chart validation and round-trip fidelity can be checked.
 
 ### GraphML and KML

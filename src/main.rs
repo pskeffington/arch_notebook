@@ -7445,6 +7445,38 @@ impl App {
         };
     }
 
+    fn export_sql_chart_csv(&mut self, snapshot_index: usize) {
+        let output_path = self.export_path.trim().to_owned();
+        let result = (|| -> Result<usize, String> {
+            if output_path.is_empty() {
+                return Err("export path cannot be empty".into());
+            }
+            if paths_refer_to_same_file(&output_path, &self.case_path) {
+                return Err("chart CSV export cannot replace the case file".into());
+            }
+            self.ensure_path_is_not_sql_source(&output_path)?;
+            let lock_path = automation_lock_path(Path::new(&self.case_path))?;
+            if paths_refer_to_same_file(&output_path, &lock_path.to_string_lossy()) {
+                return Err("chart CSV export cannot replace the case automation lock".into());
+            }
+            let snapshot = self
+                .case
+                .snapshots
+                .get(snapshot_index)
+                .ok_or_else(|| "snapshot is no longer available".to_owned())?;
+            let connection_count = snapshot.connections.len();
+            write_sql_snapshot_chart_csv_atomically(&output_path, snapshot)?;
+            Ok(connection_count)
+        })();
+        self.status = match result {
+            Ok(count) => format!(
+                "SQL CHART CSV EXPORTED · {count} CONNECTIONS · {}",
+                output_path
+            ),
+            Err(error) => format!("SQL CHART CSV EXPORT FAILED · {error}"),
+        };
+    }
+
     fn export_automation_runs(&mut self, run_ids: &[Uuid]) {
         let output_path = self.export_path.trim().to_owned();
         let result = (|| -> Result<usize, String> {
@@ -13872,6 +13904,18 @@ impl eframe::App for App {
                                                     "JOB CONFIG DIFFERS FROM CAPTURE",
                                                 );
                                             }
+                                        }
+                                    });
+                                    ui.horizontal(|ui| {
+                                        ui.label("CSV/TSV export path");
+                                        ui.add(
+                                            egui::TextEdit::singleline(&mut self.export_path)
+                                                .desired_width(280.0),
+                                        );
+                                        if let Some(snapshot_index) = selected_index
+                                            && ui.button("Export chart import CSV/TSV").clicked()
+                                        {
+                                            self.export_sql_chart_csv(snapshot_index);
                                         }
                                     });
                                     egui::CollapsingHeader::new("Captured SQL configuration")
@@ -24944,7 +24988,7 @@ fn main() -> eframe::Result<()> {
         .is_some_and(|arg| arg == "--help" || arg == "-h")
     {
         println!(
-            "Arch Notebook\n\nUsage:\n  arch-notebook\n  arch-notebook --version [--json]\n  arch-notebook --inspect-sqlite <database.sqlite> [--json]\n  arch-notebook --import-graphml <case.json> <input.graphml> [--json]\n  arch-notebook --import-kml <case.json> <input.kml> [--json]\n  arch-notebook --export-graphml <case.json> <output.graphml> [--json]\n  arch-notebook --export-kml <case.json> <output.kml> [--json]\n  arch-notebook --export-sql-snapshot <case.json> <snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --export-sql-series <case.json> <snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --export-sql-comparison <case.json> <baseline-snapshot-id> <current-snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --export-job <case.json> <job-name-or-id> <output.json> [--json]\n  arch-notebook --export-path <case.json> <path-name-or-id> <output.json> [--json]\n  arch-notebook --import-path <case.json> <input.json> [--name <path-name>] [--json]\n  arch-notebook --import-job <case.json> <input.json> [--name <job-name>] [--database <path>] [--series <label>] [--param name=value ...] [--json]\n  arch-notebook --export-import-design <case.json> <design-name-or-id> <output.json> [--json]\n  arch-notebook --import-import-design <case.json> <input.json> [--name <design-name>] [--json]\n  arch-notebook --list-jobs <case.json> [--enabled-only] [--schema-adaptation-needed] [--json]\n  arch-notebook --list-batches <case.json> [--json]\n  arch-notebook --list-runs <case.json> [--json] [--job <name-or-id>] [--trigger <desktop|scheduled|cli|replay|legacy>] [--schema-adaptation-needed] [--offset <count>] [--limit <count>]\n  arch-notebook --export-runs <case.json> <output.csv|tsv> [--job <name-or-id>] [--trigger <desktop|scheduled|cli|replay|legacy>] [--schema-adaptation-needed] [--offset <count>] [--limit <count>] [--json]\n  arch-notebook --explain-job <case.json> <job-name-or-id> [--param name=value ...] [--json]\n  arch-notebook --validate-job <case.json> <job-name-or-id> [--query-only] [--param name=value ...] [--json]\n  arch-notebook --validate-enabled-jobs <case.json> [--json] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --check-enabled-job-queries <case.json> [--json] [--require-usable] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --validate-run <case.json> <run-id> [--json]\n  arch-notebook --run-enabled-jobs <case.json> [--json] [--resume-batch <batch-id>] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --run-job <case.json> <job-name-or-id> [--param name=value ...] [--resume-batch <batch-id>] [--json]\n  arch-notebook --rerun-run <case.json> <run-id> [--json]\n\nJob and import design packages contain portable configuration, not case data or run history. Batch runs save snapshots and run history to the case file. JSON output is available for scheduler integration."
+            "Arch Notebook\n\nUsage:\n  arch-notebook\n  arch-notebook --version [--json]\n  arch-notebook --inspect-sqlite <database.sqlite> [--json]\n  arch-notebook --import-graphml <case.json> <input.graphml> [--json]\n  arch-notebook --import-kml <case.json> <input.kml> [--json]\n  arch-notebook --export-graphml <case.json> <output.graphml> [--json]\n  arch-notebook --export-kml <case.json> <output.kml> [--json]\n  arch-notebook --export-sql-snapshot <case.json> <snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --export-sql-series <case.json> <snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --export-sql-comparison <case.json> <baseline-snapshot-id> <current-snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --export-job <case.json> <job-name-or-id> <output.json> [--json]\n  arch-notebook --export-path <case.json> <path-name-or-id> <output.json> [--json]\n  arch-notebook --import-path <case.json> <input.json> [--name <path-name>] [--json]\n  arch-notebook --import-job <case.json> <input.json> [--name <job-name>] [--database <path>] [--series <label>] [--param name=value ...] [--json]\n  arch-notebook --export-import-design <case.json> <design-name-or-id> <output.json> [--json]\n  arch-notebook --import-import-design <case.json> <input.json> [--name <design-name>] [--json]\n  arch-notebook --list-jobs <case.json> [--enabled-only] [--schema-adaptation-needed] [--json]\n  arch-notebook --list-batches <case.json> [--json]\n  arch-notebook --list-runs <case.json> [--json] [--job <name-or-id>] [--trigger <desktop|scheduled|cli|replay|legacy>] [--schema-adaptation-needed] [--offset <count>] [--limit <count>]\n  arch-notebook --export-runs <case.json> <output.csv|tsv> [--job <name-or-id>] [--trigger <desktop|scheduled|cli|replay|legacy>] [--schema-adaptation-needed] [--offset <count>] [--limit <count>] [--json]\n  arch-notebook --explain-job <case.json> <job-name-or-id> [--param name=value ...] [--json]\n  arch-notebook --validate-job <case.json> <job-name-or-id> [--query-only] [--param name=value ...] [--json]\n  arch-notebook --validate-enabled-jobs <case.json> [--json] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --check-enabled-job-queries <case.json> [--json] [--require-usable] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --validate-run <case.json> <run-id> [--json]\n  arch-notebook --run-enabled-jobs <case.json> [--json] [--resume-batch <batch-id>] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --run-job <case.json> <job-name-or-id> [--param name=value ...] [--resume-batch <batch-id>] [--json]\n  arch-notebook --rerun-run <case.json> <run-id> [--json]\n\nJob and import design packages contain portable configuration, not case data or run history. Batch runs save snapshots and run history to the case file. JSON output is available for scheduler integration.\n  arch-notebook --export-sql-chart-csv <case.json> <snapshot-id> <output.csv|tsv> [--json]"
         );
         println!(
             "  arch-notebook --export-sql-chart-csv <case.json> <snapshot-id> <output.csv|tsv> [--json]"
