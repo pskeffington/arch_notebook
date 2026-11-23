@@ -7395,7 +7395,16 @@ impl eframe::App for App {
                                         });
                                     let latest_run_id = latest_run.as_ref().map(|run| run.0);
                                     ui.horizontal(|ui| {
-                                        ui.checkbox(&mut job.enabled, "");
+                                        ui.checkbox(&mut job.enabled, "")
+                                            .on_hover_text("Include this SQL job in enabled batches and scheduled runs");
+                                        if !job.enabled {
+                                            ui.colored_label(
+                                                egui::Color32::from_rgb(236, 174, 83),
+                                                egui::RichText::new("DISABLED · REVIEW BEFORE SCHEDULING")
+                                                    .small()
+                                                    .strong(),
+                                            );
+                                        }
                                         ui.label(format!("{} · {} · {} · min {} · max connections {} · max regressions {} · max skipped rows {}",job.name,job.series,job.database_path,job.minimum_connections,job.maximum_connections.map(|value|value.to_string()).unwrap_or_else(||"unlimited".into()),job.maximum_regressions.map(|value|value.to_string()).unwrap_or_else(||"unlimited".into()),job.maximum_skipped_rows.map(|value|value.to_string()).unwrap_or_else(||"unlimited".into())));
                                         if ui.small_button("Validate").clicked(){action=Some(("validate".into(),job.id));}
                                         if ui.small_button("Edit").clicked(){action=Some(("edit".into(),job.id));}
