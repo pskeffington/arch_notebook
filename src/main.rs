@@ -22,7 +22,7 @@ use std::{
 };
 use uuid::Uuid;
 
-const CURRENT_CASE_FORMAT_VERSION: u32 = 10;
+const CURRENT_CASE_FORMAT_VERSION: u32 = 11;
 const SQL_QUERY_TIMEOUT_MINUTES: u64 = 15;
 const SQL_QUERY_TIMEOUT: Duration = Duration::from_secs(SQL_QUERY_TIMEOUT_MINUTES * 60);
 
@@ -250,6 +250,8 @@ struct CaseFile {
     automation_runs: Vec<AutomationRun>,
     #[serde(default)]
     import_specifications: Vec<ImportSpecification>,
+    #[serde(default)]
+    graphml_source_catalogs: Vec<serde_json::Value>,
 }
 
 struct App {
@@ -406,8 +408,14 @@ struct GraphMlGraphContext {
 struct GraphMlDocument {
     default_directed: bool,
     graph_data: HashMap<String, String>,
+    source_catalogs: Vec<serde_json::Value>,
     nodes: Vec<GraphMlRecord>,
     edges: Vec<GraphMlRecord>,
+}
+
+struct GraphMlImportPayload {
+    csv_bytes: Vec<u8>,
+    source_catalogs: Vec<serde_json::Value>,
 }
 
 #[derive(Clone, Default, Serialize, Deserialize)]
@@ -884,6 +892,7 @@ fn demo_case() -> CaseFile {
         automation_jobs: Vec::new(),
         automation_runs: Vec::new(),
         import_specifications: Vec::new(),
+        graphml_source_catalogs: Vec::new(),
     }
 }
 
@@ -1089,8 +1098,15 @@ impl App {
 
     fn import_graphml(&mut self) {
         let source_path = self.import_path.trim().to_owned();
-        let result = graphml_csv_bytes(&source_path).and_then(write_graphml_csv_temp);
-        let temporary_path = match result {
+        let payload = match graphml_import_payload(&source_path) {
+            Ok(payload) => payload,
+            Err(error) => {
+                self.status = format!("GRAPHML IMPORT FAILED · {error}");
+                return;
+            }
+        };
+        let source_catalogs = payload.source_catalogs;
+        let temporary_path = match write_graphml_csv_temp(payload.csv_bytes) {
             Ok(path) => path,
             Err(error) => {
                 self.status = format!("GRAPHML IMPORT FAILED · {error}");
@@ -1106,6 +1122,27 @@ impl App {
         self.import_column_mapping = original_mapping;
         let import_status = std::mem::take(&mut self.status);
         self.status = if let Some(summary) = import_status.strip_prefix("CSV IMPORT · ") {
+            for catalog in source_catalogs {
+                let Some(source_key) = catalog
+                    .get("source_key")
+                    .and_then(serde_json::Value::as_str)
+                else {
+                    continue;
+                };
+                if let Some(existing) = self
+                    .case
+                    .graphml_source_catalogs
+                    .iter_mut()
+                    .find(|existing| {
+                        existing.get("source_key").and_then(serde_json::Value::as_str)
+                            == Some(source_key)
+                    })
+                {
+                    *existing = catalog;
+                } else {
+                    self.case.graphml_source_catalogs.push(catalog);
+                }
+            }
             format!("GRAPHML IMPORT · {summary}")
         } else if let Some(error) = import_status.strip_prefix("IMPORT FAILED · ") {
             format!("GRAPHML IMPORT FAILED · {error}")
@@ -3667,6 +3704,12 @@ impl App {
             for (id, scope, name, kind) in [
                 ("graph_title", "graph", "title", "string"),
                 ("graph_description", "graph", "description", "string"),
+                (
+                    "graph_source_catalog",
+                    "graph",
+                    "source_catalog_json",
+                    "string",
+                ),
                 ("node_uuid", "node", "arch_notebook_uuid", "string"),
                 ("node_label", "node", "label", "string"),
                 ("node_name", "node", "name", "string"),
@@ -3707,6 +3750,92 @@ impl App {
             xml.push_str("  <graph id=\"arch_notebook\" edgedefault=\"undirected\">\n");
             graphml_data(&mut xml, "graph_title", &self.case.title);
             graphml_data(&mut xml, "graph_description", &self.case.description);
+            let mut source_keys: Vec<String> = self
+                .case
+                .links
+                .iter()
+                .filter_map(|link| link.ingest_source.clone())
+                .chain(
+                    self.case
+                        .snapshots
+                        .iter()
+                        .map(|snapshot| snapshot.source_key.clone()),
+                )
+                .collect();
+            source_keys.sort();
+            source_keys.dedup();
+            let source_catalog: Vec<serde_json::Value> = source_keys
+                .into_iter()
+                .map(|source_key| {
+                    let snapshots: Vec<&ConnectionSnapshot> = self
+                        .case
+                        .snapshots
+                        .iter()
+                        .filter(|snapshot| snapshot.source_key == source_key)
+                        .collect();
+                    let latest = snapshots.last().copied();
+                    let link_count = self
+                        .case
+                        .links
+                        .iter()
+                        .filter(|link| link.ingest_source.as_deref() == Some(source_key.as_str()))
+                        .count();
+                    let entity_count = self
+                        .case
+                        .links
+                        .iter()
+                        .filter(|link| link.ingest_source.as_deref() == Some(source_key.as_str()))
+                        .flat_map(|link| [link.from, link.to])
+                        .collect::<HashSet<_>>()
+                        .len();
+                    serde_json::json!({
+                        "source_key": source_key,
+                        "database_path": latest.map(|snapshot| snapshot.database_path.as_str()),
+                        "configured_database_path": latest.map(|snapshot| snapshot.configured_database_path.as_str()),
+                        "series": latest.map(|snapshot| snapshot.series.as_str()),
+                        "latest_snapshot_id": latest.map(|snapshot| snapshot.id),
+                        "latest_captured_at": latest.map(|snapshot| snapshot.captured_at.as_str()),
+                        "snapshot_ids": snapshots.iter().map(|snapshot| snapshot.id).collect::<Vec<_>>(),
+                        "snapshot_count": snapshots.len(),
+                        "link_count": link_count,
+                        "entity_count": entity_count,
+                        "captures": snapshots.iter().map(|snapshot| serde_json::json!({
+                            "snapshot_id": snapshot.id,
+                            "captured_at": snapshot.captured_at,
+                            "connection_count": snapshot.connections.len(),
+                            "skipped_rows": snapshot.skipped_rows,
+                        })).collect::<Vec<_>>(),
+                    })
+                })
+                .collect();
+            let mut catalog_by_key = HashMap::new();
+            for entry in &self.case.graphml_source_catalogs {
+                if let Some(source_key) =
+                    entry.get("source_key").and_then(serde_json::Value::as_str)
+                {
+                    catalog_by_key
+                        .entry(source_key.to_owned())
+                        .or_insert_with(|| entry.clone());
+                }
+            }
+            for entry in source_catalog {
+                if let Some(source_key) =
+                    entry.get("source_key").and_then(serde_json::Value::as_str)
+                {
+                    catalog_by_key.insert(source_key.to_owned(), entry);
+                }
+            }
+            let mut source_catalog: Vec<serde_json::Value> = catalog_by_key.into_values().collect();
+            source_catalog.sort_by(|first, second| {
+                first["source_key"]
+                    .as_str()
+                    .cmp(&second["source_key"].as_str())
+            });
+            graphml_data(
+                &mut xml,
+                "graph_source_catalog",
+                &serde_json::to_string(&source_catalog).map_err(|error| error.to_string())?,
+            );
             for entity in &self.case.entities {
                 xml.push_str(&format!("    <node id=\"n_{}\">\n", entity.id));
                 graphml_data(&mut xml, "node_uuid", &entity.id.to_string());
@@ -4203,6 +4332,7 @@ impl App {
             automation_jobs: Vec::new(),
             automation_runs: Vec::new(),
             import_specifications: Vec::new(),
+            graphml_source_catalogs: Vec::new(),
         };
         self.network_groups = None;
         self.chart_focus_group = None;
@@ -8626,6 +8756,22 @@ fn graphml_store_data(
     }
     match scope {
         GraphMlScope::Graph => {
+            if property.eq_ignore_ascii_case("source_catalog_json")
+                && let Ok(catalog) = serde_json::from_str::<serde_json::Value>(&value)
+                && let Some(entries) = catalog.as_array()
+            {
+                document.source_catalogs.extend(
+                    entries
+                        .iter()
+                        .filter(|entry| {
+                            entry
+                                .get("source_key")
+                                .and_then(serde_json::Value::as_str)
+                                .is_some()
+                        })
+                        .cloned(),
+                );
+            }
             document.graph_data.insert(property, value);
         }
         GraphMlScope::Node => {
@@ -8985,7 +9131,7 @@ fn graphml_json_property<T: serde::Serialize>(value: &T) -> Result<String, Strin
     serde_json::to_string(value).map_err(|error| error.to_string())
 }
 
-fn graphml_csv_bytes(path: &str) -> Result<Vec<u8>, String> {
+fn graphml_import_payload(path: &str) -> Result<GraphMlImportPayload, String> {
     let mut document = parse_graphml(path)?;
     let source_identity = fs::canonicalize(path)
         .unwrap_or_else(|_| PathBuf::from(path))
@@ -9446,9 +9592,13 @@ fn graphml_csv_bytes(path: &str) -> Result<Vec<u8>, String> {
             .write_record(row)
             .map_err(|error| error.to_string())?;
     }
-    writer
+    let csv_bytes = writer
         .into_inner()
-        .map_err(|error| error.into_error().to_string())
+        .map_err(|error| error.into_error().to_string())?;
+    Ok(GraphMlImportPayload {
+        csv_bytes,
+        source_catalogs: document.source_catalogs,
+    })
 }
 
 fn write_graphml_csv_temp(contents: Vec<u8>) -> Result<PathBuf, String> {
