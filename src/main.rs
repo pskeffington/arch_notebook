@@ -5502,6 +5502,7 @@ fn automation_outcome_json(
         "database_path": job.database_path,
         "series": job.series,
         "message": message,
+        "query_valid": snapshot.is_some(),
         "snapshot_id": snapshot.map(|snapshot| snapshot.id),
         "captured_at": snapshot.map(|snapshot| snapshot.captured_at.as_str()),
         "source_key": snapshot.map(|snapshot| snapshot.source_key.as_str()),
@@ -9738,6 +9739,7 @@ fn validate_enabled_automation_jobs_cli(
     selected_jobs: Option<&[String]>,
     parameter_overrides: &[(String, String)],
     scoped_parameter_overrides: &[(String, String, String)],
+    queries_only: bool,
     json_output: bool,
 ) -> Result<bool, String> {
     let content =
@@ -9796,9 +9798,23 @@ fn validate_enabled_automation_jobs_cli(
         app.automation_maximum_regressions = job.maximum_regressions;
         app.automation_maximum_skipped_rows = job.maximum_skipped_rows;
         let snapshot_count_before = app.case.snapshots.len();
-        let success = app.validate_sql_query_for_batch();
-        let message = app.status.clone();
+        let limits_pass = app.validate_sql_query_for_batch();
         let snapshot = app.case.snapshots.get(snapshot_count_before);
+        let query_valid = snapshot.is_some();
+        let success = if queries_only {
+            query_valid
+        } else {
+            limits_pass
+        };
+        let message = if queries_only && query_valid && !limits_pass {
+            app.status.replacen(
+                "SQL QUERY LIMITS FAILED",
+                "SQL QUERY VALID · CURRENT CAPTURE LIMITS FAIL",
+                1,
+            )
+        } else {
+            app.status.clone()
+        };
         let previous = snapshot
             .and_then(|_| previous_snapshot_index(&app.case, snapshot_count_before))
             .and_then(|index| app.case.snapshots.get(index));
@@ -9819,7 +9835,17 @@ fn validate_enabled_automation_jobs_cli(
         }
     }
     if json_output {
-        println!("{}", serde_json::to_string_pretty(&serde_json::json!({"schema_version":1,"ok":failures==0,"saved":false,"case":case_path,"passed":outcomes.iter().filter(|outcome|outcome["status"]=="PASS").count(),"failed":failures,"outcomes":outcomes})).map_err(|error|error.to_string())?);
+        let passed = outcomes
+            .iter()
+            .filter(|outcome| {
+                if queries_only {
+                    outcome["query_valid"] == true
+                } else {
+                    outcome["status"] == "PASS"
+                }
+            })
+            .count();
+        println!("{}", serde_json::to_string_pretty(&serde_json::json!({"schema_version":1,"mode":if queries_only { "query" } else { "capture_limits" },"ok":failures==0,"saved":false,"case":case_path,"passed":passed,"failed":failures,"outcomes":outcomes})).map_err(|error|error.to_string())?);
     }
     Ok(failures == 0)
 }
@@ -10148,7 +10174,7 @@ fn main() -> eframe::Result<()> {
         .is_some_and(|arg| arg == "--help" || arg == "-h")
     {
         println!(
-            "Arch Notebook\n\nUsage:\n  arch-notebook\n  arch-notebook --inspect-sqlite <database.sqlite> [--json]\n  arch-notebook --import-graphml <case.json> <input.graphml> [--json]\n  arch-notebook --export-graphml <case.json> <output.graphml> [--json]\n  arch-notebook --export-sql-comparison <case.json> <baseline-snapshot-id> <current-snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --list-jobs <case.json> [--enabled-only] [--json]\n  arch-notebook --list-runs <case.json> [--json] [--job <name-or-id>] [--offset <count>] [--limit <count>]\n  arch-notebook --validate-enabled-jobs <case.json> [--json] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --validate-run <case.json> <run-id> [--json]\n  arch-notebook --run-enabled-jobs <case.json> [--json] [--skip-recent-success] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --run-job <case.json> <job-name-or-id> [--param name=value ...] [--json]\n  arch-notebook --rerun-run <case.json> <run-id> [--json]\n\nJob and run listing and validation do not change the case. Run history is newest first and can be filtered or paged. SQL comparisons can be exported from saved snapshots for downstream tools. Batch runs save snapshots and run history to the case file. JSON output is available for scheduler integration."
+            "Arch Notebook\n\nUsage:\n  arch-notebook\n  arch-notebook --inspect-sqlite <database.sqlite> [--json]\n  arch-notebook --import-graphml <case.json> <input.graphml> [--json]\n  arch-notebook --export-graphml <case.json> <output.graphml> [--json]\n  arch-notebook --export-sql-comparison <case.json> <baseline-snapshot-id> <current-snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --list-jobs <case.json> [--enabled-only] [--json]\n  arch-notebook --list-runs <case.json> [--json] [--job <name-or-id>] [--offset <count>] [--limit <count>]\n  arch-notebook --validate-enabled-jobs <case.json> [--json] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --check-enabled-job-queries <case.json> [--json] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --validate-run <case.json> <run-id> [--json]\n  arch-notebook --run-enabled-jobs <case.json> [--json] [--skip-recent-success] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --run-job <case.json> <job-name-or-id> [--param name=value ...] [--json]\n  arch-notebook --rerun-run <case.json> <run-id> [--json]\n\nJob and run listing and validation do not change the case. Run history is newest first and can be filtered or paged. SQL comparisons can be exported from saved snapshots for downstream tools. Batch runs save snapshots and run history to the case file. JSON output is available for scheduler integration."
         );
         return Ok(());
     }
@@ -10347,11 +10373,39 @@ fn main() -> eframe::Result<()> {
             selected_jobs.as_deref(),
             &parameter_overrides,
             &scoped_parameter_overrides,
+            false,
             json_output,
         ) {
             Err(error) => report_cli_error("automation validation failed", error, json_output),
             Ok(false) => {
                 eprintln!("automation validation failed; case file was not changed");
+                std::process::exit(1);
+            }
+            Ok(true) => {}
+        }
+        return Ok(());
+    }
+    if args
+        .first()
+        .is_some_and(|arg| arg == "--check-enabled-job-queries")
+    {
+        let usage = "usage: arch-notebook --check-enabled-job-queries <case.json> [--json] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]";
+        let Some(case_path) = args.get(1) else {
+            report_cli_usage_error(usage, args.iter().any(|arg| arg == "--json"));
+        };
+        let (json_output, selected_jobs, parameter_overrides, scoped_parameter_overrides, _) =
+            parse_batch_selection_args(&args, usage, false);
+        match validate_enabled_automation_jobs_cli(
+            case_path,
+            selected_jobs.as_deref(),
+            &parameter_overrides,
+            &scoped_parameter_overrides,
+            true,
+            json_output,
+        ) {
+            Err(error) => report_cli_error("SQL query preflight failed", error, json_output),
+            Ok(false) => {
+                eprintln!("SQL query preflight failed; case file was not changed");
                 std::process::exit(1);
             }
             Ok(true) => {}

@@ -126,6 +126,12 @@ cargo run --offline -- --inspect-sqlite source.sqlite --json
 
 The JSON response uses schema version 1 and includes `ok`, `object_count`, table/view definitions, declared foreign-key mappings, and `query_templates` for every table/view with recognizable source and target columns. The existing singular `query_template` field remains as the first candidate for compatibility. It reports structure only; it does not read table rows or modify the source. The text output reports when the database contains no user tables or views, lists declared foreign keys, and prints the first suggested query when one can be generated.
 
+To check enabled SQL queries and their SQLite sources without requiring current data to meet capture thresholds, use query-only preflight. It executes queries read-only and leaves the case unchanged; failing connection or regression limits are reported but do not fail the query check:
+
+```sh
+cargo run --offline -- --check-enabled-job-queries harbor-light.case.json
+```
+
 Preflight every enabled SQL job before scheduling a batch. Validation runs each query read-only, checks minimum and optional regression limits, and evaluates jobs in run order with a temporary snapshot chain. It does not save snapshots or change the case file:
 
 ```sh
@@ -164,7 +170,7 @@ On Arch Linux with systemd, configure enabled jobs in the app, then install the 
 arch-notebook-install-automation
 ```
 
-Pass a case-file path to schedule a different case. Set `ARCH_NOTEBOOK_AUTOMATION_SCHEDULE=daily` or `weekly` before running either platform installer to change the cadence; hourly is the default. Rerunning an installer applies an updated case path or cadence. Both installers require at least one enabled job and preflight every enabled SQL query against its read-only SQLite source before creating or replacing a schedule. If preflight fails, fix the job or make its database available; an existing schedule remains active. Scheduler invocations print concise per-job status lines to keep journald and macOS log files from accumulating full connection deltas; add `--json` to manual CLI runs when structured output is needed. The Linux installer writes user-owned units under `${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user` and enables or restarts the timer after preflight. It catches up a missed calendar run after the machine was offline and adds up to five minutes of randomized delay. User timers run only while the user systemd manager is active; to keep it running after logout and start it at boot, enable lingering for the account with `loginctl enable-linger "$USER"`. The service allows a run up to one hour to finish. Run it immediately with `systemctl --user start arch-notebook-automation.service`; inspect results with `journalctl --user -u arch-notebook-automation.service`. On macOS, first open the app and enable jobs, then install the bundled LaunchAgent for the case:
+Pass a case-file path to schedule a different case. Set `ARCH_NOTEBOOK_AUTOMATION_SCHEDULE=daily` or `weekly` before running either platform installer to change the cadence; hourly is the default. Rerunning an installer applies an updated case path or cadence. Both installers require at least one enabled job and use query-only preflight against each read-only SQLite source before creating or replacing a schedule. Current connection and regression limits remain runtime outcomes, so a real regression does not prevent its schedule from being installed. If query preflight fails, fix the job or make its database available; an existing schedule remains active. Scheduler invocations print concise per-job status lines to keep journald and macOS log files from accumulating full connection deltas; add `--json` to manual CLI runs when structured output is needed. The Linux installer writes user-owned units under `${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user` and enables or restarts the timer after preflight. It catches up a missed calendar run after the machine was offline and adds up to five minutes of randomized delay. User timers run only while the user systemd manager is active; to keep it running after logout and start it at boot, enable lingering for the account with `loginctl enable-linger "$USER"`. The service allows a run up to one hour to finish. Run it immediately with `systemctl --user start arch-notebook-automation.service`; inspect results with `journalctl --user -u arch-notebook-automation.service`. On macOS, first open the app and enable jobs, then install the bundled LaunchAgent for the case:
 
 ```sh
 app_bundle="/Applications/Arch Notebook.app"
@@ -173,7 +179,7 @@ bash "$app_bundle/Contents/Resources/install-macos-automation.sh" \
   "$app_bundle"
 ```
 
-After preflight succeeds, the macOS installer writes and validates a per-user LaunchAgent plist, then loads it for the current login session. It runs once when loaded and then at the selected interval. The bundled runner keeps its logs private to the current account, rotates each at 5 MiB, and retains five older files; inspect `~/Library/Logs/arch-notebook-automation.log` and `~/Library/Logs/arch-notebook-automation-error.log`. To remove the schedule, run `launchctl bootout "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.archnotebook.automation.plist"` and remove that plist. Keep the SQLite source available at the configured path when automation runs.
+After query preflight succeeds, the macOS installer writes and validates a per-user LaunchAgent plist, then loads it for the current login session. It runs once when loaded and then at the selected interval. The bundled runner keeps its logs private to the current account, rotates each at 5 MiB, and retains five older files; inspect `~/Library/Logs/arch-notebook-automation.log` and `~/Library/Logs/arch-notebook-automation-error.log`. To remove the schedule, run `launchctl bootout "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.archnotebook.automation.plist"` and remove that plist. Keep the SQLite source available at the configured path when automation runs.
 
 ## Other notebook workflows
 
