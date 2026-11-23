@@ -2,7 +2,7 @@
 
 ## Map relational records into a network
 
-For a common transaction schema with `accounts(id, owner_name, institution)` and `transfers(id, sender_account_id, recipient_account_id, occurred_at, amount, status)`, join each event to its endpoint records and return one row per relationship. A disposable synthetic database matching this schema is provided in `archive/research.databases/relational_transfers.sql`:
+For a common transaction schema with `accounts(id, owner_name, institution)` and `transfers(id, sender_account_id, recipient_account_id, transfer_type, occurred_at, amount, status)`, join each event to its endpoint records and return one row per relationship. A disposable synthetic database matching this schema is provided in `archive/research.databases/relational_transfers.sql`:
 
 ```sh
 sqlite3 /tmp/relational-transfers.sqlite < archive/research.databases/relational_transfers.sql
@@ -24,7 +24,7 @@ SELECT
     'Account' AS target_type,
     recipient.institution AS "target_attribute:institution",
     CAST(transfer.id AS TEXT) AS connection_id,
-    'Transfer' AS relationship,
+    transfer.transfer_type AS relationship,
     transfer.occurred_at AS date,
     3 AS confidence,
     1 AS directed,

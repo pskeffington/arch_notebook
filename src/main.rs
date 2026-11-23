@@ -20093,6 +20093,8 @@ fn sqlite_query_templates(schema: &[serde_json::Value]) -> Vec<(String, String)>
                 "edge_type",
                 "connection_type",
                 "interaction_type",
+                "transaction_type",
+                "transfer_type",
                 "relation",
                 "predicate",
                 "action",
