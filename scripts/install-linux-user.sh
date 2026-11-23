@@ -51,7 +51,11 @@ desktop_dir="$data_home/applications"
 binary_path="$binary_dir/arch-notebook"
 desktop_path="$desktop_dir/arch-notebook.desktop"
 mkdir -p "$binary_dir" "$desktop_dir"
-install -m 755 "$binary_source" "$binary_path"
+binary_tmp="$(mktemp "$binary_dir/.arch-notebook.XXXXXX")"
+trap 'rm -f "$binary_tmp"' EXIT
+install -m 755 "$binary_source" "$binary_tmp"
+mv -f "$binary_tmp" "$binary_path"
+trap - EXIT
 
 desktop_exec=${binary_path//\\/\\\\}
 desktop_exec=${desktop_exec//\"/\\\"}
