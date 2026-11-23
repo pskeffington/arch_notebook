@@ -6304,7 +6304,53 @@ impl eframe::App for App {
                             self.chart_focus_group = None;
                         }
                     }
-                    if self.page==WorkspacePage::Chart && self.sql_source_focus.is_some() {ui.label(egui::RichText::new("SOURCE HIGHLIGHT").small().color(cyan));if ui.small_button("Clear source").clicked(){self.sql_source_focus=None;}}
+                    if self.page == WorkspacePage::Chart
+                        && let Some(source_key) = self.sql_source_focus.clone()
+                    {
+                        let source_snapshot = self
+                            .case
+                            .snapshots
+                            .iter()
+                            .rev()
+                            .find(|snapshot| snapshot.source_key == source_key);
+                        let source_link_count = self
+                            .case
+                            .links
+                            .iter()
+                            .filter(|link| link.ingest_source.as_deref() == Some(source_key.as_str()))
+                            .count();
+                        if let Some(snapshot) = source_snapshot {
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "SOURCE · {} · {} · {source_link_count} LINKS",
+                                    snapshot.series, snapshot.database_path
+                                ))
+                                .small()
+                                .color(cyan),
+                            );
+                        } else {
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "SOURCE HIGHLIGHT · {source_link_count} LINKS"
+                                ))
+                                .small()
+                                .color(cyan),
+                            );
+                        }
+                        if ui.small_button("View source records").clicked() {
+                            self.data_query.clear();
+                            self.data_source_filter = Some(source_key);
+                            self.data_mode = DataMode::Relationships;
+                            self.page = WorkspacePage::Data;
+                            self.show_timeline = false;
+                            self.connections_for_selected = false;
+                            self.selected = None;
+                            self.selected_link = None;
+                        }
+                        if ui.small_button("Clear source").clicked() {
+                            self.sql_source_focus = None;
+                        }
+                    }
                     if self.page==WorkspacePage::Data && (self.selected.is_some() || self.selected_link.is_some()) && ui.button("View on chart").clicked(){self.chart_focus=self.selected;self.chart_focus_link=self.selected_link;self.chart_focus_group=None;self.page=WorkspacePage::Chart;self.show_timeline=false;}
                     if self.selected.is_some() || self.selected_link.is_some() {if ui.button("Delete selected").clicked(){self.delete_selected();}}
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| { ui.label(egui::RichText::new(&self.status).small().color(muted)); });
@@ -8073,8 +8119,10 @@ impl eframe::App for App {
                         }
                         ui.separator();
                         ui.label(egui::RichText::new("NORMALIZE COLUMN VALUES").strong());
-                        ui.label(egui::RichText::new("Transforms run before row filters and mapping; saved designs reuse them on later imports.").small());
+                        ui.label(egui::RichText::new("Transforms run in list order before row filters and mapping; saved designs reuse them on later imports.").small());
                         let mut remove_transform = None;
+                        let mut move_transform = None;
+                        let transform_count = self.import_column_mapping.value_transforms.len();
                         for (index, transform) in self
                             .import_column_mapping
                             .value_transforms
@@ -8108,6 +8156,12 @@ impl eframe::App for App {
                                     ui.label("→");
                                     ui.add(egui::TextEdit::singleline(&mut transform.replace).hint_text("Replace with").desired_width(90.0));
                                 }
+                                if ui.add_enabled(index > 0, egui::Button::new("↑")).clicked() {
+                                    move_transform = Some((index, index - 1));
+                                }
+                                if ui.add_enabled(index + 1 < transform_count, egui::Button::new("↓")).clicked() {
+                                    move_transform = Some((index, index + 1));
+                                }
                                 if ui.small_button("×").clicked() {
                                     remove_transform = Some(index);
                                 }
@@ -8115,6 +8169,8 @@ impl eframe::App for App {
                         }
                         if let Some(index) = remove_transform {
                             self.import_column_mapping.value_transforms.remove(index);
+                        } else if let Some((from, to)) = move_transform {
+                            self.import_column_mapping.value_transforms.swap(from, to);
                         }
                         if ui.small_button("＋ Value transform").clicked() {
                             self.import_column_mapping.value_transforms.push(ImportValueTransform::default());
@@ -11192,12 +11248,39 @@ fn list_automation_runs_cli(
         );
     } else {
         for run in runs {
+            let quality = run["result_quality"].as_str().unwrap_or("no snapshot");
+            let connections = run["connection_count"]
+                .as_u64()
+                .map(|count| format!("{count} connections"))
+                .unwrap_or_else(|| "connections unknown".into());
+            let skipped = run["skipped_rows"]
+                .as_u64()
+                .map(|count| format!("{count} skipped"))
+                .unwrap_or_else(|| "skips unknown".into());
+            let removed = run["delta"]["counts"]["removed"].as_u64();
+            let declined = run["delta"]["counts"]["confidence_declined"].as_u64();
+            let delta_summary = match (run["delta"]["baseline"].as_bool(), removed, declined) {
+                (Some(true), _, _) => "baseline".into(),
+                (_, Some(removed), Some(declined)) => {
+                    format!("{removed} removed · {declined} confidence declines")
+                }
+                _ => "no comparison".into(),
+            };
+            let duration = run["duration_ms"]
+                .as_u64()
+                .map(|duration| format!("{duration} ms"))
+                .unwrap_or_else(|| "duration unknown".into());
             println!(
-                "{} · {} · {} · {}",
+                "{} · {} · {} · {} · {} · {} · {} · {} · run {}",
                 run["status"].as_str().unwrap_or("UNKNOWN"),
+                quality,
                 run["job"].as_str().unwrap_or("(unknown job)"),
                 run["started_at"].as_str().unwrap_or("(unknown time)"),
-                run["message"].as_str().unwrap_or_default()
+                connections,
+                skipped,
+                delta_summary,
+                duration,
+                run["id"].as_str().unwrap_or("unknown")
             );
         }
     }
