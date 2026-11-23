@@ -22163,6 +22163,206 @@ fn write_sql_snapshots_csv<W: Write>(
         .map_err(|error| format!("could not finish snapshot export: {}", error.error()))
 }
 
+fn write_sql_snapshot_chart_csv<W: Write>(
+    output_path: &str,
+    snapshot: &ConnectionSnapshot,
+    output: W,
+) -> Result<W, String> {
+    let mut source_attribute_keys = Vec::new();
+    let mut target_attribute_keys = Vec::new();
+    let mut connection_attribute_keys = Vec::new();
+    let mut seen = HashSet::new();
+    for connection in &snapshot.connections {
+        validate_entity_attributes(&connection.source_attributes)
+            .map_err(|error| format!("invalid source entity properties: {error}"))?;
+        validate_entity_attributes(&connection.target_attributes)
+            .map_err(|error| format!("invalid target entity properties: {error}"))?;
+        validate_connection_attributes(&connection.attributes)
+            .map_err(|error| format!("invalid relationship properties: {error}"))?;
+        for (keys, attributes, side) in [
+            (
+                &mut source_attribute_keys,
+                &connection.source_attributes,
+                "source",
+            ),
+            (
+                &mut target_attribute_keys,
+                &connection.target_attributes,
+                "target",
+            ),
+            (
+                &mut connection_attribute_keys,
+                &connection.attributes,
+                "connection",
+            ),
+        ] {
+            for (key, _) in attributes {
+                let identity = format!("{side}:{}", key.to_ascii_lowercase());
+                if seen.insert(identity) {
+                    keys.push(key.clone());
+                }
+            }
+        }
+    }
+    for keys in [
+        &mut source_attribute_keys,
+        &mut target_attribute_keys,
+        &mut connection_attribute_keys,
+    ] {
+        keys.sort_by(|left, right| {
+            left.to_ascii_lowercase()
+                .cmp(&right.to_ascii_lowercase())
+                .then_with(|| left.cmp(right))
+        });
+    }
+
+    let mut writer = csv::WriterBuilder::new()
+        .delimiter(delimited_text_delimiter(output_path))
+        .from_writer(output);
+    let mut headers = vec![
+        "record_type".to_owned(),
+        "connection_id".to_owned(),
+        "source".to_owned(),
+        "source_external_ids_json".to_owned(),
+        "source_type".to_owned(),
+        "relationship".to_owned(),
+        "target".to_owned(),
+        "target_external_ids_json".to_owned(),
+        "target_type".to_owned(),
+        "date".to_owned(),
+        "confidence".to_owned(),
+        "directed".to_owned(),
+        "source_reference".to_owned(),
+        "source_notes".to_owned(),
+        "ingest_source".to_owned(),
+    ];
+    headers.extend(
+        source_attribute_keys
+            .iter()
+            .map(|key| format!("source_attribute:{key}")),
+    );
+    headers.extend(
+        target_attribute_keys
+            .iter()
+            .map(|key| format!("target_attribute:{key}")),
+    );
+    headers.extend(
+        connection_attribute_keys
+            .iter()
+            .map(|key| format!("connection_attribute:{key}")),
+    );
+    writer
+        .write_record(&headers)
+        .map_err(|error| error.to_string())?;
+
+    for connection in &snapshot.connections {
+        let source_external_ids = serde_json::to_string(
+            &(!connection.source_entity_id.trim().is_empty())
+                .then(|| {
+                    vec![(
+                        snapshot.source_key.as_str(),
+                        connection.source_entity_id.as_str(),
+                    )]
+                })
+                .unwrap_or_default(),
+        )
+        .map_err(|error| error.to_string())?;
+        let target_external_ids = serde_json::to_string(
+            &(!connection.target_entity_id.trim().is_empty())
+                .then(|| {
+                    vec![(
+                        snapshot.source_key.as_str(),
+                        connection.target_entity_id.as_str(),
+                    )]
+                })
+                .unwrap_or_default(),
+        )
+        .map_err(|error| error.to_string())?;
+        let mut values = vec![
+            "connection".to_owned(),
+            connection.connection_id.clone(),
+            connection.source.clone(),
+            source_external_ids,
+            connection.source_type.clone(),
+            connection.relationship.clone(),
+            connection.target.clone(),
+            target_external_ids,
+            connection.target_type.clone(),
+            connection.date.clone(),
+            connection.confidence.to_string(),
+            connection.directed.to_string(),
+            connection.source_reference.clone(),
+            connection.notes.clone(),
+            snapshot.source_key.clone(),
+        ];
+        for (keys, attributes) in [
+            (&source_attribute_keys, &connection.source_attributes),
+            (&target_attribute_keys, &connection.target_attributes),
+            (&connection_attribute_keys, &connection.attributes),
+        ] {
+            for key in keys {
+                values.push(
+                    attributes
+                        .iter()
+                        .find(|(name, _)| name.eq_ignore_ascii_case(key))
+                        .map(|(_, value)| value.clone())
+                        .unwrap_or_default(),
+                );
+            }
+        }
+        writer
+            .write_record(values)
+            .map_err(|error| error.to_string())?;
+    }
+    writer.flush().map_err(|error| error.to_string())?;
+    writer
+        .into_inner()
+        .map_err(|error| format!("could not finish chart CSV export: {}", error.error()))
+}
+
+fn write_sql_snapshot_chart_csv_atomically(
+    output_path: &str,
+    snapshot: &ConnectionSnapshot,
+) -> Result<(), String> {
+    let path = Path::new(output_path);
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| format!("invalid output path: {}", path.display()))?;
+    let mut temporary_name = file_name.to_os_string();
+    temporary_name.push(format!(".tmp-{}-{}", std::process::id(), Uuid::new_v4()));
+    let temporary_path = parent.join(temporary_name);
+    use std::fs::OpenOptions;
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let file = options.open(&temporary_path).map_err(|error| {
+        format!(
+            "cannot create temporary export {}: {error}",
+            temporary_path.display()
+        )
+    })?;
+    let result = (|| -> Result<(), String> {
+        let file = write_sql_snapshot_chart_csv(output_path, snapshot, file)?;
+        file.sync_all()
+            .map_err(|error| format!("cannot sync temporary export: {error}"))?;
+        drop(file);
+        fs::rename(&temporary_path, path)
+            .map_err(|error| format!("cannot replace export {}: {error}", path.display()))
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(temporary_path);
+    }
+    result
+}
+
 fn write_sql_snapshots_csv_atomically(
     output_path: &str,
     snapshots: &[&ConnectionSnapshot],
@@ -22531,6 +22731,64 @@ fn export_sql_snapshot_cli(
     } else {
         println!(
             "SQL SNAPSHOT EXPORTED · {} CONNECTIONS · {}",
+            snapshot.connections.len(),
+            output_path
+        );
+    }
+    Ok(())
+}
+
+fn export_sql_snapshot_chart_csv_cli(
+    case_path: &str,
+    snapshot_id: Uuid,
+    output_path: &str,
+    json_output: bool,
+) -> Result<(), String> {
+    let case_file = Path::new(case_path);
+    let _case_lock = lock_automation_case(case_file)?;
+    let content =
+        fs::read_to_string(case_file).map_err(|error| format!("cannot read case: {error}"))?;
+    let case = serde_json::from_str::<CaseFile>(&content)
+        .map_err(|error| format!("cannot parse case: {error}"))?;
+    let snapshot = case
+        .snapshots
+        .iter()
+        .find(|snapshot| snapshot.id == snapshot_id)
+        .ok_or_else(|| format!("snapshot not found: {snapshot_id}"))?;
+    if output_path.trim().is_empty() {
+        return Err("export path cannot be empty".into());
+    }
+    if paths_refer_to_same_file(case_path, output_path) {
+        return Err("chart CSV export cannot replace its case file".into());
+    }
+    let lock_path = automation_lock_path(case_file)?;
+    if paths_refer_to_same_file(&lock_path.to_string_lossy(), output_path) {
+        return Err("chart CSV export cannot replace the case automation lock".into());
+    }
+    ensure_case_export_path_is_not_sql_source(&case, case_path, output_path)?;
+    write_sql_snapshot_chart_csv_atomically(output_path, snapshot)?;
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "schema_version": 1,
+                "ok": true,
+                "case": case_path,
+                "output": output_path,
+                "format": delimited_text_format(output_path),
+                "snapshot_id": snapshot.id,
+                "series": snapshot.series,
+                "connections": snapshot.connections.len(),
+                "skipped_rows": snapshot.skipped_rows,
+                "source_key": snapshot.source_key,
+                "entity_property_columns": snapshot.connections.iter().flat_map(|connection| connection.source_attributes.iter().chain(&connection.target_attributes)).map(|(key, _)| key.to_ascii_lowercase()).collect::<HashSet<_>>().len(),
+                "relationship_property_columns": snapshot.connections.iter().flat_map(|connection| connection.attributes.iter().map(|(key, _)| key.to_ascii_lowercase())).collect::<HashSet<_>>().len(),
+            }))
+            .map_err(|error| error.to_string())?
+        );
+    } else {
+        println!(
+            "SQL CHART CSV EXPORTED · {} CONNECTIONS · {}",
             snapshot.connections.len(),
             output_path
         );
@@ -24688,6 +24946,9 @@ fn main() -> eframe::Result<()> {
         println!(
             "Arch Notebook\n\nUsage:\n  arch-notebook\n  arch-notebook --version [--json]\n  arch-notebook --inspect-sqlite <database.sqlite> [--json]\n  arch-notebook --import-graphml <case.json> <input.graphml> [--json]\n  arch-notebook --import-kml <case.json> <input.kml> [--json]\n  arch-notebook --export-graphml <case.json> <output.graphml> [--json]\n  arch-notebook --export-kml <case.json> <output.kml> [--json]\n  arch-notebook --export-sql-snapshot <case.json> <snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --export-sql-series <case.json> <snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --export-sql-comparison <case.json> <baseline-snapshot-id> <current-snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --export-job <case.json> <job-name-or-id> <output.json> [--json]\n  arch-notebook --export-path <case.json> <path-name-or-id> <output.json> [--json]\n  arch-notebook --import-path <case.json> <input.json> [--name <path-name>] [--json]\n  arch-notebook --import-job <case.json> <input.json> [--name <job-name>] [--database <path>] [--series <label>] [--param name=value ...] [--json]\n  arch-notebook --export-import-design <case.json> <design-name-or-id> <output.json> [--json]\n  arch-notebook --import-import-design <case.json> <input.json> [--name <design-name>] [--json]\n  arch-notebook --list-jobs <case.json> [--enabled-only] [--schema-adaptation-needed] [--json]\n  arch-notebook --list-batches <case.json> [--json]\n  arch-notebook --list-runs <case.json> [--json] [--job <name-or-id>] [--trigger <desktop|scheduled|cli|replay|legacy>] [--schema-adaptation-needed] [--offset <count>] [--limit <count>]\n  arch-notebook --export-runs <case.json> <output.csv|tsv> [--job <name-or-id>] [--trigger <desktop|scheduled|cli|replay|legacy>] [--schema-adaptation-needed] [--offset <count>] [--limit <count>] [--json]\n  arch-notebook --explain-job <case.json> <job-name-or-id> [--param name=value ...] [--json]\n  arch-notebook --validate-job <case.json> <job-name-or-id> [--query-only] [--param name=value ...] [--json]\n  arch-notebook --validate-enabled-jobs <case.json> [--json] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --check-enabled-job-queries <case.json> [--json] [--require-usable] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --validate-run <case.json> <run-id> [--json]\n  arch-notebook --run-enabled-jobs <case.json> [--json] [--resume-batch <batch-id>] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --run-job <case.json> <job-name-or-id> [--param name=value ...] [--resume-batch <batch-id>] [--json]\n  arch-notebook --rerun-run <case.json> <run-id> [--json]\n\nJob and import design packages contain portable configuration, not case data or run history. Batch runs save snapshots and run history to the case file. JSON output is available for scheduler integration."
         );
+        println!(
+            "  arch-notebook --export-sql-chart-csv <case.json> <snapshot-id> <output.csv|tsv> [--json]"
+        );
         println!("  arch-notebook --annotate-run <case.json> <run-id> <comment> [--json]");
         println!(
             "  arch-notebook --review-run <case.json> <run-id> <reviewed|unreviewed> [--json]"
@@ -25020,6 +25281,29 @@ fn main() -> eframe::Result<()> {
             export_sql_snapshot_cli(case_path, snapshot_id, output_path, json_output)
         {
             report_cli_error("SQL snapshot export failed", error, json_output);
+        }
+        return Ok(());
+    }
+    if args
+        .first()
+        .is_some_and(|arg| arg == "--export-sql-chart-csv")
+    {
+        let json_output = args.iter().any(|arg| arg == "--json");
+        let usage = "usage: arch-notebook --export-sql-chart-csv <case.json> <snapshot-id> <output.csv|tsv> [--json]";
+        let (Some(case_path), Some(snapshot_id), Some(output_path)) =
+            (args.get(1), args.get(2), args.get(3))
+        else {
+            report_cli_usage_error(usage, json_output);
+        };
+        if args.len() > 5 || args.get(4).is_some_and(|arg| arg != "--json") {
+            report_cli_usage_error(usage, json_output);
+        }
+        let snapshot_id = Uuid::parse_str(snapshot_id)
+            .unwrap_or_else(|_| report_cli_usage_error("invalid snapshot UUID", json_output));
+        if let Err(error) =
+            export_sql_snapshot_chart_csv_cli(case_path, snapshot_id, output_path, json_output)
+        {
+            report_cli_error("SQL chart CSV export failed", error, json_output);
         }
         return Ok(());
     }

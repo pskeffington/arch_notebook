@@ -103,6 +103,8 @@ CSV/TSV and comparison reports are written to a temporary sibling file and atomi
 
 Use CSV/TSV as the supported handoff: create or select an Analyst’s Notebook import specification and map the exported source/target, type, relationship, date, confidence, direction, evidence, notes, entity IDs, and property columns. For repeatable ingestion, use SQL result aliases such as `source_attribute:phone` and `connection_attribute:role`; those fields can be captured directly from SQLite or written to CSV/TSV and consumed by an import specification.
 
+For a saved SQL capture, run `arch-notebook --export-sql-chart-csv case.json <snapshot-id> analyst-chart.csv --json` (use a `.tsv` destination for tab-separated output). This emits relationship rows in the chart import layout, expands endpoint and relationship properties into `source_attribute:<key>`, `target_attribute:<key>`, and `connection_attribute:<key>` columns, and stores stable SQL endpoint IDs as source-scoped external IDs. Repeated exports from the same SQL series can therefore be reconciled by the receiving import design. The command exports the selected immutable capture; it does not rerun the query or modify SQLite.
+
 IBM documents `.anx` as its standardized XML chart representation ([format guide](https://docs.i2group.com/anb/10.1.0/import_formats.html)). IBM distributes the ANX XSD and examples with the installed Analyst’s Notebook application ([schema location](https://www.ibm.com/support/pages/node/546669)). Arch Notebook does not currently read or write ANX, and GraphML is not a substitute for ANX. Add ANX support against an IBM-provided schema and fixture so chart validation and round-trip fidelity can be checked.
 
 ### GraphML and KML
@@ -113,6 +115,7 @@ IBM documents `.anx` as its standardized XML chart representation ([format guide
 arch-notebook --import-graphml case.json network.graphml --json
 arch-notebook --import-kml case.json locations.kml --json
 arch-notebook --export-graphml case.json chart.graphml --json
+arch-notebook --export-sql-chart-csv case.json <snapshot-id> analyst-chart.csv --json
 ```
 
 GraphML and KML imports use the same validation and entity reconciliation as desktop import, lock the case against concurrent automation writes, and atomically save only after the full import succeeds. Their JSON response reports total entities and relationships in the updated case. GraphML export’s schema-versioned JSON response reports the output path and exported entity and relationship counts.
