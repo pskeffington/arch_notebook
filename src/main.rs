@@ -3,7 +3,8 @@ use quick_xml::{
     Reader as XmlReader, escape::resolve_predefined_entity, events::Event as XmlEvent,
 };
 use rusqlite::{
-    Connection, ErrorCode, InterruptHandle, OpenFlags, TransactionBehavior, params_from_iter,
+    Connection, ErrorCode, InterruptHandle, OpenFlags, OptionalExtension, TransactionBehavior,
+    params_from_iter,
     types::{Value, ValueRef},
 };
 use serde::{Deserialize, Serialize};
@@ -3999,7 +4000,7 @@ impl App {
                 ui.horizontal(|ui| {
                     ui.add(
                         egui::TextEdit::singleline(&mut self.sql_schema_filter)
-                            .hint_text("Find table, view, or column")
+                            .hint_text("Find table, view, index, or column")
                             .desired_width(250.0),
                     );
                     if ui.small_button("Clear").clicked() {
@@ -4029,8 +4030,28 @@ impl App {
                             .filter_map(|foreign_key| foreign_key["table"].as_str())
                             .collect::<Vec<_>>()
                             .join(" ");
+                        let indexes = object["indexes"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .map(|index| {
+                                let columns = index["columns"]
+                                    .as_array()
+                                    .into_iter()
+                                    .flatten()
+                                    .filter_map(|column| column["name"].as_str())
+                                    .collect::<Vec<_>>()
+                                    .join(" ");
+                                format!(
+                                    "{} {columns} {}",
+                                    index["name"].as_str().unwrap_or(""),
+                                    index["definition"].as_str().unwrap_or("")
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                            .join(" ");
                         let search_text = format!(
-                            "{} {} {column_names} {foreign_key_targets} {}",
+                            "{} {} {column_names} {foreign_key_targets} {indexes} {}",
                             object["type"].as_str().unwrap_or(""),
                             object["name"].as_str().unwrap_or(""),
                             object["inspection_error"].as_str().unwrap_or("")
@@ -4104,6 +4125,68 @@ impl App {
                                                 foreign_key["table"].as_str().unwrap_or(""),
                                                 foreign_key["to"].as_str().unwrap_or("primary key")
                                             ));
+                                        }
+                                    }
+                                    if let Some(indexes) = object["indexes"].as_array()
+                                        && !indexes.is_empty()
+                                    {
+                                        ui.separator();
+                                        ui.strong("Indexes");
+                                        for index in indexes {
+                                            let indexed_columns = index["columns"]
+                                                .as_array()
+                                                .into_iter()
+                                                .flatten()
+                                                .filter(|column| {
+                                                    column["key"].as_bool().unwrap_or(true)
+                                                })
+                                                .map(|column| {
+                                                    let name = column["name"]
+                                                        .as_str()
+                                                        .map(str::to_owned)
+                                                        .unwrap_or_else(|| {
+                                                            format!(
+                                                                "expression #{}",
+                                                                column["column_id"]
+                                                                    .as_i64()
+                                                                    .unwrap_or_default()
+                                                            )
+                                                        });
+                                                    format!(
+                                                        "{}{}",
+                                                        name,
+                                                        if column["descending"]
+                                                            .as_bool()
+                                                            .unwrap_or(false)
+                                                        {
+                                                            " DESC"
+                                                        } else {
+                                                            ""
+                                                        }
+                                                    )
+                                                })
+                                                .collect::<Vec<_>>()
+                                                .join(", ");
+                                            ui.label(format!(
+                                                "{} · {} · {}{} · ({indexed_columns})",
+                                                index["name"].as_str().unwrap_or("index"),
+                                                if index["unique"].as_bool().unwrap_or(false) {
+                                                    "unique"
+                                                } else {
+                                                    "non-unique"
+                                                },
+                                                index["origin"]
+                                                    .as_str()
+                                                    .unwrap_or("unknown origin"),
+                                                if index["partial"].as_bool().unwrap_or(false) {
+                                                    " · partial"
+                                                } else {
+                                                    ""
+                                                }
+                                            ));
+                                            if let Some(definition) = index["definition"].as_str() {
+                                                ui.monospace(definition);
+                                            }
                                         }
                                     }
                                 });
@@ -20695,11 +20778,76 @@ fn read_sqlite_schema(database_path: &str) -> Result<Vec<serde_json::Value>, Str
             .map_err(|error| error.to_string())?
             .collect::<rusqlite::Result<Vec<_>>>()
             .map_err(|error| error.to_string())?;
+        let indexes = if object_type == "table" {
+            let index_list_pragma = format!("PRAGMA index_list({})", quote_sql_identifier(&name));
+            let index_specs = {
+                let mut statement = connection
+                    .prepare(&index_list_pragma)
+                    .map_err(|error| error.to_string())?;
+                statement
+                    .query_map([], |row| {
+                        Ok((
+                            row.get::<_, i64>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, bool>(2)?,
+                            row.get::<_, String>(3)?,
+                            row.get::<_, bool>(4)?,
+                        ))
+                    })
+                    .map_err(|error| error.to_string())?
+                    .collect::<rusqlite::Result<Vec<_>>>()
+                    .map_err(|error| error.to_string())?
+            };
+            let mut indexes = Vec::with_capacity(index_specs.len());
+            for (sequence, index_name, unique, origin, partial) in index_specs {
+                let index_info_pragma =
+                    format!("PRAGMA index_xinfo({})", quote_sql_identifier(&index_name));
+                let mut statement = connection
+                    .prepare(&index_info_pragma)
+                    .map_err(|error| error.to_string())?;
+                let columns = statement
+                    .query_map([], |row| {
+                        Ok(serde_json::json!({
+                            "sequence": row.get::<_, i64>(0)?,
+                            "column_id": row.get::<_, i64>(1)?,
+                            "name": row.get::<_, Option<String>>(2)?,
+                            "descending": row.get::<_, bool>(3)?,
+                            "collation": row.get::<_, Option<String>>(4)?,
+                            "key": row.get::<_, bool>(5)?,
+                        }))
+                    })
+                    .map_err(|error| error.to_string())?
+                    .collect::<rusqlite::Result<Vec<_>>>()
+                    .map_err(|error| error.to_string())?;
+                let definition = connection
+                    .query_row(
+                        "SELECT sql FROM sqlite_schema WHERE type = 'index' AND name = ?1",
+                        [&index_name],
+                        |row| row.get::<_, Option<String>>(0),
+                    )
+                    .optional()
+                    .map_err(|error| error.to_string())?
+                    .flatten();
+                indexes.push(serde_json::json!({
+                    "sequence": sequence,
+                    "name": index_name,
+                    "unique": unique,
+                    "origin": origin,
+                    "partial": partial,
+                    "columns": columns,
+                    "definition": definition,
+                }));
+            }
+            indexes
+        } else {
+            Vec::new()
+        };
         let mut object = serde_json::json!({
             "type": object_type,
             "name": name,
             "columns": columns,
             "foreign_keys": foreign_keys,
+            "indexes": indexes,
         });
         if let Some(error) = inspection_error {
             object["inspection_error"] = serde_json::json!(error);
@@ -21661,6 +21809,34 @@ fn inspect_sqlite_schema_cli(database_path: &str, json_output: bool) -> Result<(
                         foreign_key["from"].as_str().unwrap_or(""),
                         foreign_key["table"].as_str().unwrap_or(""),
                         foreign_key["to"].as_str().unwrap_or("primary key")
+                    );
+                }
+                for index in object["indexes"].as_array().into_iter().flatten() {
+                    let columns = index["columns"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter(|column| column["key"].as_bool().unwrap_or(true))
+                        .filter_map(|column| column["name"].as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    println!(
+                        "  {} index {} ({columns}){}{}",
+                        if index["unique"].as_bool().unwrap_or(false) {
+                            "unique"
+                        } else {
+                            "non-unique"
+                        },
+                        index["name"].as_str().unwrap_or(""),
+                        if index["partial"].as_bool().unwrap_or(false) {
+                            " · partial"
+                        } else {
+                            ""
+                        },
+                        index["definition"]
+                            .as_str()
+                            .map(|definition| format!(" · {definition}"))
+                            .unwrap_or_default()
                     );
                 }
             }
