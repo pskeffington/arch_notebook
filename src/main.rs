@@ -6473,6 +6473,7 @@ impl eframe::App for App {
                                     self.case.automation_runs.len()
                                 )).small().color(muted));
                                 let mut review_snapshot = None;
+                                let mut review_changes = None;
                                 let mut replay_run = None;
                                 egui::ScrollArea::vertical().max_height(210.0).show(ui, |ui| {
                                     for run in self
@@ -6599,6 +6600,11 @@ impl eframe::App for App {
                                                 if ui.small_button(format!("Review snapshot #{}", index + 1)).clicked() {
                                                     review_snapshot = Some(index);
                                                 }
+                                                if previous_snapshot_index(&self.case, index).is_some()
+                                                    && ui.small_button("Review changes").clicked()
+                                                {
+                                                    review_changes = self.case.snapshots.get(index).map(|snapshot| snapshot.id);
+                                                }
                                             }
                                         });
                                     }
@@ -6610,6 +6616,22 @@ impl eframe::App for App {
                                     self.replay_saved_automation_run(run_id);
                                 }
                                 if let Some(index)=review_snapshot {self.sql_snapshot_source=Some(self.case.snapshots[index].source_key.clone());self.sql_snapshot_index=Some(index);self.data_mode=DataMode::SqlRegressions;}
+                                if let Some(snapshot_id) = review_changes
+                                    && let Some(index) = self.case.snapshots.iter().position(|snapshot| snapshot.id == snapshot_id)
+                                {
+                                    let source_key = self.case.snapshots[index].source_key.clone();
+                                    if self.sql_snapshot_source.as_deref() == Some(source_key.as_str()) {
+                                        self.sql_snapshot_index = Some(index);
+                                    } else {
+                                        self.sql_snapshot_source = Some(source_key);
+                                        self.sql_snapshot_index = Some(index);
+                                    }
+                                    self.sql_delta_filter = SnapshotDeltaFilter::All;
+                                    self.sql_delta_search.clear();
+                                    self.data_mode = DataMode::SqlRegressions;
+                                    self.page = WorkspacePage::Data;
+                                    self.show_timeline = false;
+                                }
                                 return;
                             }
                             if self.data_mode==DataMode::SqlRegressions {
