@@ -4846,6 +4846,57 @@ fn connected_entity_counts(case: &CaseFile) -> HashMap<Uuid, usize> {
     connected_entity_counts_for_relationship(case, None)
 }
 
+fn linked_entities_for(
+    case: &CaseFile,
+    entity_id: Uuid,
+) -> Vec<(Uuid, String, String, Vec<usize>)> {
+    let mut links_by_entity: HashMap<Uuid, Vec<usize>> = HashMap::new();
+    for (index, link) in case.links.iter().enumerate() {
+        let counterpart = if link.from == entity_id {
+            Some(link.to)
+        } else if link.to == entity_id {
+            Some(link.from)
+        } else {
+            None
+        };
+        if let Some(counterpart) = counterpart {
+            links_by_entity.entry(counterpart).or_default().push(index);
+        }
+    }
+    let entities_by_id: HashMap<Uuid, &Entity> = case
+        .entities
+        .iter()
+        .map(|entity| (entity.id, entity))
+        .collect();
+    let mut linked_entities: Vec<_> = links_by_entity
+        .into_iter()
+        .map(|(counterpart_id, mut link_indices)| {
+            let (name, kind) = entities_by_id
+                .get(&counterpart_id)
+                .map(|entity| (entity.name.clone(), entity.kind.clone()))
+                .unwrap_or_else(|| ("(missing entity)".into(), String::new()));
+            link_indices.sort_by(|first, second| {
+                let first = &case.links[*first];
+                let second = &case.links[*second];
+                first
+                    .date
+                    .cmp(&second.date)
+                    .then_with(|| first.label.to_lowercase().cmp(&second.label.to_lowercase()))
+                    .then_with(|| first.connection_id.cmp(&second.connection_id))
+            });
+            (counterpart_id, name, kind, link_indices)
+        })
+        .collect();
+    linked_entities.sort_by(|first, second| {
+        first
+            .1
+            .to_lowercase()
+            .cmp(&second.1.to_lowercase())
+            .then_with(|| first.2.to_lowercase().cmp(&second.2.to_lowercase()))
+    });
+    linked_entities
+}
+
 fn chart_fit_transform(
     case: &CaseFile,
     entity_ids: &[Uuid],
@@ -7411,8 +7462,271 @@ impl eframe::App for App {
                         for (a,b) in self.duplicate_candidates.clone().iter().take(5){let an=self.case.entities.iter().find(|e|e.id==*a).map(|e|format!("{} · {}",e.name,e.kind)).unwrap_or_else(||"(missing)".into());let bn=self.case.entities.iter().find(|e|e.id==*b).map(|e|format!("{} · {}",e.name,e.kind)).unwrap_or_else(||"(missing)".into());if ui.selectable_label(self.merge_candidate==Some((*a,*b)),format!("{an}  ↔  {bn}")).clicked(){self.merge_candidate=Some((*a,*b));}}
                         if let Some((keep,remove))=self.merge_candidate{let keep_name=self.case.entities.iter().find(|e|e.id==keep).map(|e|format!("{} · {}",e.name,e.kind)).unwrap_or_else(||"(missing)".into());let remove_name=self.case.entities.iter().find(|e|e.id==remove).map(|e|format!("{} · {}",e.name,e.kind)).unwrap_or_else(||"(missing)".into());ui.label(egui::RichText::new(format!("Keep {keep_name}; merge {remove_name} into it. Aliases, notes, attributes, and links will be retained.")).small().color(muted));if ui.button(format!("Merge {remove_name} into {keep_name}")).clicked(){self.merge_candidate_into_first();}}
                         ui.add_space(20.0);ui.label(egui::RichText::new("SELECTED ITEM").size(9.0).strong().color(cyan));ui.add_space(5.0);
-                        if let Some(id)=self.selected{if let Some(entity)=self.case.entities.iter().find(|e|e.id==id){if !entity.aliases.is_empty(){ui.label(egui::RichText::new("KNOWN ALIASES").size(9.0).strong().color(cyan));for alias in &entity.aliases{ui.label(alias);}}if !entity.merged_records.is_empty(){egui::CollapsingHeader::new(format!("Merged record history ({})",entity.merged_records.len())).show(ui,|ui|for record in &entity.merged_records{ui.label(format!("{} · {} · {}",record.name,record.kind,record.id));if !record.detail.is_empty(){ui.label(&record.detail);}for (key,value) in &record.attributes{ui.label(format!("{key}: {value}"));}});}}}
-                        if let Some(id)=self.selected { if let Some(e)=self.case.entities.iter_mut().find(|e|e.id==id){ui.label(egui::RichText::new("TYPE").size(9.0).color(muted));ui.add(egui::TextEdit::singleline(&mut e.kind).desired_width(230.0));ui.label(egui::RichText::new("LABEL").size(9.0).color(muted));ui.add(egui::TextEdit::singleline(&mut e.name).desired_width(230.0));ui.horizontal(|ui|{ui.label(egui::RichText::new("COLOR").size(9.0).color(muted));ui.color_edit_button_srgb(&mut e.color);ui.label(format!("#{:02X}{:02X}{:02X}",e.color[0],e.color[1],e.color[2]));});ui.checkbox(&mut e.position_locked,"Pin position during automatic layouts");ui.label(egui::RichText::new("NOTES").size(9.0).color(muted));ui.add(egui::TextEdit::multiline(&mut e.detail).desired_width(230.0).desired_rows(3));ui.label(egui::RichText::new("ATTRIBUTES").size(9.0).strong().color(cyan));let mut remove=None;for (i,(key,value)) in e.attributes.iter_mut().enumerate(){ui.horizontal(|ui|{ui.add(egui::TextEdit::singleline(key).hint_text("Attribute").desired_width(90.0));ui.add(egui::TextEdit::singleline(value).hint_text("Value").desired_width(100.0));if ui.small_button("×").clicked(){remove=Some(i);}});}if let Some(i)=remove{e.attributes.remove(i);}if ui.small_button("＋ Attribute").clicked(){e.attributes.push((String::new(),String::new()));}ui.label(egui::RichText::new("LINKS").size(9.0).strong().color(cyan));for l in self.case.links.iter().filter(|l|l.from==id||l.to==id){ui.label(format!("{}  ·  {}",l.label,l.date));}}}else if let Some(i)=self.selected_link {if let Some(link)=self.case.links.get_mut(i){ui.label(egui::RichText::new("RELATIONSHIP").size(9.0).color(muted));let from=link.from;let to=link.to;ui.horizontal(|ui|{if let Some(entity)=self.case.entities.iter().find(|entity|entity.id==from){if ui.small_button(format!("Source · {}",entity.name)).clicked(){self.selected=Some(from);self.selected_link=None;self.chart_focus=Some(from);}}if let Some(entity)=self.case.entities.iter().find(|entity|entity.id==to){if ui.small_button(format!("Target · {}",entity.name)).clicked(){self.selected=Some(to);self.selected_link=None;self.chart_focus=Some(to);}}});ui.add(egui::TextEdit::singleline(&mut link.label));ui.horizontal(|ui|{ui.label("Date");ui.add(egui::TextEdit::singleline(&mut link.date).desired_width(100.0));});ui.add(egui::Slider::new(&mut link.confidence,1..=3).text("Confidence"));ui.checkbox(&mut link.directed,"Directed relationship");ui.label("Source reference");ui.add(egui::TextEdit::singleline(&mut link.source_reference).desired_width(230.0));if !link.source_notes.is_empty(){ui.label(egui::RichText::new("SOURCE NOTES").size(9.0).color(muted));ui.label(&link.source_notes);}ui.label("Analyst notes");ui.add(egui::TextEdit::multiline(&mut link.notes).desired_rows(4));}}else{ui.label(egui::RichText::new("Select an entity on the chart to inspect its attributes and connections. Select a relationship in Data to edit its properties.").small().color(muted));}
+                        let mut focus_linked_entity = None;
+                        let mut focus_linked_record = None;
+                        if let Some(id) = self.selected {
+                            let linked_entities = linked_entities_for(&self.case, id);
+                            if let Some(entity) = self.case.entities.iter().find(|entity| entity.id == id) {
+                                if !entity.aliases.is_empty() {
+                                    ui.label(
+                                        egui::RichText::new("KNOWN ALIASES")
+                                            .size(9.0)
+                                            .strong()
+                                            .color(cyan),
+                                    );
+                                    for alias in &entity.aliases {
+                                        ui.label(alias);
+                                    }
+                                }
+                                if !entity.merged_records.is_empty() {
+                                    egui::CollapsingHeader::new(format!(
+                                        "Merged record history ({})",
+                                        entity.merged_records.len()
+                                    ))
+                                    .show(ui, |ui| {
+                                        for record in &entity.merged_records {
+                                            ui.label(format!(
+                                                "{} · {} · {}",
+                                                record.name, record.kind, record.id
+                                            ));
+                                            if !record.detail.is_empty() {
+                                                ui.label(&record.detail);
+                                            }
+                                            for (key, value) in &record.attributes {
+                                                ui.label(format!("{key}: {value}"));
+                                            }
+                                        }
+                                    });
+                                }
+                            }
+                            if let Some(entity) =
+                                self.case.entities.iter_mut().find(|entity| entity.id == id)
+                            {
+                                ui.label(egui::RichText::new("TYPE").size(9.0).color(muted));
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut entity.kind)
+                                        .desired_width(230.0),
+                                );
+                                ui.label(egui::RichText::new("LABEL").size(9.0).color(muted));
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut entity.name)
+                                        .desired_width(230.0),
+                                );
+                                ui.horizontal(|ui| {
+                                    ui.label(egui::RichText::new("COLOR").size(9.0).color(muted));
+                                    ui.color_edit_button_srgb(&mut entity.color);
+                                    ui.label(format!(
+                                        "#{:02X}{:02X}{:02X}",
+                                        entity.color[0], entity.color[1], entity.color[2]
+                                    ));
+                                });
+                                ui.checkbox(
+                                    &mut entity.position_locked,
+                                    "Pin position during automatic layouts",
+                                );
+                                ui.label(egui::RichText::new("NOTES").size(9.0).color(muted));
+                                ui.add(
+                                    egui::TextEdit::multiline(&mut entity.detail)
+                                        .desired_width(230.0)
+                                        .desired_rows(3),
+                                );
+                                ui.label(
+                                    egui::RichText::new("ATTRIBUTES")
+                                        .size(9.0)
+                                        .strong()
+                                        .color(cyan),
+                                );
+                                let mut remove_attribute = None;
+                                for (index, (key, value)) in
+                                    entity.attributes.iter_mut().enumerate()
+                                {
+                                    ui.horizontal(|ui| {
+                                        ui.add(
+                                            egui::TextEdit::singleline(key)
+                                                .hint_text("Attribute")
+                                                .desired_width(90.0),
+                                        );
+                                        ui.add(
+                                            egui::TextEdit::singleline(value)
+                                                .hint_text("Value")
+                                                .desired_width(100.0),
+                                        );
+                                        if ui.small_button("×").clicked() {
+                                            remove_attribute = Some(index);
+                                        }
+                                    });
+                                }
+                                if let Some(index) = remove_attribute {
+                                    entity.attributes.remove(index);
+                                }
+                                if ui.small_button("＋ Attribute").clicked() {
+                                    entity.attributes.push((String::new(), String::new()));
+                                }
+                            }
+                            egui::CollapsingHeader::new(format!(
+                                "LINKED ENTITIES · {}",
+                                linked_entities.len()
+                            ))
+                            .default_open(false)
+                            .id_salt(("linked_entities", id))
+                            .show(ui, |ui| {
+                                if linked_entities.is_empty() {
+                                    ui.label("This entity has no linked entities.");
+                                }
+                                egui::ScrollArea::vertical()
+                                    .max_height(190.0)
+                                    .show(ui, |ui| {
+                                        for (counterpart_id, name, kind, link_indices) in
+                                            &linked_entities
+                                        {
+                                            let label = format!(
+                                                "{name} · {kind} · {} link records",
+                                                link_indices.len()
+                                            );
+                                            egui::CollapsingHeader::new(label)
+                                                .id_salt(("linked_counterpart", id, counterpart_id))
+                                                .show(ui, |ui| {
+                                                    if ui.small_button("Focus entity on chart").clicked() {
+                                                        focus_linked_entity = Some(*counterpart_id);
+                                                    }
+                                                    for index in link_indices {
+                                                        let Some(link) =
+                                                            self.case.links.get(*index)
+                                                        else {
+                                                            continue;
+                                                        };
+                                                        let direction = if !link.directed {
+                                                            "UNDIRECTED ↔"
+                                                        } else if link.from == id {
+                                                            "OUTGOING →"
+                                                        } else {
+                                                            "INCOMING ←"
+                                                        };
+                                                        let connection_id = if link.connection_id.is_empty() {
+                                                            "no ID"
+                                                        } else {
+                                                            link.connection_id.as_str()
+                                                        };
+                                                        let date = if link.date.is_empty() {
+                                                            "undated"
+                                                        } else {
+                                                            link.date.as_str()
+                                                        };
+                                                        let response = ui.selectable_label(
+                                                            self.selected_link == Some(*index),
+                                                            format!(
+                                                                "{direction} · {} · {date} · {connection_id}",
+                                                                link.label
+                                                            ),
+                                                        );
+                                                        if response.clicked() {
+                                                            focus_linked_record = Some(*index);
+                                                        }
+                                                        if !link.source_reference.is_empty() {
+                                                            response.on_hover_text(format!(
+                                                                "Evidence: {}",
+                                                                link.source_reference
+                                                            ));
+                                                        }
+                                                    }
+                                                });
+                                        }
+                                    });
+                            });
+                        } else if let Some(index) = self.selected_link {
+                            if let Some(link) = self.case.links.get_mut(index) {
+                                ui.label(
+                                    egui::RichText::new("RELATIONSHIP")
+                                        .size(9.0)
+                                        .color(muted),
+                                );
+                                let from = link.from;
+                                let to = link.to;
+                                ui.horizontal(|ui| {
+                                    if let Some(entity) =
+                                        self.case.entities.iter().find(|entity| entity.id == from)
+                                        && ui
+                                            .small_button(format!("Source · {}", entity.name))
+                                            .clicked()
+                                    {
+                                        self.selected = Some(from);
+                                        self.selected_link = None;
+                                        self.chart_focus = Some(from);
+                                    }
+                                    if let Some(entity) =
+                                        self.case.entities.iter().find(|entity| entity.id == to)
+                                        && ui
+                                            .small_button(format!("Target · {}", entity.name))
+                                            .clicked()
+                                    {
+                                        self.selected = Some(to);
+                                        self.selected_link = None;
+                                        self.chart_focus = Some(to);
+                                    }
+                                });
+                                ui.add(egui::TextEdit::singleline(&mut link.label));
+                                ui.horizontal(|ui| {
+                                    ui.label("Date");
+                                    ui.add(
+                                        egui::TextEdit::singleline(&mut link.date)
+                                            .desired_width(100.0),
+                                    );
+                                });
+                                ui.add(
+                                    egui::Slider::new(&mut link.confidence, 1..=3)
+                                        .text("Confidence"),
+                                );
+                                ui.checkbox(&mut link.directed, "Directed relationship");
+                                ui.label("Source reference");
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut link.source_reference)
+                                        .desired_width(230.0),
+                                );
+                                if !link.source_notes.is_empty() {
+                                    ui.label(
+                                        egui::RichText::new("SOURCE NOTES")
+                                            .size(9.0)
+                                            .color(muted),
+                                    );
+                                    ui.label(&link.source_notes);
+                                }
+                                ui.label("Analyst notes");
+                                ui.add(
+                                    egui::TextEdit::multiline(&mut link.notes).desired_rows(4),
+                                );
+                            }
+                        } else {
+                            ui.label(
+                                egui::RichText::new(
+                                    "Select an entity on the chart to inspect its attributes and linked entities. Select a relationship in Data to edit its properties.",
+                                )
+                                .small()
+                                .color(muted),
+                            );
+                        }
+                        if let Some(counterpart_id) = focus_linked_entity {
+                            self.selected = Some(counterpart_id);
+                            self.selected_link = None;
+                            self.chart_focus = Some(counterpart_id);
+                            self.chart_focus_link = None;
+                            self.chart_focus_group = None;
+                            self.chart_fit_entities = None;
+                            self.chart_fit_path = None;
+                            self.path_result.clear();
+                            self.sql_source_focus = None;
+                            self.show_timeline = false;
+                        } else if let Some(index) = focus_linked_record {
+                            self.selected = None;
+                            self.selected_link = Some(index);
+                            self.chart_focus = None;
+                            self.chart_focus_link = Some(index);
+                            self.chart_focus_group = None;
+                            self.chart_fit_entities = None;
+                            self.chart_fit_path = None;
+                            self.path_result.clear();
+                            self.sql_source_focus = None;
+                            self.show_timeline = false;
+                        }
                         ui.add_space(20.0);ui.label(egui::RichText::new("LEGEND").size(9.0).strong().color(cyan));ui.label(egui::RichText::new("Solid link  ·  corroborated").small().color(muted));ui.label(egui::RichText::new("Dashed link  ·  unverified").small().color(muted));
                     });
                     });
