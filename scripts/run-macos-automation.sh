@@ -25,16 +25,16 @@ rotate_log() {
   size="${size//[[:space:]]/}"
   (( size >= max_bytes )) || return 0
 
-  rm -f "$path.5"
+  rm -f "$path.5" || return 1
   for ((index = 4; index >= 1; index--)); do
     [[ ! -L "$path.$index" ]] || return 1
     if [[ -f "$path.$index" ]]; then
-      mv -f "$path.$index" "$path.$((index + 1))"
-      chmod 600 "$path.$((index + 1))"
+      mv -f "$path.$index" "$path.$((index + 1))" || return 1
+      chmod 600 "$path.$((index + 1))" || return 1
     fi
   done
-  mv -f "$path" "$path.1"
-  chmod 600 "$path.1"
+  mv -f "$path" "$path.1" || return 1
+  chmod 600 "$path.1" || return 1
 }
 
 mkdir -p "$log_dir" || exit 1
