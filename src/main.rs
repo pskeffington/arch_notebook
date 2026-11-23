@@ -9790,6 +9790,9 @@ fn validate_enabled_automation_jobs_cli(
     queries_only: bool,
     json_output: bool,
 ) -> Result<bool, String> {
+    // Match the lock used by automation runs and saves so preflight cannot read
+    // a case while another process is checkpointing a job result.
+    let _case_lock = lock_automation_case(Path::new(case_path))?;
     let content =
         fs::read_to_string(case_path).map_err(|error| format!("cannot read case: {error}"))?;
     let case = serde_json::from_str::<CaseFile>(&content)
