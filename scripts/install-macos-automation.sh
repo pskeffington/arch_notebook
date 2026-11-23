@@ -6,6 +6,24 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
   exit 2
 fi
 
+if [[ "${1:-}" == "--remove" ]]; then
+  if [[ $# -ne 1 ]]; then
+    echo "Usage: $0 --remove" >&2
+    exit 2
+  fi
+  home_dir="${HOME:?HOME must be set}"
+  case "$home_dir" in
+    /*) ;;
+    *) echo "HOME must be an absolute path." >&2; exit 1 ;;
+  esac
+  label="com.archnotebook.automation"
+  plist_path="$home_dir/Library/LaunchAgents/$label.plist"
+  launchctl bootout "gui/$(id -u)" "$plist_path" >/dev/null 2>&1 || true
+  rm -f "$plist_path"
+  echo "Removed Arch Notebook SQL automation schedule for this user."
+  exit 0
+fi
+
 if [[ $# -lt 1 || $# -gt 2 ]]; then
   echo "Usage: $0 <case-file> [app-bundle]" >&2
   exit 2

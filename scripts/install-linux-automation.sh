@@ -6,6 +6,33 @@ if [[ "$(uname -s)" != "Linux" ]]; then
   exit 2
 fi
 
+if [[ "${1:-}" == "--remove" ]]; then
+  if [[ $# -ne 1 ]]; then
+    echo "Usage: $0 --remove" >&2
+    exit 2
+  fi
+  home_dir="${HOME:?HOME must be set}"
+  case "$home_dir" in
+    /*) ;;
+    *) echo "HOME must be an absolute path." >&2; exit 1 ;;
+  esac
+  config_home="${XDG_CONFIG_HOME:-$home_dir/.config}"
+  case "$config_home" in
+    /*) ;;
+    *) echo "XDG_CONFIG_HOME must be an absolute path." >&2; exit 1 ;;
+  esac
+  unit_dir="$config_home/systemd/user"
+  if command -v systemctl >/dev/null 2>&1; then
+    systemctl --user disable --now arch-notebook-automation.timer >/dev/null 2>&1 || true
+  fi
+  rm -f "$unit_dir/arch-notebook-automation.service" "$unit_dir/arch-notebook-automation.timer"
+  if command -v systemctl >/dev/null 2>&1; then
+    systemctl --user daemon-reload >/dev/null 2>&1 || true
+  fi
+  echo "Removed Arch Notebook SQL automation schedule for this user."
+  exit 0
+fi
+
 if [[ $# -gt 2 ]]; then
   echo "Usage: $0 [case-file] [arch-notebook-binary]" >&2
   exit 2

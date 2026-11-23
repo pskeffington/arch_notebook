@@ -12,6 +12,7 @@ use std::{
     env, fs,
     io::Write,
     path::{Path, PathBuf},
+    process::Command,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -28,6 +29,145 @@ const SQL_QUERY_TIMEOUT: Duration = Duration::from_secs(SQL_QUERY_TIMEOUT_MINUTE
 
 fn sql_query_timeout_message() -> String {
     format!("SQL query exceeded the {SQL_QUERY_TIMEOUT_MINUTES} minute execution limit")
+}
+
+fn install_automation_schedule_command(case_path: &Path, schedule: &str) -> Result<String, String> {
+    let executable =
+        env::current_exe().map_err(|error| format!("cannot locate app executable: {error}"))?;
+    let mut command: Command;
+    #[cfg(target_os = "linux")]
+    {
+        let packaged_installer = executable
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join("arch-notebook-install-automation");
+        if packaged_installer.is_file() {
+            command = Command::new(packaged_installer);
+            command.arg(case_path).arg(executable);
+        } else {
+            command = Command::new("bash");
+            command
+                .arg(
+                    Path::new(env!("CARGO_MANIFEST_DIR"))
+                        .join("scripts/install-linux-automation.sh"),
+                )
+                .arg(case_path)
+                .arg(executable);
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let contents = executable
+            .parent()
+            .and_then(Path::parent)
+            .ok_or_else(|| "app executable is not inside an application bundle".to_string())?;
+        let app_bundle = contents
+            .parent()
+            .ok_or_else(|| "application bundle path could not be resolved".to_string())?;
+        let installer = contents.join("Resources/install-macos-automation.sh");
+        command = Command::new("bash");
+        let installer = if installer.is_file() {
+            installer
+        } else {
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/install-macos-automation.sh")
+        };
+        command.arg(installer).arg(case_path).arg(app_bundle);
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = (case_path, schedule, executable);
+        return Err("scheduled SQL automation is supported on Linux and macOS".into());
+    }
+    command.env("ARCH_NOTEBOOK_AUTOMATION_SCHEDULE", schedule);
+    let output = command
+        .output()
+        .map_err(|error| format!("could not launch schedule installer: {error}"))?;
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if output.status.success() {
+        Ok(if stdout.is_empty() {
+            "SQL AUTOMATION SCHEDULE INSTALLED".into()
+        } else {
+            stdout
+        })
+    } else {
+        Err(if stderr.is_empty() {
+            format!(
+                "schedule installer exited with {}{}",
+                output.status,
+                if stdout.is_empty() {
+                    String::new()
+                } else {
+                    format!(": {stdout}")
+                }
+            )
+        } else {
+            stderr
+        })
+    }
+}
+
+fn remove_automation_schedule_command() -> Result<String, String> {
+    let executable =
+        env::current_exe().map_err(|error| format!("cannot locate app executable: {error}"))?;
+    let mut command: Command;
+    #[cfg(target_os = "linux")]
+    {
+        let packaged_installer = executable
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join("arch-notebook-install-automation");
+        if packaged_installer.is_file() {
+            command = Command::new(packaged_installer);
+            command.arg("--remove");
+        } else {
+            command = Command::new("bash");
+            command
+                .arg(
+                    Path::new(env!("CARGO_MANIFEST_DIR"))
+                        .join("scripts/install-linux-automation.sh"),
+                )
+                .arg("--remove");
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let contents = executable
+            .parent()
+            .and_then(Path::parent)
+            .ok_or_else(|| "app executable is not inside an application bundle".to_string())?;
+        let packaged_installer = contents.join("Resources/install-macos-automation.sh");
+        let installer = if packaged_installer.is_file() {
+            packaged_installer
+        } else {
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/install-macos-automation.sh")
+        };
+        command = Command::new("bash");
+        command.arg(installer).arg("--remove");
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = executable;
+        return Err("scheduled SQL automation is supported on Linux and macOS".into());
+    }
+    let output = command
+        .output()
+        .map_err(|error| format!("could not launch schedule remover: {error}"))?;
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if output.status.success() {
+        Ok(if stdout.is_empty() {
+            "SQL AUTOMATION SCHEDULE REMOVED".into()
+        } else {
+            stdout
+        })
+    } else {
+        Err(if stderr.is_empty() {
+            format!("schedule remover exited with {}", output.status)
+        } else {
+            stderr
+        })
+    }
 }
 
 struct SqlQueryDeadline {
@@ -371,6 +511,8 @@ struct App {
     )>,
     automation_worker: Option<Receiver<Result<AutomationWorkerResult, String>>>,
     automation_progress: Option<Arc<Mutex<String>>>,
+    automation_schedule: String,
+    automation_schedule_worker: Option<Receiver<Result<String, String>>>,
 }
 
 enum AutomationWorkerResult {
@@ -748,6 +890,8 @@ impl Default for App {
             automation_editor_before_edit: None,
             automation_worker: None,
             automation_progress: None,
+            automation_schedule: "hourly".into(),
+            automation_schedule_worker: None,
         }
     }
 }
@@ -1026,11 +1170,53 @@ impl App {
             automation_editor_before_edit: None,
             automation_worker: None,
             automation_progress: None,
+            automation_schedule: "hourly".into(),
+            automation_schedule_worker: None,
         }
     }
 
     fn current_case_json(&self) -> Option<String> {
         serde_json::to_string(&self.case).ok()
+    }
+
+    fn install_automation_schedule(&mut self) {
+        if self.automation_worker.is_some() || self.automation_schedule_worker.is_some() {
+            return;
+        }
+        if self.has_unsaved_changes() {
+            self.status = "SAVE CASE AND JOB CHANGES BEFORE INSTALLING A SCHEDULE".into();
+            return;
+        }
+        let case_path = PathBuf::from(self.case_path.trim());
+        if !case_path.is_file() {
+            self.status = "SAVE THE CASE TO A FILE BEFORE INSTALLING A SCHEDULE".into();
+            return;
+        }
+        if !self.case.automation_jobs.iter().any(|job| job.enabled) {
+            self.status = "ENABLE AT LEAST ONE SQL JOB BEFORE INSTALLING A SCHEDULE".into();
+            return;
+        }
+        let schedule = self.automation_schedule.clone();
+        let (sender, receiver) = mpsc::channel();
+        self.automation_schedule_worker = Some(receiver);
+        self.status = format!("INSTALLING {schedule} SQL AUTOMATION SCHEDULE");
+        thread::spawn(move || {
+            let result = install_automation_schedule_command(&case_path, &schedule);
+            let _ = sender.send(result);
+        });
+    }
+
+    fn remove_automation_schedule(&mut self) {
+        if self.automation_worker.is_some() || self.automation_schedule_worker.is_some() {
+            return;
+        }
+        let (sender, receiver) = mpsc::channel();
+        self.automation_schedule_worker = Some(receiver);
+        self.status = "REMOVING SQL AUTOMATION SCHEDULE".into();
+        thread::spawn(move || {
+            let result = remove_automation_schedule_command();
+            let _ = sender.send(result);
+        });
     }
 
     fn has_unsaved_changes(&self) -> bool {
@@ -6290,6 +6476,60 @@ fn shortest_path(case: &CaseFile, start: Uuid, goal: Uuid) -> Option<Vec<Uuid>> 
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
+        if let Some(schedule_state) = self
+            .automation_schedule_worker
+            .as_ref()
+            .map(Receiver::try_recv)
+        {
+            match schedule_state {
+                Ok(Ok(message)) => {
+                    self.automation_schedule_worker = None;
+                    self.status = message;
+                }
+                Ok(Err(error)) => {
+                    let verb = if self.status.starts_with("REMOVING") {
+                        "SCHEDULE REMOVE FAILED"
+                    } else {
+                        "SCHEDULE INSTALL FAILED"
+                    };
+                    self.automation_schedule_worker = None;
+                    self.status = format!("{verb} · {error}");
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    let verb = if self.status.starts_with("REMOVING") {
+                        "SCHEDULE REMOVE FAILED"
+                    } else {
+                        "SCHEDULE INSTALL FAILED"
+                    };
+                    self.automation_schedule_worker = None;
+                    self.status = format!("{verb} · background worker stopped unexpectedly");
+                }
+                Err(mpsc::TryRecvError::Empty) => {
+                    ctx.request_repaint_after(Duration::from_millis(250));
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        ui.vertical_centered(|ui| {
+                            ui.add_space(ui.available_height() * 0.35);
+                            ui.heading(if self.status.starts_with("REMOVING") {
+                                "Removing SQL schedule"
+                            } else {
+                                "Installing SQL schedule"
+                            });
+                            ui.add_space(10.0);
+                            ui.add(egui::Spinner::new());
+                            ui.add_space(10.0);
+                            ui.label(if self.status.starts_with("REMOVING") {
+                                "The app is disabling and removing its per-user schedule."
+                            } else {
+                                "The installer is checking enabled SQL jobs and updating your user schedule."
+                            });
+                            ui.add_space(12.0);
+                            ui.label(&self.status);
+                        });
+                    });
+                    return;
+                }
+            }
+        }
         if let Some(worker_state) = self.automation_worker.as_ref().map(Receiver::try_recv) {
             match worker_state {
                 Ok(Ok(result)) => {
@@ -6821,6 +7061,35 @@ impl eframe::App for App {
                                         self.start_enabled_automation_jobs();
                                     }
                                 });
+                                ui.horizontal(|ui| {
+                                    ui.label(egui::RichText::new("SCHEDULE SQL AUTOMATION").small().strong().color(cyan));
+                                    egui::ComboBox::from_id_salt("automation_schedule_cadence")
+                                        .selected_text(&self.automation_schedule)
+                                        .show_ui(ui, |ui| {
+                                            ui.selectable_value(&mut self.automation_schedule, "hourly".into(), "Hourly");
+                                            ui.selectable_value(&mut self.automation_schedule, "daily".into(), "Daily");
+                                            ui.selectable_value(&mut self.automation_schedule, "weekly".into(), "Weekly");
+                                        });
+                                    let ready = enabled_job_count > 0
+                                        && !self.has_unsaved_changes()
+                                        && self.automation_worker.is_none()
+                                        && self.automation_schedule_worker.is_none()
+                                        && Path::new(self.case_path.trim()).is_file();
+                                    if ui.add_enabled(ready, egui::Button::new("Install/update schedule")).clicked() {
+                                        self.install_automation_schedule();
+                                    }
+                                    if ui
+                                        .add_enabled(
+                                            self.automation_worker.is_none()
+                                                && self.automation_schedule_worker.is_none(),
+                                            egui::Button::new("Remove schedule"),
+                                        )
+                                        .clicked()
+                                    {
+                                        self.remove_automation_schedule();
+                                    }
+                                });
+                                ui.label(egui::RichText::new("Uses the saved case file. Install runs a read-only SQL preflight; remove disables this user's Linux systemd timer or macOS LaunchAgent.").small().color(muted));
                                 ui.add_space(8.0);
                                 ui.horizontal(|ui| {
                                     ui.label(egui::RichText::new("JOBS").small().strong().color(cyan));

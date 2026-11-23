@@ -26,12 +26,17 @@ fi
 
 binary_source="$archive_dir/arch-notebook"
 desktop_source="$archive_dir/arch-notebook.desktop"
+automation_installer_source="$archive_dir/install-linux-automation.sh"
 if [[ ! -f "$binary_source" || -L "$binary_source" || ! -x "$binary_source" ]]; then
   echo "Missing executable archive binary: $binary_source" >&2
   exit 1
 fi
 if [[ ! -f "$desktop_source" || -L "$desktop_source" ]]; then
   echo "Missing desktop entry: $desktop_source" >&2
+  exit 1
+fi
+if [[ ! -f "$automation_installer_source" || -L "$automation_installer_source" || ! -x "$automation_installer_source" ]]; then
+  echo "Missing executable archive automation installer: $automation_installer_source" >&2
   exit 1
 fi
 
@@ -49,12 +54,19 @@ esac
 binary_dir="$home_dir/.local/bin"
 desktop_dir="$data_home/applications"
 binary_path="$binary_dir/arch-notebook"
+automation_installer_path="$binary_dir/arch-notebook-install-automation"
 desktop_path="$desktop_dir/arch-notebook.desktop"
 mkdir -p "$binary_dir" "$desktop_dir"
 binary_tmp="$(mktemp "$binary_dir/.arch-notebook.XXXXXX")"
 trap 'rm -f "$binary_tmp"' EXIT
 install -m 755 "$binary_source" "$binary_tmp"
 mv -f "$binary_tmp" "$binary_path"
+trap - EXIT
+
+automation_installer_tmp="$(mktemp "$binary_dir/.arch-notebook-install-automation.XXXXXX")"
+trap 'rm -f "$automation_installer_tmp"' EXIT
+install -m 755 "$automation_installer_source" "$automation_installer_tmp"
+mv -f "$automation_installer_tmp" "$automation_installer_path"
 trap - EXIT
 
 desktop_exec=${binary_path//\\/\\\\}
@@ -72,5 +84,6 @@ mv -f "$desktop_tmp" "$desktop_path"
 trap - EXIT
 
 echo "Installed executable: $binary_path"
+echo "Installed automation installer: $automation_installer_path"
 echo "Installed application menu entry: $desktop_path"
 echo "Add $binary_dir to PATH to run arch-notebook from a terminal."
