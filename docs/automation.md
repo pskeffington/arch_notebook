@@ -218,7 +218,13 @@ cargo run --offline -- --run-enabled-jobs harbor-light.case.json --resume-batch 
 cargo run --offline -- --run-job harbor-light.case.json "Harbor Light baseline" --param snapshot_id=current --resume-batch <batch-id> --json
 ```
 
-For scripted handoff after a capture, read that job’s `snapshot_id` from the `--run-job ... --json` result and export the immutable result in chart-import columns with `arch-notebook --export-sql-chart-csv harbor-light.case.json <snapshot-id> analyst-chart.csv --json`. This keeps scheduled or command-line SQL ingestion separate from Analyst’s Notebook import-spec processing while making the exact capture available as CSV/TSV.
+For an unattended single-job pipeline, add `--export-chart-csv analyst-chart.csv` (or a `.tsv` path) to `--run-job`. The command writes the exact immutable capture produced by that run and adds `chart_csv_output` to its JSON outcome. A run that produces no snapshot creates no chart export; the case and run record are saved before export is attempted, so an export-path error does not discard the capture. This combines scheduled or command-line ingestion with a ready-to-map Analyst’s Notebook handoff:
+
+```sh
+cargo run --offline -- --run-job harbor-light.case.json "Harbor Light baseline" --param snapshot_id=current --export-chart-csv analyst-chart.csv --json
+```
+
+Use `--export-sql-chart-csv case.json <snapshot-id> analyst-chart.csv --json` when exporting an older capture or retrying a handoff separately.
 
 
 ### Run history and review
