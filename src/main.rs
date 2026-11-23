@@ -5113,7 +5113,7 @@ impl App {
         }
     }
 
-    fn load_automation_run_into_editor(&mut self, run_id: Uuid) {
+    fn load_automation_run_into_editor(&mut self, run_id: Uuid) -> bool {
         let Some(run) = self
             .case
             .automation_runs
@@ -5122,20 +5122,25 @@ impl App {
             .cloned()
         else {
             self.status = "RUN CONFIGURATION NOT LOADED · run not found".into();
-            return;
+            return false;
         };
         let mut job = match automation_job_from_run(&run) {
             Ok(job) => job,
             Err(error) => {
                 self.status = format!("RUN CONFIGURATION NOT LOADED · {error}");
-                return;
+                return false;
             }
         };
-        let editing_existing = self
+        let existing_job = self
             .case
             .automation_jobs
             .iter()
-            .any(|saved| saved.id == job.id);
+            .find(|saved| saved.id == job.id);
+        let editing_existing = existing_job
+            .is_some_and(|saved| automation_job_effective_configuration_matches(saved, &job));
+        if editing_existing && let Some(saved) = existing_job {
+            job.name = saved.name.clone();
+        }
         if !editing_existing {
             let base_name = format!("{} (recovered)", job.name);
             let mut candidate = base_name.clone();
@@ -5176,6 +5181,7 @@ impl App {
         } else {
             format!("RECOVERED RUN CONFIGURATION · save as {}", job.name)
         };
+        true
     }
 
     fn cancel_automation_job_edit(&mut self) {
@@ -11910,6 +11916,7 @@ impl eframe::App for App {
                                     }
                                 });
                                 let mut action: Option<(String,Uuid)> = None;
+                                let mut repair_run_id = None;
                                 let mut focus_run = None;
                                 let mut focus_job_history = None;
                                 let mut review_latest_capture = None;
@@ -12012,7 +12019,18 @@ impl eframe::App for App {
                                             action = Some(("explain".into(), job.id));
                                         }
                                         if ui.small_button("Validate").clicked(){action=Some(("validate".into(),job.id));}
-                                        if ui.small_button(if latest_run_needs_schema_adaptation { "Repair SQL" } else { "Edit" }).on_hover_text(if latest_run_needs_schema_adaptation { "Load this saved job and inspect the current SQLite schema for replacement query templates." } else { "Edit this saved SQL automation job." }).clicked(){action=Some((if latest_run_needs_schema_adaptation { "repair" } else { "edit" }.into(),job.id));}
+                                        if ui.small_button(if latest_run_needs_schema_adaptation { "Repair SQL" } else { "Edit" }).on_hover_text(if latest_run_needs_schema_adaptation { "Load the latest failed query configuration and inspect the current SQLite schema for replacement templates." } else { "Edit this saved SQL automation job." }).clicked(){
+                                            if latest_run_needs_schema_adaptation {
+                                                repair_run_id = latest_run_id.filter(|run_id| {
+                                                    self.case.automation_runs.iter().any(|run| {
+                                                        run.id == *run_id && run.configuration_recorded
+                                                    })
+                                                });
+                                                action = Some(("repair".into(), job.id));
+                                            } else {
+                                                action = Some(("edit".into(), job.id));
+                                            }
+                                        }
                                         if ui
                                             .add_enabled(
                                                 automation_case_saved
@@ -12128,7 +12146,7 @@ impl eframe::App for App {
                                             );
                                         });
                                 }
-                                if let Some((verb,id))=action {match verb.as_str(){"explain"=>self.explain_automation_job(id),"validate"=>{self.validate_automation_job(id);},"edit"=>self.edit_automation_job(id),"repair"=>{self.edit_automation_job(id);self.build_sql_query_from_schema();},"run"=>self.start_automation_jobs(vec![id],false),"export"=>self.export_automation_job_package(id),"delete"=>{if self.editing_automation_job==Some(id){self.cancel_automation_job_edit();}self.case.automation_jobs.retain(|job|job.id!=id);self.status="AUTOMATION JOB DELETED".into();},_=>{}}}
+                                if let Some((verb,id))=action {match verb.as_str(){"explain"=>self.explain_automation_job(id),"validate"=>{self.validate_automation_job(id);},"edit"=>self.edit_automation_job(id),"repair"=>{let loaded=if let Some(run_id)=repair_run_id{self.load_automation_run_into_editor(run_id)}else{self.edit_automation_job(id);self.editing_automation_job==Some(id)};if loaded{self.build_sql_query_from_schema();}},"run"=>self.start_automation_jobs(vec![id],false),"export"=>self.export_automation_job_package(id),"delete"=>{if self.editing_automation_job==Some(id){self.cancel_automation_job_edit();}self.case.automation_jobs.retain(|job|job.id!=id);self.status="AUTOMATION JOB DELETED".into();},_=>{}}}
                                 if let Some((_, job_name, database_path, result)) = &self.sql_plan_result {
                                     egui::CollapsingHeader::new(format!("Latest SQL query plan · {job_name}"))
                                         .id_salt(("sql_query_plan_result", job_name))
@@ -18240,6 +18258,28 @@ fn same_sql_series(
     }
     sqlite_database_identity_path(first_database, case_path)
         == sqlite_database_identity_path(second_database, case_path)
+}
+
+fn automation_job_effective_configuration_matches(
+    left: &AutomationJob,
+    right: &AutomationJob,
+) -> bool {
+    let mut left_parameters = left.parameters.clone();
+    let mut right_parameters = right.parameters.clone();
+    left_parameters.sort_by(|a, b| a.0.cmp(&b.0));
+    right_parameters.sort_by(|a, b| a.0.cmp(&b.0));
+    left.database_path == right.database_path
+        && left.series == right.series
+        && left.query == right.query
+        && left_parameters == right_parameters
+        && left.enabled == right.enabled
+        && left.minimum_connections == right.minimum_connections
+        && left.minimum_confidence == right.minimum_confidence
+        && left.maximum_connections == right.maximum_connections
+        && left.maximum_regressions == right.maximum_regressions
+        && left.maximum_added_connections == right.maximum_added_connections
+        && left.maximum_connection_property_changes == right.maximum_connection_property_changes
+        && left.maximum_skipped_rows == right.maximum_skipped_rows
 }
 
 fn sql_source_key(database_path: &str, series: &str) -> String {
