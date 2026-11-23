@@ -61,6 +61,17 @@ fn sql_schema_adaptation_hint(error: &str) -> Option<&'static str> {
     })
 }
 
+fn sql_schema_adaptation_reference(error: &str) -> Option<String> {
+    let lowercase = error.to_ascii_lowercase();
+    ["no such table:", "no such column:", "has no column named"]
+        .into_iter()
+        .find_map(|marker| {
+            let start = lowercase.find(marker)? + marker.len();
+            let reference = error.get(start..)?.trim();
+            (!reference.is_empty()).then(|| reference.to_owned())
+        })
+}
+
 fn install_automation_schedule_command(case_path: &Path, schedule: &str) -> Result<String, String> {
     let executable =
         env::current_exe().map_err(|error| format!("cannot locate app executable: {error}"))?;
@@ -10029,6 +10040,7 @@ fn automation_outcome_json(
     let schema_adaptation = serde_json::json!({
         "required": schema_adaptation_kind.is_some(),
         "kind": schema_adaptation_kind,
+        "reference": sql_schema_adaptation_reference(message),
         "hint": sql_schema_adaptation_hint(message),
     });
     let limits = serde_json::json!({
@@ -12359,6 +12371,9 @@ impl eframe::App for App {
                                                             "SCHEMA ADAPTATION NEEDED · {}",
                                                             kind.replace('_', " ").to_ascii_uppercase()
                                                         )).strong().color(egui::Color32::from_rgb(238, 174, 83)));
+                                                        if let Some(reference) = sql_schema_adaptation_reference(&run.message) {
+                                                            ui.label(format!("Missing schema reference: {reference}"));
+                                                        }
                                                         ui.label(sql_schema_adaptation_hint(&run.message).unwrap_or_default());
                                                     });
                                             }
@@ -20510,6 +20525,7 @@ fn write_automation_runs_csv_atomically(
                 "success",
                 "schema_adaptation_required",
                 "schema_adaptation_kind",
+                "schema_adaptation_reference",
                 "started_at",
                 "finished_at",
                 "duration_ms",
@@ -20600,6 +20616,7 @@ fn write_automation_runs_csv_atomically(
                     run.success.to_string(),
                     (!run.success && schema_adaptation_kind.is_some()).to_string(),
                     schema_adaptation_kind.unwrap_or_default().to_owned(),
+                    sql_schema_adaptation_reference(&run.message).unwrap_or_default(),
                     run.started_at.clone(),
                     run.finished_at.clone(),
                     run.duration_ms
@@ -22481,6 +22498,9 @@ fn list_automation_batches_cli(case_path: &str, json_output: bool) -> Result<(),
                         "schema_adaptation": {
                             "required": schema_adaptation_kind.is_some(),
                             "kind": schema_adaptation_kind,
+                            "reference": latest_run
+                                .filter(|run| !run.success)
+                                .and_then(|run| sql_schema_adaptation_reference(&run.message)),
                             "hint": latest_run
                                 .filter(|run| !run.success)
                                 .and_then(|run| sql_schema_adaptation_hint(&run.message)),
@@ -22497,6 +22517,7 @@ fn list_automation_batches_cli(case_path: &str, json_output: bool) -> Result<(),
                     let schema_adaptation = serde_json::json!({
                         "required": !checkpoint.success && schema_adaptation_kind.is_some(),
                         "kind": schema_adaptation_kind,
+                        "reference": sql_schema_adaptation_reference(&checkpoint.message),
                         "hint": sql_schema_adaptation_hint(&checkpoint.message),
                     });
                     let job_name = case
