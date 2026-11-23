@@ -23,7 +23,7 @@ use std::{
 };
 use uuid::Uuid;
 
-const CURRENT_CASE_FORMAT_VERSION: u32 = 11;
+const CURRENT_CASE_FORMAT_VERSION: u32 = 12;
 const SQL_QUERY_TIMEOUT_MINUTES: u64 = 15;
 const SQL_QUERY_TIMEOUT: Duration = Duration::from_secs(SQL_QUERY_TIMEOUT_MINUTES * 60);
 const SQLITE_LOCK_RETRY_ATTEMPTS: usize = 3;
@@ -42,6 +42,23 @@ fn sqlite_capture_error(error: rusqlite::Error, retryable_lock: &AtomicBool) -> 
 
 fn sql_query_timeout_message() -> String {
     format!("SQL query exceeded the {SQL_QUERY_TIMEOUT_MINUTES} minute execution limit")
+}
+
+fn sql_schema_adaptation_kind(error: &str) -> Option<&'static str> {
+    let error = error.to_ascii_lowercase();
+    if error.contains("no such table:") {
+        Some("missing_table")
+    } else if error.contains("no such column:") || error.contains("has no column named") {
+        Some("missing_column")
+    } else {
+        None
+    }
+}
+
+fn sql_schema_adaptation_hint(error: &str) -> Option<&'static str> {
+    sql_schema_adaptation_kind(error).map(|_| {
+        "the source schema may have changed; inspect the SQLite schema, rebuild or edit the query, then validate it before saving"
+    })
 }
 
 fn install_automation_schedule_command(case_path: &Path, schedule: &str) -> Result<String, String> {
@@ -248,6 +265,21 @@ fn check_automation_schedule_command(case_path: &Path) -> Result<String, String>
     }
 }
 
+fn schedule_cadence_from_status(message: &str) -> Option<&'static str> {
+    let message = message.to_ascii_lowercase();
+    if message.contains("every 15 minutes") {
+        Some("15m")
+    } else if message.contains("hourly") {
+        Some("hourly")
+    } else if message.contains("daily") {
+        Some("daily")
+    } else if message.contains("weekly") {
+        Some("weekly")
+    } else {
+        None
+    }
+}
+
 fn preflight_automation_jobs_command(
     case_path: &Path,
     job_ids: &[Uuid],
@@ -397,6 +429,10 @@ struct Entity {
     #[serde(default)]
     attributes: Vec<(String, String)>,
     #[serde(default)]
+    sql_attribute_values: Vec<(String, String, String)>,
+    #[serde(default)]
+    sql_attribute_baselines: Vec<(String, Option<String>)>,
+    #[serde(default)]
     aliases: Vec<String>,
     #[serde(default)]
     external_ids: Vec<(String, String)>,
@@ -416,6 +452,10 @@ struct MergedEntityRecord {
     kind: String,
     detail: String,
     attributes: Vec<(String, String)>,
+    #[serde(default)]
+    sql_attribute_values: Vec<(String, String, String)>,
+    #[serde(default)]
+    sql_attribute_baselines: Vec<(String, Option<String>)>,
 }
 
 #[derive(Clone, Serialize, Deserialize, PartialEq)]
@@ -435,6 +475,8 @@ struct Link {
     source_reference: String,
     #[serde(default)]
     ingest_source: Option<String>,
+    #[serde(default)]
+    attributes: Vec<(String, String)>,
 }
 
 struct ConnectionGroup {
@@ -462,6 +504,12 @@ struct ConnectionFact {
     directed: bool,
     source_reference: String,
     notes: String,
+    #[serde(default)]
+    source_attributes: Vec<(String, String)>,
+    #[serde(default)]
+    target_attributes: Vec<(String, String)>,
+    #[serde(default)]
+    attributes: Vec<(String, String)>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -503,6 +551,8 @@ struct AutomationJob {
     #[serde(default)]
     maximum_added_connections: Option<usize>,
     #[serde(default)]
+    maximum_connection_property_changes: Option<usize>,
+    #[serde(default)]
     maximum_skipped_rows: Option<usize>,
 }
 
@@ -532,6 +582,8 @@ struct AutomationJobPackageDefinition {
     #[serde(default)]
     maximum_added_connections: Option<usize>,
     #[serde(default)]
+    maximum_connection_property_changes: Option<usize>,
+    #[serde(default)]
     maximum_skipped_rows: Option<usize>,
 }
 
@@ -555,6 +607,10 @@ struct ImportDesignPackageDefinition {
 struct AutomationRun {
     #[serde(default = "Uuid::new_v4")]
     id: Uuid,
+    #[serde(default)]
+    batch_id: Option<Uuid>,
+    #[serde(default)]
+    batch_configuration_fingerprint: Option<String>,
     job_id: Uuid,
     job_name: String,
     #[serde(default)]
@@ -577,6 +633,8 @@ struct AutomationRun {
     maximum_regressions: Option<usize>,
     #[serde(default)]
     maximum_added_connections: Option<usize>,
+    #[serde(default)]
+    maximum_connection_property_changes: Option<usize>,
     #[serde(default)]
     maximum_skipped_rows: Option<usize>,
     #[serde(default)]
@@ -605,6 +663,45 @@ struct AutomationRun {
     rerun_of: Option<Uuid>,
 }
 
+#[derive(Clone, Serialize, Deserialize)]
+struct AutomationBatchCheckpoint {
+    batch_id: Uuid,
+    configuration_fingerprint: String,
+    #[serde(default)]
+    selected_jobs: Vec<AutomationBatchJobSelection>,
+    #[serde(default)]
+    effective_jobs: Vec<AutomationJob>,
+    #[serde(default, alias = "successful_jobs")]
+    completed_jobs: Vec<AutomationJobCheckpoint>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct AutomationBatchJobSelection {
+    job_id: Uuid,
+    job_name: String,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct AutomationJobCheckpoint {
+    job_id: Uuid,
+    run_id: Uuid,
+    finished_at: String,
+    #[serde(default = "default_checkpoint_success")]
+    success: bool,
+    #[serde(default)]
+    message: String,
+    #[serde(default)]
+    duration_ms: Option<u64>,
+    #[serde(default)]
+    sqlite_lock_retries: usize,
+    #[serde(default)]
+    snapshot_id: Option<Uuid>,
+}
+
+fn default_checkpoint_success() -> bool {
+    true
+}
+
 fn default_automation_run_trigger() -> String {
     "legacy".into()
 }
@@ -631,6 +728,7 @@ struct SqlValidationPreview {
     has_baseline: bool,
     regression_count: usize,
     added_connection_count: usize,
+    connection_property_change_count: usize,
     below_minimum_confidence_count: usize,
     change_count: usize,
     changes: Vec<ConnectionDelta>,
@@ -641,9 +739,50 @@ struct SqlValidationPreview {
     maximum_connections: Option<usize>,
     maximum_regressions: Option<usize>,
     maximum_added_connections: Option<usize>,
+    maximum_connection_property_changes: Option<usize>,
     maximum_skipped_rows: Option<usize>,
     connections: Vec<ConnectionFact>,
+    skipped_endpoints: Vec<SkippedSqlEndpoint>,
 }
+
+#[derive(Clone)]
+struct SkippedSqlEndpoint {
+    connection_id: String,
+    source: String,
+    target: String,
+}
+
+#[derive(Clone)]
+struct SqlPlanStep {
+    id: i64,
+    parent: i64,
+    detail: String,
+}
+
+fn sql_plan_step_depths(steps: &[SqlPlanStep]) -> Vec<usize> {
+    let parents: HashMap<i64, i64> = steps.iter().map(|step| (step.id, step.parent)).collect();
+    steps
+        .iter()
+        .map(|step| {
+            let mut depth = 0;
+            let mut current = step.id;
+            let mut seen = HashSet::new();
+            seen.insert(current);
+            while let Some(parent) = parents.get(&current).copied() {
+                if parent == current || !seen.insert(parent) {
+                    break;
+                }
+                depth += 1;
+                current = parent;
+            }
+            depth
+        })
+        .collect()
+}
+
+type SqlSchemaTemplates = Vec<(String, String)>;
+type SqlSchemaInspection =
+    Result<(SqlSchemaTemplates, Vec<String>, Vec<serde_json::Value>), String>;
 
 struct AutomationParameterOverrides {
     global: Vec<(String, String)>,
@@ -666,9 +805,51 @@ struct CaseFile {
     #[serde(default)]
     automation_runs: Vec<AutomationRun>,
     #[serde(default)]
+    automation_batches: Vec<AutomationBatchCheckpoint>,
+    #[serde(default)]
     import_specifications: Vec<ImportSpecification>,
     #[serde(default)]
     graphml_source_catalogs: Vec<serde_json::Value>,
+    #[serde(default)]
+    saved_paths: Vec<SavedPath>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct SavedPath {
+    id: Uuid,
+    name: String,
+    start_entity_id: Uuid,
+    end_entity_id: Uuid,
+    follow_directions: bool,
+    #[serde(default)]
+    time_flow: PathTimeFlow,
+    use_timeline_range: bool,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct SavedPathPackage {
+    format: String,
+    schema_version: u32,
+    path: SavedPathPackageDefinition,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct SavedPathPackageDefinition {
+    name: String,
+    start: SavedPathEndpoint,
+    end: SavedPathEndpoint,
+    follow_directions: bool,
+    #[serde(default)]
+    time_flow: PathTimeFlow,
+    #[serde(default)]
+    use_timeline_range: bool,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct SavedPathEndpoint {
+    id: Uuid,
+    name: String,
+    kind: String,
 }
 
 struct DelimitedImportInspection {
@@ -681,6 +862,7 @@ struct App {
     case: CaseFile,
     selected: Option<Uuid>,
     query: String,
+    chart_search_scope: ChartSearchScope,
     status: String,
     show_timeline: bool,
     timeline_range: Option<(i64, i64)>,
@@ -694,6 +876,7 @@ struct App {
     chart_fit_path: Option<Vec<Uuid>>,
     chart_focus_group: Option<HashSet<Uuid>>,
     network_groups: Option<std::sync::Arc<Vec<Vec<Uuid>>>>,
+    network_bridges: Option<std::sync::Arc<Vec<(Uuid, usize)>>>,
     chart_navigator_dragging: bool,
     new_link_from: Option<Uuid>,
     new_link_to: Option<Uuid>,
@@ -712,6 +895,7 @@ struct App {
     show_import_wizard: bool,
     export_path: String,
     graphml_export_path: String,
+    kml_export_path: String,
     selected_link: Option<usize>,
     page: WorkspacePage,
     entity_sort: EntitySort,
@@ -725,7 +909,15 @@ struct App {
     connections_for_selected: bool,
     path_start: Option<Uuid>,
     path_end: Option<Uuid>,
+    saved_path_name: String,
+    saved_path_package_path: String,
+    saved_path_import_name: String,
+    path_follow_directions: bool,
+    path_time_flow: PathTimeFlow,
+    path_use_timeline_range: bool,
+    path_timeline_range: Option<(i64, i64)>,
     path_result: Vec<Uuid>,
+    path_link_result: Vec<usize>,
     case_path: String,
     case_path_input: String,
     saved_case_json: Option<String>,
@@ -739,8 +931,11 @@ struct App {
     sql_query: String,
     sql_parameter_text: String,
     sql_validation_preview: Option<SqlValidationPreview>,
+    sql_skipped_endpoints: Vec<SkippedSqlEndpoint>,
     sql_validation_preview_regressions_only: bool,
     sql_schema_templates: Vec<(String, String)>,
+    sql_schema_objects: Vec<serde_json::Value>,
+    sql_schema_filter: String,
     sql_schema_template_index: usize,
     sql_schema_template_source: Option<(String, String)>,
     automation_job_filter: String,
@@ -753,11 +948,14 @@ struct App {
     automation_job_import_name: String,
     automation_job_import_database_path: String,
     automation_job_import_series: String,
+    automation_job_import_parameter_text: String,
     automation_failed_runs_only: bool,
+    automation_schema_adaptation_only: bool,
     automation_runs_needing_review: bool,
     automation_runs_with_unreviewed_regressions: bool,
     sql_snapshot_source: Option<String>,
     sql_snapshot_index: Option<usize>,
+    sql_snapshot_filter: String,
     sql_comparison_baseline_id: Option<Uuid>,
     sql_delta_filter: SnapshotDeltaFilter,
     sql_delta_search: String,
@@ -768,6 +966,7 @@ struct App {
     automation_maximum_connections: Option<usize>,
     automation_maximum_regressions: Option<usize>,
     automation_maximum_added_connections: Option<usize>,
+    automation_maximum_connection_property_changes: Option<usize>,
     automation_maximum_skipped_rows: Option<usize>,
     editing_automation_job: Option<Uuid>,
     automation_editor_before_edit: Option<(
@@ -782,9 +981,14 @@ struct App {
         Option<usize>,
         Option<usize>,
         Option<usize>,
+        Option<usize>,
     )>,
     automation_worker: Option<Receiver<Result<AutomationWorkerResult, String>>>,
     automation_progress: Option<Arc<Mutex<String>>>,
+    sql_plan_worker: Option<Receiver<(Uuid, String, String, Result<Vec<SqlPlanStep>, String>)>>,
+    sql_plan_result: Option<(Uuid, String, String, Result<Vec<SqlPlanStep>, String>)>,
+    sql_schema_worker: Option<Receiver<(Uuid, String, String, SqlSchemaInspection)>>,
+    sql_schema_request: Option<(Uuid, String, String)>,
     sql_lock_retry_count: usize,
     automation_schedule: String,
     automation_schedule_message: Option<(String, bool, String)>,
@@ -829,6 +1033,7 @@ struct SqlUiRequest {
     maximum_connections: Option<usize>,
     maximum_regressions: Option<usize>,
     maximum_added_connections: Option<usize>,
+    maximum_connection_property_changes: Option<usize>,
     maximum_skipped_rows: Option<usize>,
     data_mode: DataMode,
     editing_job: Option<Uuid>,
@@ -900,6 +1105,8 @@ struct ImportColumnMapping {
     target_detail: String,
     source_aliases: String,
     target_aliases: String,
+    source_merged_records: String,
+    target_merged_records: String,
     source_color: String,
     target_color: String,
     source_x: String,
@@ -909,6 +1116,7 @@ struct ImportColumnMapping {
     source_position_locked: String,
     target_position_locked: String,
     entity_attributes: Vec<ImportAttributeMapping>,
+    connection_attributes: Vec<ImportConnectionAttributeMapping>,
 }
 
 #[derive(Clone, Default, Serialize, Deserialize)]
@@ -954,6 +1162,13 @@ struct ImportAttributeMapping {
     source: bool,
 }
 
+#[derive(Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+struct ImportConnectionAttributeMapping {
+    column: String,
+    key: String,
+}
+
 #[derive(PartialEq, Clone, Copy)]
 enum WorkspacePage {
     Chart,
@@ -980,6 +1195,14 @@ enum EntitySort {
     Name,
     Type,
     Connections,
+}
+
+#[derive(Default, PartialEq, Clone, Copy)]
+enum ChartSearchScope {
+    #[default]
+    All,
+    Entities,
+    Relationships,
 }
 
 #[derive(Default, PartialEq, Clone, Copy)]
@@ -1015,11 +1238,22 @@ enum LinkTableView {
     LinkRecords,
 }
 
+#[derive(Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum PathTimeFlow {
+    #[default]
+    Any,
+    Forward,
+    Backward,
+}
+
 #[derive(Clone, Copy, PartialEq)]
 enum DeltaKind {
     Removed,
     ConfidenceDeclined,
     DateChanged,
+    EntityIdentityChanged,
+    ConnectionAttributesChanged,
     Updated,
     DirectionChanged,
     EvidenceChanged,
@@ -1032,9 +1266,11 @@ enum DeltaKind {
 enum SnapshotDeltaFilter {
     All,
     Regressions,
+    EntityIdentity,
     Direction,
     Evidence,
     SourceNotes,
+    ConnectionProperties,
     Other,
 }
 
@@ -1089,6 +1325,7 @@ impl Default for App {
             case,
             selected: None,
             query: String::new(),
+            chart_search_scope: ChartSearchScope::All,
             status,
             show_timeline: false,
             timeline_range: None,
@@ -1102,6 +1339,7 @@ impl Default for App {
             chart_fit_path: None,
             chart_focus_group: None,
             network_groups: None,
+            network_bridges: None,
             chart_navigator_dragging: false,
             new_link_from: None,
             new_link_to: None,
@@ -1123,6 +1361,10 @@ impl Default for App {
                 .join("chart-export.graphml")
                 .to_string_lossy()
                 .into_owned(),
+            kml_export_path: data_dir
+                .join("chart-export.kml")
+                .to_string_lossy()
+                .into_owned(),
             selected_link: None,
             page: WorkspacePage::Chart,
             entity_sort: EntitySort::Name,
@@ -1136,7 +1378,15 @@ impl Default for App {
             connections_for_selected: false,
             path_start: None,
             path_end: None,
+            saved_path_name: String::new(),
+            saved_path_package_path: data_dir.join("investigation-path.json").to_string_lossy().into_owned(),
+            saved_path_import_name: String::new(),
+            path_follow_directions: true,
+            path_time_flow: PathTimeFlow::Any,
+            path_use_timeline_range: true,
+            path_timeline_range: None,
             path_result: Vec::new(),
+            path_link_result: Vec::new(),
             case_path: case_path.clone(),
             case_path_input: case_path,
             saved_case_json,
@@ -1150,8 +1400,11 @@ impl Default for App {
             sql_query: "SELECT connection_id, source, source_type, target, target_type, relationship, event_date AS date, confidence, directed, source_reference, notes FROM connection_observations WHERE snapshot_id = :snapshot_id ORDER BY connection_id;".into(),
             sql_parameter_text: "snapshot_id=baseline".into(),
             sql_validation_preview: None,
+            sql_skipped_endpoints: Vec::new(),
             sql_validation_preview_regressions_only: false,
             sql_schema_templates: Vec::new(),
+            sql_schema_objects: Vec::new(),
+            sql_schema_filter: String::new(),
             sql_schema_template_index: 0,
             sql_schema_template_source: None,
             automation_job_filter: String::new(),
@@ -1167,11 +1420,14 @@ impl Default for App {
             automation_job_import_name: String::new(),
             automation_job_import_database_path: String::new(),
             automation_job_import_series: String::new(),
+            automation_job_import_parameter_text: String::new(),
             automation_failed_runs_only: false,
+            automation_schema_adaptation_only: false,
             automation_runs_needing_review: false,
             automation_runs_with_unreviewed_regressions: false,
             sql_snapshot_source: None,
             sql_snapshot_index: None,
+            sql_snapshot_filter: String::new(),
             sql_comparison_baseline_id: None,
             sql_delta_filter: SnapshotDeltaFilter::All,
             sql_delta_search: String::new(),
@@ -1182,11 +1438,16 @@ impl Default for App {
             automation_maximum_connections: None,
             automation_maximum_regressions: None,
             automation_maximum_added_connections: None,
+            automation_maximum_connection_property_changes: None,
             automation_maximum_skipped_rows: None,
             editing_automation_job: None,
             automation_editor_before_edit: None,
             automation_worker: None,
             automation_progress: None,
+            sql_plan_worker: None,
+            sql_plan_result: None,
+            sql_schema_worker: None,
+            sql_schema_request: None,
             sql_lock_retry_count: 0,
             automation_schedule: "hourly".into(),
             automation_schedule_message: None,
@@ -1250,6 +1511,8 @@ fn demo_case() -> CaseFile {
         kind: kind.into(),
         detail: detail.into(),
         attributes: Vec::new(),
+        sql_attribute_values: Vec::new(),
+        sql_attribute_baselines: Vec::new(),
         aliases: Vec::new(),
         external_ids: Vec::new(),
         merged_records: Vec::new(),
@@ -1314,6 +1577,7 @@ fn demo_case() -> CaseFile {
             source_reference: "REG-1193 · Corporate registry".into(),
             connection_id: String::new(),
             ingest_source: None,
+            attributes: Vec::new(),
         },
         Link {
             from: id(1),
@@ -1327,6 +1591,7 @@ fn demo_case() -> CaseFile {
             source_reference: "LOC-81 · Property record".into(),
             connection_id: String::new(),
             ingest_source: None,
+            attributes: Vec::new(),
         },
         Link {
             from: id(0),
@@ -1340,6 +1605,7 @@ fn demo_case() -> CaseFile {
             source_reference: "SIG-14 · Communications report".into(),
             connection_id: String::new(),
             ingest_source: None,
+            attributes: Vec::new(),
         },
         Link {
             from: id(3),
@@ -1353,6 +1619,7 @@ fn demo_case() -> CaseFile {
             source_reference: "HUM-203 · Uncorroborated report".into(),
             connection_id: String::new(),
             ingest_source: None,
+            attributes: Vec::new(),
         },
         Link {
             from: id(4),
@@ -1366,6 +1633,7 @@ fn demo_case() -> CaseFile {
             source_reference: "LOG-77 · Delivery log".into(),
             connection_id: String::new(),
             ingest_source: None,
+            attributes: Vec::new(),
         },
     ];
     CaseFile {
@@ -1377,15 +1645,21 @@ fn demo_case() -> CaseFile {
         snapshots: Vec::new(),
         automation_jobs: Vec::new(),
         automation_runs: Vec::new(),
+        automation_batches: Vec::new(),
         import_specifications: Vec::new(),
         graphml_source_catalogs: Vec::new(),
+        saved_paths: Vec::new(),
     }
 }
 
 impl App {
     fn invalidate_network_groups(&mut self) {
         self.network_groups = None;
+        self.network_bridges = None;
         self.chart_focus_group = None;
+        self.path_result.clear();
+        self.path_link_result.clear();
+        self.chart_fit_path = None;
     }
 
     fn automation_context(case: CaseFile, case_path: &str) -> Self {
@@ -1394,6 +1668,7 @@ impl App {
             case,
             selected: None,
             query: String::new(),
+            chart_search_scope: ChartSearchScope::All,
             status: String::new(),
             show_timeline: false,
             timeline_range: None,
@@ -1407,6 +1682,7 @@ impl App {
             chart_fit_path: None,
             chart_focus_group: None,
             network_groups: None,
+            network_bridges: None,
             chart_navigator_dragging: false,
             new_link_from: None,
             new_link_to: None,
@@ -1425,6 +1701,7 @@ impl App {
             show_import_wizard: false,
             export_path: String::new(),
             graphml_export_path: String::new(),
+            kml_export_path: String::new(),
             selected_link: None,
             page: WorkspacePage::Chart,
             entity_sort: EntitySort::Name,
@@ -1438,7 +1715,15 @@ impl App {
             connections_for_selected: false,
             path_start: None,
             path_end: None,
+            saved_path_name: String::new(),
+            saved_path_package_path: String::new(),
+            saved_path_import_name: String::new(),
+            path_follow_directions: true,
+            path_time_flow: PathTimeFlow::Any,
+            path_use_timeline_range: true,
+            path_timeline_range: None,
             path_result: Vec::new(),
+            path_link_result: Vec::new(),
             case_path: case_path.to_owned(),
             case_path_input: case_path.to_owned(),
             saved_case_json,
@@ -1452,8 +1737,11 @@ impl App {
             sql_query: String::new(),
             sql_parameter_text: String::new(),
             sql_validation_preview: None,
+            sql_skipped_endpoints: Vec::new(),
             sql_validation_preview_regressions_only: false,
             sql_schema_templates: Vec::new(),
+            sql_schema_objects: Vec::new(),
+            sql_schema_filter: String::new(),
             sql_schema_template_index: 0,
             sql_schema_template_source: None,
             automation_job_filter: String::new(),
@@ -1466,11 +1754,14 @@ impl App {
             automation_job_import_name: String::new(),
             automation_job_import_database_path: String::new(),
             automation_job_import_series: String::new(),
+            automation_job_import_parameter_text: String::new(),
             automation_failed_runs_only: false,
+            automation_schema_adaptation_only: false,
             automation_runs_needing_review: false,
             automation_runs_with_unreviewed_regressions: false,
             sql_snapshot_source: None,
             sql_snapshot_index: None,
+            sql_snapshot_filter: String::new(),
             sql_comparison_baseline_id: None,
             sql_delta_filter: SnapshotDeltaFilter::All,
             sql_delta_search: String::new(),
@@ -1481,11 +1772,16 @@ impl App {
             automation_maximum_connections: None,
             automation_maximum_regressions: None,
             automation_maximum_added_connections: None,
+            automation_maximum_connection_property_changes: None,
             automation_maximum_skipped_rows: None,
             editing_automation_job: None,
             automation_editor_before_edit: None,
             automation_worker: None,
             automation_progress: None,
+            sql_plan_worker: None,
+            sql_plan_result: None,
+            sql_schema_worker: None,
+            sql_schema_request: None,
             sql_lock_retry_count: 0,
             automation_schedule: "hourly".into(),
             automation_schedule_message: None,
@@ -1698,6 +1994,8 @@ impl App {
                     .map_err(|error| error.to_string())
             }) {
             Ok((mut c, disk_case_json)) => {
+                let cleared_one_run_overrides =
+                    !self.automation_run_parameter_text.trim().is_empty();
                 normalize_snapshot_database_paths(&mut c, &requested_path);
                 self.case = c;
                 self.network_groups = None;
@@ -1713,6 +2011,7 @@ impl App {
                 self.editing_automation_job = None;
                 self.automation_editor_before_edit = None;
                 self.automation_job_name.clear();
+                self.automation_run_parameter_text.clear();
                 self.selected_import_spec = None;
                 self.import_spec_name.clear();
                 self.show_import_wizard = false;
@@ -1729,7 +2028,11 @@ impl App {
                 self.path_result.clear();
                 self.duplicate_candidates.clear();
                 self.merge_candidate = None;
-                self.status = "CASE LOADED".into();
+                self.status = if cleared_one_run_overrides {
+                    "CASE LOADED · ONE-RUN SQL OVERRIDES CLEARED".into()
+                } else {
+                    "CASE LOADED".into()
+                };
             }
             Err(e) => self.status = format!("LOAD FAILED · {e}"),
         }
@@ -1761,29 +2064,12 @@ impl App {
         self.import_column_mapping = original_mapping;
         let import_status = std::mem::take(&mut self.status);
         self.status = if let Some(summary) = import_status.strip_prefix("CSV IMPORT · ") {
-            for catalog in source_catalogs {
-                let Some(source_key) = catalog
-                    .get("source_key")
-                    .and_then(serde_json::Value::as_str)
-                else {
-                    continue;
-                };
-                if let Some(existing) =
-                    self.case
-                        .graphml_source_catalogs
-                        .iter_mut()
-                        .find(|existing| {
-                            existing
-                                .get("source_key")
-                                .and_then(serde_json::Value::as_str)
-                                == Some(source_key)
-                        })
-                {
-                    *existing = catalog;
-                } else {
-                    self.case.graphml_source_catalogs.push(catalog);
-                }
-            }
+            self.case.graphml_source_catalogs = merge_graphml_source_catalogs(
+                self.case
+                    .graphml_source_catalogs
+                    .drain(..)
+                    .chain(source_catalogs),
+            );
             format!("GRAPHML IMPORT · {summary}")
         } else if let Some(error) = import_status.strip_prefix("IMPORT FAILED · ") {
             format!("GRAPHML IMPORT FAILED · {error}")
@@ -1896,6 +2182,8 @@ impl App {
             target_detail: infer(&["target_detail_json"]),
             source_aliases: infer(&["source_aliases_json"]),
             target_aliases: infer(&["target_aliases_json"]),
+            source_merged_records: infer(&["source_merged_records_json"]),
+            target_merged_records: infer(&["target_merged_records_json"]),
             source_color: infer(&["source_color"]),
             target_color: infer(&["target_color"]),
             source_x: infer(&["source_x"]),
@@ -1905,6 +2193,7 @@ impl App {
             source_position_locked: infer(&["source_position_locked"]),
             target_position_locked: infer(&["target_position_locked"]),
             entity_attributes: Vec::new(),
+            connection_attributes: Vec::new(),
         };
         self.import_column_mapping = matching_spec
             .map(|spec| {
@@ -1951,8 +2240,11 @@ impl App {
         ) || !import_value_transforms_valid(
             &self.import_column_mapping.value_transforms,
             &self.import_headers,
+        ) || !import_connection_attribute_mappings_valid(
+            &self.import_column_mapping.connection_attributes,
+            &self.import_headers,
         ) {
-            self.status = "IMPORT DESIGN NOT SAVED · fix the column mapping, row filters, and value transforms".into();
+            self.status = "IMPORT DESIGN NOT SAVED · fix the column mapping, row filters, value transforms, and relationship properties".into();
             return;
         }
         if self.case.import_specifications.iter().any(|spec| {
@@ -2052,12 +2344,18 @@ impl App {
         let import_path = self.import_path.clone();
         let mapping = self.import_column_mapping.clone();
         let result = (|| -> Result<(usize, usize, usize, Vec<Entity>, Vec<Link>), String> {
-            let delimiter = delimited_text_delimiter(&import_path);
+            let delimiter = detect_import_delimiter(Path::new(&import_path))?;
             let mut reader = csv::ReaderBuilder::new()
                 .delimiter(delimiter)
                 .from_path(&import_path)
                 .map_err(|e| e.to_string())?;
-            let headers = reader.headers().map_err(|e| e.to_string())?.clone();
+            let headers = reader
+                .headers()
+                .map_err(|e| e.to_string())?
+                .iter()
+                .map(str::to_owned)
+                .collect::<Vec<_>>();
+            let headers = normalize_delimited_headers(headers);
             validate_delimited_headers(headers.iter())?;
             let col = |field: &str, names: &[&str]| {
                 let selected = match field {
@@ -2083,6 +2381,8 @@ impl App {
                     "target_detail" => &mapping.target_detail,
                     "source_aliases" => &mapping.source_aliases,
                     "target_aliases" => &mapping.target_aliases,
+                    "source_merged_records" => &mapping.source_merged_records,
+                    "target_merged_records" => &mapping.target_merged_records,
                     "source_color" => &mapping.source_color,
                     "target_color" => &mapping.target_color,
                     "source_x" => &mapping.source_x,
@@ -2124,6 +2424,10 @@ impl App {
             let target_detail = col("target_detail", &["target_detail_json"]);
             let source_aliases = col("source_aliases", &["source_aliases_json"]);
             let target_aliases = col("target_aliases", &["target_aliases_json"]);
+            let source_merged_records =
+                col("source_merged_records", &["source_merged_records_json"]);
+            let target_merged_records =
+                col("target_merged_records", &["target_merged_records_json"]);
             let source_color = col("source_color", &["source_color"]);
             let target_color = col("target_color", &["target_color"]);
             let source_x = col("source_x", &["source_x"]);
@@ -2167,6 +2471,69 @@ impl App {
                         })
                 })
                 .collect();
+            let mut connection_attribute_columns = Vec::new();
+            for (index, header) in headers.iter().enumerate() {
+                let header = header.trim();
+                let Some(prefix) = header.get(..21) else {
+                    continue;
+                };
+                if !prefix.eq_ignore_ascii_case("connection_attribute:") {
+                    continue;
+                }
+                let name = header.get(21..).unwrap_or_default().trim();
+                if name.is_empty() {
+                    return Err("CSV connection_attribute column needs a property name".into());
+                }
+                connection_attribute_columns.push((name.to_owned(), index));
+            }
+            connection_attribute_columns.sort_by(|left, right| {
+                left.0
+                    .to_ascii_lowercase()
+                    .cmp(&right.0.to_ascii_lowercase())
+            });
+            for pair in connection_attribute_columns.windows(2) {
+                if pair[0].0.eq_ignore_ascii_case(&pair[1].0) {
+                    return Err(format!(
+                        "CSV has duplicate connection attribute: {}",
+                        pair[0].0
+                    ));
+                }
+            }
+            for attribute in &mapping.connection_attributes {
+                if attribute.column.is_empty() && attribute.key.trim().is_empty() {
+                    continue;
+                }
+                if attribute.column.is_empty() || attribute.key.trim().is_empty() {
+                    return Err(
+                        "mapped connection properties need both a source column and a property name"
+                            .into(),
+                    );
+                }
+                let index = headers
+                    .iter()
+                    .position(|header| header.eq_ignore_ascii_case(&attribute.column))
+                    .ok_or_else(|| {
+                        format!(
+                            "mapped connection property column is missing: {}",
+                            attribute.column
+                        )
+                    })?;
+                let name = attribute.key.trim();
+                if connection_attribute_columns
+                    .iter()
+                    .any(|(existing, _)| existing.eq_ignore_ascii_case(name))
+                {
+                    return Err(format!(
+                        "connection property is mapped more than once: {name}"
+                    ));
+                }
+                connection_attribute_columns.push((name.to_owned(), index));
+            }
+            connection_attribute_columns.sort_by(|left, right| {
+                left.0
+                    .to_ascii_lowercase()
+                    .cmp(&right.0.to_ascii_lowercase())
+            });
             for attribute in &mapping.entity_attributes {
                 if attribute.column.is_empty() && attribute.key.trim().is_empty() {
                     continue;
@@ -2211,8 +2578,10 @@ impl App {
                     .ok_or_else(|| format!("row filter column is missing: {}", filter.column))?;
                 row_filters.push((index, filter.operator, filter.value.clone()));
             }
-            let value_transforms =
-                compile_import_value_transforms(headers.iter(), &mapping.value_transforms)?;
+            let value_transforms = compile_import_value_transforms(
+                headers.iter().map(String::as_str),
+                &mapping.value_transforms,
+            )?;
             let mut created = 0;
             let mut updated = 0;
             let mut skipped = 0;
@@ -2536,6 +2905,34 @@ impl App {
                             entity_index.refresh_aliases(entity_id, &entities);
                         }
                     }
+                    let merged_records_column = if is_source {
+                        source_merged_records
+                    } else {
+                        target_merged_records
+                    };
+                    if let Some(index) = merged_records_column {
+                        let encoded = row.get(index).unwrap_or("").trim();
+                        if !encoded.is_empty() {
+                            let merged_records = serde_json::from_str::<Vec<MergedEntityRecord>>(
+                                encoded,
+                            )
+                            .map_err(|error| {
+                                format!(
+                                    "CSV has invalid {}_merged_records_json for {entity_name}: {error}",
+                                    if is_source { "source" } else { "target" }
+                                )
+                            })?;
+                            let canonical = serde_json::to_string(&merged_records)
+                                .map_err(|error| error.to_string())?;
+                            record_imported_merged_records(
+                                &mut imported_entity_values,
+                                entity_id,
+                                &canonical,
+                                &entity_name,
+                            )?;
+                            entities[entity_position].merged_records = merged_records;
+                        }
+                    }
                     for (attribute_is_source, name, index) in &attribute_columns {
                         if *attribute_is_source != is_source {
                             continue;
@@ -2552,15 +2949,7 @@ impl App {
                             &entity_name,
                         )?;
                         let entity = &mut entities[entity_position];
-                        if let Some((_, existing)) = entity
-                            .attributes
-                            .iter_mut()
-                            .find(|(key, _)| key.eq_ignore_ascii_case(name))
-                        {
-                            *existing = value.into();
-                        } else {
-                            entity.attributes.push((name.clone(), value.into()));
-                        }
+                        set_entity_base_attribute(entity, name, value);
                     }
                 }
                 if entity_only {
@@ -2627,6 +3016,7 @@ impl App {
                         .unwrap_or("")
                         .into(),
                     ingest_source: ingest_source.clone(),
+                    attributes: Vec::new(),
                 };
                 let existing: Vec<usize> = if !external_id.is_empty() {
                     links_by_id
@@ -2675,6 +3065,31 @@ impl App {
                 } else {
                     Vec::new()
                 };
+                if let [index] = existing.as_slice() {
+                    imported.attributes = links[*index].attributes.clone();
+                }
+                for (name, column_index) in &connection_attribute_columns {
+                    let value = row.get(*column_index).unwrap_or("").trim();
+                    if value.is_empty() {
+                        continue;
+                    }
+                    if let Some((_, existing_value)) = imported
+                        .attributes
+                        .iter_mut()
+                        .find(|(existing_name, _)| existing_name.eq_ignore_ascii_case(name))
+                    {
+                        *existing_value = value.to_owned();
+                    } else {
+                        imported.attributes.push((name.clone(), value.to_owned()));
+                    }
+                }
+                imported.attributes.sort_by(|left, right| {
+                    left.0
+                        .to_ascii_lowercase()
+                        .cmp(&right.0.to_ascii_lowercase())
+                });
+                validate_connection_attributes(&imported.attributes)
+                    .map_err(|error| format!("CSV connection properties are invalid: {error}"))?;
                 if source_notes.is_none()
                     && let [index] = existing.as_slice()
                 {
@@ -2820,6 +3235,7 @@ impl App {
 
     fn ingest_sqlite_snapshot_attempt(&mut self) -> Option<String> {
         self.sql_validation_preview = None;
+        self.sql_skipped_endpoints.clear();
         let configured_path = self.sql_path.trim().to_string();
         let case_path = self.case_path.clone();
         let series = self.sql_series.trim().to_string();
@@ -2830,6 +3246,7 @@ impl App {
             .and_then(|index| self.case.links.get(index))
             .cloned();
         let retryable_lock_error = AtomicBool::new(false);
+        let mut skipped_endpoints = Vec::new();
         let result = (|| -> Result<(Vec<Entity>, Vec<Link>, ConnectionSnapshot), String> {
             if configured_path.is_empty() {
                 return Err("database path cannot be empty".into());
@@ -2870,6 +3287,42 @@ impl App {
                 .column_names()
                 .map(|name| name.trim().to_ascii_lowercase())
                 .collect();
+            let mut source_attribute_columns = Vec::new();
+            let mut target_attribute_columns = Vec::new();
+            let mut connection_attribute_columns = Vec::new();
+            let mut attribute_names = HashSet::new();
+            for (index, column) in column_names.iter().enumerate() {
+                let Some((side, name)) = column
+                    .strip_prefix("source_attribute:")
+                    .map(|name| ("source", name.trim()))
+                    .or_else(|| {
+                        column
+                            .strip_prefix("connection_attribute:")
+                            .map(|name| ("connection", name.trim()))
+                    })
+                    .or_else(|| {
+                        column
+                            .strip_prefix("target_attribute:")
+                            .map(|name| ("target", name.trim()))
+                    })
+                else {
+                    continue;
+                };
+                if name.is_empty() {
+                    return Err(format!("SQL {side} attribute alias needs a property name"));
+                }
+                if !attribute_names.insert((side, name.to_owned())) {
+                    return Err(format!("SQL result has duplicate {side} attribute: {name}"));
+                }
+                let item = (name.to_owned(), index);
+                if side == "source" {
+                    source_attribute_columns.push(item);
+                } else if side == "connection" {
+                    connection_attribute_columns.push(item);
+                } else {
+                    target_attribute_columns.push(item);
+                }
+            }
             let col = |field: &str, names: &[&str]| -> Result<Option<usize>, String> {
                 let matches: Vec<usize> = column_names
                     .iter()
@@ -2983,6 +3436,15 @@ impl App {
                     .to_string();
                 if source_name.is_empty() || target_name.is_empty() {
                     skipped_rows += 1;
+                    if skipped_endpoints.len() < 8 {
+                        let connection_id =
+                            sql_value(row, connection_id).map_err(|error| error.to_string())?;
+                        skipped_endpoints.push(SkippedSqlEndpoint {
+                            connection_id,
+                            source: source_name,
+                            target: target_name,
+                        });
+                    }
                     continue;
                 }
                 let source_kind = sql_value(row, source_type).map_err(|e| e.to_string())?;
@@ -3014,6 +3476,22 @@ impl App {
                 let source_reference =
                     sql_value(row, source_reference).map_err(|e| e.to_string())?;
                 let notes = sql_value(row, notes).map_err(|e| e.to_string())?;
+                let read_attributes = |columns: &[(String, usize)]| -> Result<_, String> {
+                    let mut attributes = columns
+                        .iter()
+                        .map(|(name, index)| {
+                            sql_value(row, Some(*index))
+                                .map(|value| (name.clone(), value.trim().to_owned()))
+                                .map_err(|error| error.to_string())
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
+                    attributes.retain(|(_, value)| !value.is_empty());
+                    attributes.sort_by_key(|(name, _)| name.to_ascii_lowercase());
+                    Ok(attributes)
+                };
+                let mut source_attributes = read_attributes(&source_attribute_columns)?;
+                let mut target_attributes = read_attributes(&target_attribute_columns)?;
+                let connection_attributes = read_attributes(&connection_attribute_columns)?;
                 let explicit_id = sql_value(row, connection_id).map_err(|e| e.to_string())?;
                 if !explicit_id.trim().is_empty()
                     && !explicit_ids.insert(explicit_id.trim().to_owned())
@@ -3036,6 +3514,7 @@ impl App {
                         is_directed,
                     )?;
                 let (source_entity_id, target_entity_id) = if endpoints_swapped {
+                    std::mem::swap(&mut source_attributes, &mut target_attributes);
                     (target_entity_id, source_entity_id)
                 } else {
                     (source_entity_id, target_entity_id)
@@ -3080,6 +3559,9 @@ impl App {
                     directed: is_directed,
                     source_reference,
                     notes,
+                    source_attributes,
+                    target_attributes,
+                    attributes: connection_attributes,
                 });
             }
             if query_deadline.expired() {
@@ -3102,17 +3584,51 @@ impl App {
             }
             // Stage chart updates separately and swap them in only after the entire query succeeds.
             let source_key = sql_source_key(&path, &series);
-            let analyst_notes: HashMap<String, String> = self
+            let mut analyst_notes = HashMap::new();
+            for link in self
                 .case
                 .links
                 .iter()
                 .filter(|link| link.ingest_source.as_deref() == Some(source_key.as_str()))
-                .map(|link| (link_refresh_key(link), link.notes.clone()))
-                .collect();
+            {
+                let refresh_key = link_refresh_key(link);
+                if analyst_notes
+                    .insert(refresh_key.clone(), link.notes.clone())
+                    .is_some()
+                {
+                    return Err(format!(
+                        "saved SQL source contains an ambiguous duplicate refresh key {refresh_key}; resolve duplicate records before refreshing"
+                    ));
+                }
+            }
             let mut entities = self.case.entities.clone();
             let mut entity_index = EntityIndex::new(&entities);
             let mut links = self.case.links.clone();
+            let sql_owned_attribute_names: HashSet<String> = self
+                .case
+                .snapshots
+                .iter()
+                .filter(|snapshot| snapshot.source_key == source_key)
+                .flat_map(|snapshot| snapshot.connections.iter())
+                .flat_map(|fact| {
+                    fact.source_attributes
+                        .iter()
+                        .chain(fact.target_attributes.iter())
+                        .map(|(name, _)| name.to_ascii_lowercase())
+                })
+                .collect();
+            let previous_source_entities: HashSet<Uuid> = links
+                .iter()
+                .filter(|link| link.ingest_source.as_deref() == Some(source_key.as_str()))
+                .flat_map(|link| [link.from, link.to])
+                .collect();
+            for entity in &mut entities {
+                if previous_source_entities.contains(&entity.id) {
+                    clear_sql_entity_attributes(entity, &source_key, &sql_owned_attribute_names);
+                }
+            }
             links.retain(|link| link.ingest_source.as_deref() != Some(source_key.as_str()));
+            let mut captured_entity_attributes: HashMap<(Uuid, String), String> = HashMap::new();
             for fact in &facts {
                 let from = entity_index.find_or_add_entity_with_external_id(
                     &fact.source,
@@ -3128,6 +3644,36 @@ impl App {
                     &fact.target_entity_id,
                     &mut entities,
                 )?;
+                for (entity_id, attributes) in [
+                    (from, &fact.source_attributes),
+                    (to, &fact.target_attributes),
+                ] {
+                    for (name, value) in attributes {
+                        let key = (entity_id, name.to_ascii_lowercase());
+                        if captured_entity_attributes
+                            .insert(key, value.clone())
+                            .is_some_and(|previous| previous != *value)
+                        {
+                            return Err(format!(
+                                "SQL result contains conflicting {name} values for entity {}",
+                                entities
+                                    .iter()
+                                    .find(|entity| entity.id == entity_id)
+                                    .map(|entity| entity.name.as_str())
+                                    .unwrap_or("<unknown>")
+                            ));
+                        }
+                        if let Some(entity) =
+                            entities.iter_mut().find(|entity| entity.id == entity_id)
+                        {
+                            apply_sql_entity_attributes(
+                                entity,
+                                &source_key,
+                                &[(name.clone(), value.clone())],
+                            );
+                        }
+                    }
+                }
                 links.push(Link {
                     from,
                     to,
@@ -3149,6 +3695,7 @@ impl App {
                     source_notes: fact.notes.clone(),
                     source_reference: fact.source_reference.clone(),
                     ingest_source: Some(source_key.clone()),
+                    attributes: fact.attributes.clone(),
                 });
             }
             let snapshot = ConnectionSnapshot {
@@ -3167,6 +3714,7 @@ impl App {
         })();
         match result {
             Ok((entities, links, snapshot)) => {
+                self.sql_skipped_endpoints = skipped_endpoints;
                 let count = snapshot.connections.len();
                 let skipped_rows = snapshot.skipped_rows;
                 self.sql_snapshot_source = Some(snapshot.source_key.clone());
@@ -3189,7 +3737,10 @@ impl App {
                 None
             }
             Err(error) => {
-                self.status = format!("SQL INGEST FAILED · {error}");
+                let hint = sql_schema_adaptation_hint(&error)
+                    .map(|hint| format!(" · {hint}"))
+                    .unwrap_or_default();
+                self.status = format!("SQL INGEST FAILED · {error}{hint}");
                 retryable_lock_error
                     .load(Ordering::Acquire)
                     .then_some(error)
@@ -3198,32 +3749,57 @@ impl App {
     }
 
     fn build_sql_query_from_schema(&mut self) {
-        let result = (|| -> Result<Vec<(String, String)>, String> {
-            if self.sql_path.trim().is_empty() {
-                return Err("database path cannot be empty".into());
-            }
-            let path = resolve_sqlite_database_path(&self.sql_path, &self.case_path)?;
-            let schema = read_sqlite_schema(&path.to_string_lossy())?;
-            let templates = sqlite_query_templates(&schema);
-            if templates.is_empty() {
-                return Err("no table or view has recognizable source and target columns".into());
-            }
-            Ok(templates)
-        })();
-        match result {
-            Ok(templates) => {
-                self.sql_schema_templates = templates;
-                self.sql_schema_template_index = 0;
-                self.sql_schema_template_source =
-                    Some((self.sql_path.clone(), self.case_path.clone()));
-                self.apply_sql_schema_template();
-            }
-            Err(error) => {
+        if self.sql_schema_worker.is_some()
+            || self.sql_plan_worker.is_some()
+            || self.automation_worker.is_some()
+            || self.automation_schedule_worker.is_some()
+        {
+            self.status = "ANOTHER SQL OPERATION IS RUNNING".into();
+            return;
+        }
+        let configured_path = self.sql_path.clone();
+        let case_path = self.case_path.clone();
+        let request_id = Uuid::new_v4();
+        let worker_configured_path = configured_path.clone();
+        let worker_case_path = case_path.clone();
+        let worker_request_id = request_id;
+        let (sender, receiver) = mpsc::channel();
+        let spawn_result = thread::Builder::new()
+            .name("arch-notebook-sql-schema".into())
+            .spawn(move || {
+                let result = (|| -> SqlSchemaInspection {
+                    if worker_configured_path.trim().is_empty() {
+                        return Err("database path cannot be empty".into());
+                    }
+                    let path =
+                        resolve_sqlite_database_path(&worker_configured_path, &worker_case_path)?;
+                    let schema = read_sqlite_schema(&path.to_string_lossy())?;
+                    let templates = sqlite_query_templates(&schema);
+                    let broken_views = schema
+                        .iter()
+                        .filter(|object| object["inspection_error"].is_string())
+                        .filter_map(|object| object["name"].as_str().map(str::to_owned))
+                        .collect::<Vec<_>>();
+                    Ok((templates, broken_views, schema))
+                })();
+                let _ = sender.send((
+                    worker_request_id,
+                    worker_configured_path,
+                    worker_case_path,
+                    result,
+                ));
+            });
+        match spawn_result {
+            Ok(_) => {
                 self.sql_schema_templates.clear();
+                self.sql_schema_objects.clear();
                 self.sql_schema_template_index = 0;
                 self.sql_schema_template_source = None;
-                self.status = format!("SQL SCHEMA INSPECTION FAILED · {error}");
+                self.sql_schema_worker = Some(receiver);
+                self.sql_schema_request = Some((request_id, configured_path, case_path));
+                self.status = "INSPECTING SQLITE SCHEMA · BUILDING QUERY TEMPLATES".into();
             }
+            Err(error) => self.status = format!("SQL SCHEMA INSPECTION FAILED · {error}"),
         }
     }
 
@@ -3235,21 +3811,151 @@ impl App {
         else {
             return;
         };
+        let has_parameters = !self.sql_parameter_text.trim().is_empty();
         self.sql_query = query;
-        self.sql_parameter_text.clear();
         self.sql_validation_preview = None;
-        self.status = format!("SQL QUERY BUILT FROM {object_name}");
+        self.status = if has_parameters {
+            format!(
+                "SQL QUERY BUILT FROM {object_name} · EXISTING PARAMETER VALUES KEPT FOR REVIEW; RECONNECT THEM TO THE QUERY BEFORE VALIDATING"
+            )
+        } else {
+            format!("SQL QUERY BUILT FROM {object_name}")
+        };
     }
 
     fn show_sql_schema_template_picker(&mut self, ui: &mut egui::Ui) {
         let current_source = (self.sql_path.clone(), self.case_path.clone());
         if self.sql_schema_template_source.as_ref() != Some(&current_source) {
             self.sql_schema_templates.clear();
+            self.sql_schema_objects.clear();
             self.sql_schema_template_index = 0;
             self.sql_schema_template_source = None;
             return;
         }
-        if self.sql_schema_templates.len() < 2 {
+        if !self.sql_schema_objects.is_empty() {
+            egui::CollapsingHeader::new(format!(
+                "Inspected SQLite schema · {} objects",
+                self.sql_schema_objects.len()
+            ))
+            .id_salt("sql_schema_inventory")
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.sql_schema_filter)
+                            .hint_text("Find table, view, or column")
+                            .desired_width(250.0),
+                    );
+                    if ui.small_button("Clear").clicked() {
+                        self.sql_schema_filter.clear();
+                    }
+                });
+                let search_terms: Vec<String> = self
+                    .sql_schema_filter
+                    .split_whitespace()
+                    .map(str::to_lowercase)
+                    .collect();
+                let matching_objects: Vec<&serde_json::Value> = self
+                    .sql_schema_objects
+                    .iter()
+                    .filter(|object| {
+                        let column_names = object["columns"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .filter_map(|column| column["name"].as_str())
+                            .collect::<Vec<_>>()
+                            .join(" ");
+                        let foreign_key_targets = object["foreign_keys"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .filter_map(|foreign_key| foreign_key["table"].as_str())
+                            .collect::<Vec<_>>()
+                            .join(" ");
+                        let search_text = format!(
+                            "{} {} {column_names} {foreign_key_targets} {}",
+                            object["type"].as_str().unwrap_or(""),
+                            object["name"].as_str().unwrap_or(""),
+                            object["inspection_error"].as_str().unwrap_or("")
+                        )
+                        .to_lowercase();
+                        search_terms.iter().all(|term| search_text.contains(term))
+                    })
+                    .collect();
+                ui.label(format!(
+                    "{} of {} objects",
+                    matching_objects.len(),
+                    self.sql_schema_objects.len()
+                ));
+                egui::ScrollArea::vertical()
+                    .max_height(280.0)
+                    .show(ui, |ui| {
+                        for object in matching_objects {
+                            let object_type = object["type"].as_str().unwrap_or("object");
+                            let object_name = object["name"].as_str().unwrap_or("unnamed");
+                            egui::CollapsingHeader::new(format!("{object_type} · {object_name}"))
+                                .id_salt(("sql_schema_object", object_name))
+                                .show(ui, |ui| {
+                                    if let Some(error) = object["inspection_error"].as_str() {
+                                        ui.colored_label(
+                                            egui::Color32::from_rgb(238, 174, 83),
+                                            format!("Unavailable · {error}"),
+                                        );
+                                    }
+                                    if let Some(columns) = object["columns"].as_array() {
+                                        egui::Grid::new(("sql_schema_columns", object_name))
+                                            .striped(true)
+                                            .show(ui, |ui| {
+                                                ui.strong("Column");
+                                                ui.strong("Type");
+                                                ui.strong("Constraints");
+                                                ui.end_row();
+                                                for column in columns {
+                                                    let primary_key_order =
+                                                        column["primary_key_order"]
+                                                            .as_i64()
+                                                            .unwrap_or_default();
+                                                    let constraint = if primary_key_order > 0 {
+                                                        format!("Primary key · {primary_key_order}")
+                                                    } else if column["not_null"]
+                                                        .as_bool()
+                                                        .unwrap_or(false)
+                                                    {
+                                                        "Not null".into()
+                                                    } else {
+                                                        String::new()
+                                                    };
+                                                    ui.monospace(
+                                                        column["name"].as_str().unwrap_or(""),
+                                                    );
+                                                    ui.label(
+                                                        column["type"]
+                                                            .as_str()
+                                                            .filter(|value| !value.is_empty())
+                                                            .unwrap_or("(no declared type)"),
+                                                    );
+                                                    ui.label(constraint);
+                                                    ui.end_row();
+                                                }
+                                            });
+                                    }
+                                    if let Some(foreign_keys) = object["foreign_keys"].as_array() {
+                                        for foreign_key in foreign_keys {
+                                            ui.label(format!(
+                                                "Foreign key · {} → {}.{}",
+                                                foreign_key["from"].as_str().unwrap_or(""),
+                                                foreign_key["table"].as_str().unwrap_or(""),
+                                                foreign_key["to"].as_str().unwrap_or("primary key")
+                                            ));
+                                        }
+                                    }
+                                });
+                        }
+                    });
+            });
+        }
+        if self.sql_schema_templates.is_empty() {
+            ui.label(egui::RichText::new("No recognizable source/target query template. Use the inspected columns above to edit the SQL query manually.").small().color(egui::Color32::GRAY));
             return;
         }
         let selected_text = self
@@ -3258,26 +3964,110 @@ impl App {
             .map(|(table, _)| table.as_str())
             .unwrap_or("Choose table or view");
         let mut selected_index = self.sql_schema_template_index;
-        egui::ComboBox::from_id_salt("sql_schema_template")
-            .selected_text(selected_text)
-            .show_ui(ui, |ui| {
-                for (index, (table, _)) in self.sql_schema_templates.iter().enumerate() {
-                    ui.selectable_value(&mut selected_index, index, table);
-                }
-            });
+        if self.sql_schema_templates.len() > 1 {
+            egui::ComboBox::from_id_salt("sql_schema_template")
+                .selected_text(selected_text)
+                .show_ui(ui, |ui| {
+                    for (index, (table, _)) in self.sql_schema_templates.iter().enumerate() {
+                        ui.selectable_value(&mut selected_index, index, table);
+                    }
+                });
+        } else {
+            ui.label(format!("Query source table or view · {selected_text}"));
+        }
         if selected_index != self.sql_schema_template_index {
             self.sql_schema_template_index = selected_index;
+            let selected_table = self
+                .sql_schema_templates
+                .get(selected_index)
+                .map(|(table, _)| table.as_str())
+                .unwrap_or("unknown");
+            self.status = format!("SQL TEMPLATE SELECTED · {selected_table}");
+        }
+        let selected_query = self
+            .sql_schema_templates
+            .get(self.sql_schema_template_index)
+            .map(|(_, query)| query.clone());
+        if let Some(query) = selected_query.as_ref() {
+            egui::CollapsingHeader::new("Review endpoint mappings and generated SQL")
+                .id_salt("sql_schema_template_preview")
+                .show(ui, |ui| {
+                    for (label, alias) in [
+                        ("Source name", "source"),
+                        ("Target name", "target"),
+                        ("Stable source ID", "source_entity_id"),
+                        ("Stable target ID", "target_entity_id"),
+                    ] {
+                        let expression = sqlite_query_projection(query, alias);
+                        ui.horizontal(|ui| {
+                            ui.label(format!("{label}:"));
+                            if let Some(expression) = expression {
+                                ui.monospace(expression);
+                            } else if alias.ends_with("_entity_id") {
+                                ui.label("Not detected · reconciliation uses name and type");
+                            } else {
+                                ui.label("Not detected");
+                            }
+                        });
+                    }
+                    ui.add_space(4.0);
+                    let mut preview = query.clone();
+                    ui.add(
+                        egui::TextEdit::multiline(&mut preview)
+                            .desired_width(ui.available_width())
+                            .desired_rows(5)
+                            .code_editor()
+                            .interactive(false),
+                    );
+                });
+        }
+        let template_matches_query = selected_query
+            .as_deref()
+            .is_some_and(|query| self.sql_query.trim() == query.trim());
+        let clears_parameters = !self.sql_parameter_text.trim().is_empty();
+        if template_matches_query {
+            ui.label("Selected template already matches the current query.");
+        } else if clears_parameters {
+            ui.label(
+                egui::RichText::new(
+                    "Applying this template replaces the query and clears its SQL parameters.",
+                )
+                .small(),
+            );
+        }
+        let apply_label = if template_matches_query {
+            "Selected query template is already applied"
+        } else if clears_parameters {
+            "Replace query and clear SQL parameters"
+        } else {
+            "Use selected query template"
+        };
+        if ui
+            .add_enabled(!template_matches_query, egui::Button::new(apply_label))
+            .clicked()
+        {
             self.apply_sql_schema_template();
         }
     }
 
     fn save_automation_job(&mut self) {
+        let recovered_job_draft = self
+            .editing_automation_job
+            .is_some_and(|id| !self.case.automation_jobs.iter().any(|job| job.id == id));
         let name = self.automation_job_name.trim().to_string();
         if self
             .automation_minimum_confidence
             .is_some_and(|minimum| !(1..=3).contains(&minimum))
         {
             self.status = "JOB NOT SAVED · minimum confidence must be between 1 and 3".into();
+            return;
+        }
+        if self
+            .automation_maximum_connections
+            .is_some_and(|maximum| self.automation_minimum_connections > maximum)
+        {
+            self.status =
+                "JOB NOT SAVED · minimum connections cannot exceed maximum connections".into();
             return;
         }
         let parameters = match parse_sql_parameters(&self.sql_parameter_text) {
@@ -3317,6 +4107,38 @@ impl App {
             );
             return;
         }
+        if let Some(existing) = self
+            .editing_automation_job
+            .and_then(|id| self.case.automation_jobs.iter().find(|job| job.id == id))
+        {
+            let keeps_same_series = same_sql_series(
+                &existing.database_path,
+                &existing.series,
+                self.sql_path.trim(),
+                self.sql_series.trim(),
+                &self.case_path,
+            );
+            let has_saved_captures = self.case.snapshots.iter().any(|snapshot| {
+                snapshot.series == existing.series
+                    && same_sql_series(
+                        &snapshot.database_path,
+                        &snapshot.series,
+                        &existing.database_path,
+                        &existing.series,
+                        &self.case_path,
+                    )
+            });
+            let mut prior_parameters = existing.parameters.clone();
+            let mut updated_parameters = parameters.clone();
+            prior_parameters.sort();
+            updated_parameters.sort();
+            let query_or_parameters_changed = existing.query.trim() != self.sql_query.trim()
+                || prior_parameters != updated_parameters;
+            if keeps_same_series && has_saved_captures && query_or_parameters_changed {
+                self.status = "JOB NOT SAVED · query or SQL parameters changed; use a new series to keep captures comparable".into();
+                return;
+            }
+        }
         if let Some(id) = self.editing_automation_job {
             if let Some(job) = self
                 .case
@@ -3334,9 +4156,11 @@ impl App {
                 job.maximum_connections = self.automation_maximum_connections;
                 job.maximum_regressions = self.automation_maximum_regressions;
                 job.maximum_added_connections = self.automation_maximum_added_connections;
+                job.maximum_connection_property_changes =
+                    self.automation_maximum_connection_property_changes;
                 job.maximum_skipped_rows = self.automation_maximum_skipped_rows;
                 self.editing_automation_job = None;
-                self.automation_editor_before_edit = None;
+                self.restore_automation_editor_before_edit();
                 self.status = format!("AUTOMATION JOB UPDATED · {name}");
                 return;
             }
@@ -3353,11 +4177,17 @@ impl App {
                 maximum_connections: self.automation_maximum_connections,
                 maximum_regressions: self.automation_maximum_regressions,
                 maximum_added_connections: self.automation_maximum_added_connections,
+                maximum_connection_property_changes: self
+                    .automation_maximum_connection_property_changes,
                 maximum_skipped_rows: self.automation_maximum_skipped_rows,
             });
             self.editing_automation_job = None;
-            self.automation_editor_before_edit = None;
-            self.automation_job_name.clear();
+            if recovered_job_draft {
+                self.restore_automation_editor_before_edit();
+            } else {
+                self.automation_editor_before_edit = None;
+                self.automation_job_name.clear();
+            }
             self.automation_job_filter = name.clone();
             self.status =
                 format!("RECOVERED AUTOMATION JOB ADDED · {name} · DISABLED UNTIL REVIEWED");
@@ -3376,6 +4206,8 @@ impl App {
             maximum_connections: self.automation_maximum_connections,
             maximum_regressions: self.automation_maximum_regressions,
             maximum_added_connections: self.automation_maximum_added_connections,
+            maximum_connection_property_changes: self
+                .automation_maximum_connection_property_changes,
             maximum_skipped_rows: self.automation_maximum_skipped_rows,
         });
         self.editing_automation_job = None;
@@ -3422,6 +4254,8 @@ impl App {
                     && preview.maximum_regressions == self.automation_maximum_regressions
                     && preview.maximum_added_connections
                         == self.automation_maximum_added_connections
+                    && preview.maximum_connection_property_changes
+                        == self.automation_maximum_connection_property_changes
                     && preview.maximum_skipped_rows == self.automation_maximum_skipped_rows
                     && parse_sql_parameters(&self.sql_parameter_text)
                         .is_ok_and(|parameters| parameters == preview.parameters)
@@ -3464,15 +4298,37 @@ impl App {
             .then(|| self.automation_job_import_database_path.trim().to_owned());
         let series_override = (!self.automation_job_import_series.trim().is_empty())
             .then(|| self.automation_job_import_series.trim().to_owned());
+        let parameter_overrides =
+            match parse_sql_parameters(&self.automation_job_import_parameter_text) {
+                Ok(parameters) => parameters,
+                Err(error) => {
+                    self.status = format!("JOB PACKAGE IMPORT FAILED · {error}");
+                    return;
+                }
+            };
+        let override_values = AutomationParameterOverrides {
+            global: parameter_overrides.clone(),
+            scoped: Vec::new(),
+        };
+        if let Err(error) = validate_automation_parameter_override_values(&override_values) {
+            self.status = format!("JOB PACKAGE IMPORT FAILED · {error}");
+            return;
+        }
         let result = read_automation_job_package(input_path).and_then(|package| {
-            job_from_automation_package(
+            let mut job = job_from_automation_package(
                 package.job,
                 &self.case,
                 &self.case_path,
                 name_override.as_deref(),
                 database_path_override.as_deref(),
                 series_override.as_deref(),
-            )
+            )?;
+            apply_sql_parameter_overrides(
+                std::slice::from_mut(&mut job),
+                &parameter_overrides,
+                &[],
+            )?;
+            Ok(job)
         });
         match result {
             Ok(job) => {
@@ -3484,6 +4340,7 @@ impl App {
                 self.automation_job_import_name.clear();
                 self.automation_job_import_database_path.clear();
                 self.automation_job_import_series.clear();
+                self.automation_job_import_parameter_text.clear();
                 self.status = format!(
                     "AUTOMATION JOB IMPORTED · {name} · {imported_job_id} · DISABLED UNTIL REVIEWED"
                 );
@@ -3524,9 +4381,12 @@ impl App {
         let snapshot_source_before = self.sql_snapshot_source.clone();
         let snapshot_index_before = self.sql_snapshot_index;
         let path_result_before = self.path_result.clone();
+        let path_link_result_before = self.path_link_result.clone();
+        let skipped_endpoints_before = self.sql_skipped_endpoints.clone();
         let snapshot_count_before = self.case.snapshots.len();
 
         self.ingest_sqlite_snapshot();
+        let skipped_endpoints = self.sql_skipped_endpoints.clone();
         let lock_retries = self.sql_lock_retry_count;
         let candidate_snapshot = self.case.snapshots.get(snapshot_count_before).cloned();
         let baseline_snapshot = candidate_snapshot
@@ -3551,6 +4411,14 @@ impl App {
         let added_connection_count = deltas
             .iter()
             .filter(|delta| delta.kinds.contains(&DeltaKind::Added))
+            .count();
+        let connection_property_change_count = deltas
+            .iter()
+            .filter(|delta| {
+                delta
+                    .kinds
+                    .contains(&DeltaKind::ConnectionAttributesChanged)
+            })
             .count();
         let below_minimum_confidence_count = candidate_snapshot
             .as_ref()
@@ -3584,6 +4452,7 @@ impl App {
                 has_baseline,
                 regression_count,
                 added_connection_count,
+                connection_property_change_count,
                 below_minimum_confidence_count,
                 change_count,
                 changes,
@@ -3594,8 +4463,11 @@ impl App {
                 maximum_connections: self.automation_maximum_connections,
                 maximum_regressions: self.automation_maximum_regressions,
                 maximum_added_connections: self.automation_maximum_added_connections,
+                maximum_connection_property_changes: self
+                    .automation_maximum_connection_property_changes,
                 maximum_skipped_rows: self.automation_maximum_skipped_rows,
                 connections: snapshot.connections.iter().take(8).cloned().collect(),
+                skipped_endpoints,
             });
         let validation_message = if self.status.starts_with("SQL SNAPSHOT INGESTED") {
             let snapshot = candidate_snapshot.as_ref();
@@ -3661,17 +4533,31 @@ impl App {
                 }
                 None => String::new(),
             };
+            let property_change_count = connection_property_change_count;
+            let property_change_threshold = match self
+                .automation_maximum_connection_property_changes
+            {
+                Some(maximum) if property_change_count > maximum => format!(
+                    " · RELATIONSHIP PROPERTY CHANGE LIMIT EXCEEDED ({property_change_count}; MAXIMUM {maximum})"
+                ),
+                Some(maximum) => format!(
+                    " · RELATIONSHIP PROPERTY CHANGE LIMIT MET ({property_change_count}; MAXIMUM {maximum})"
+                ),
+                None => String::new(),
+            };
             let limits_pass = automation_limits_pass(
                 count,
                 below_minimum_confidence_count,
                 regression_count,
                 added_connection_count,
+                property_change_count,
                 skipped_rows,
                 self.automation_minimum_connections,
                 self.automation_minimum_confidence,
                 self.automation_maximum_connections,
                 self.automation_maximum_regressions,
                 self.automation_maximum_added_connections,
+                self.automation_maximum_connection_property_changes,
                 self.automation_maximum_skipped_rows,
             );
             let validation_result = if limits_pass {
@@ -3680,7 +4566,7 @@ impl App {
                 "SQL QUERY LIMITS FAILED"
             };
             format!(
-                "{validation_result} · {count} CONNECTIONS{maximum_connection_threshold}{skipped}{skipped_row_threshold}{threshold}{confidence_threshold}{regression_threshold}{addition_threshold} · CASE UNCHANGED"
+                "{validation_result} · {count} CONNECTIONS{maximum_connection_threshold}{skipped}{skipped_row_threshold}{threshold}{confidence_threshold}{regression_threshold}{addition_threshold}{property_change_threshold} · CASE UNCHANGED"
             )
         } else {
             self.status
@@ -3703,6 +4589,8 @@ impl App {
         self.sql_snapshot_source = snapshot_source_before;
         self.sql_snapshot_index = snapshot_index_before;
         self.path_result = path_result_before;
+        self.path_link_result = path_link_result_before;
+        self.sql_skipped_endpoints = skipped_endpoints_before;
         self.status = validation_message;
         self.status.starts_with("SQL QUERY VALID · ")
     }
@@ -3719,6 +4607,7 @@ impl App {
         maximum_connections: Option<usize>,
         maximum_regressions: Option<usize>,
         maximum_added_connections: Option<usize>,
+        maximum_connection_property_changes: Option<usize>,
         maximum_skipped_rows: Option<usize>,
         regressions_only: &mut bool,
     ) {
@@ -3731,6 +4620,8 @@ impl App {
                 && preview.maximum_connections == maximum_connections
                 && preview.maximum_regressions == maximum_regressions
                 && preview.maximum_added_connections == maximum_added_connections
+                && preview.maximum_connection_property_changes
+                    == maximum_connection_property_changes
                 && preview.maximum_skipped_rows == maximum_skipped_rows
                 && parse_sql_parameters(parameter_text)
                     .is_ok_and(|parameters| parameters == preview.parameters)
@@ -3758,8 +4649,10 @@ impl App {
             ));
             ui.label(if preview.has_baseline {
                 format!(
-                    "{} regressions · {} additions vs previous capture",
-                    preview.regression_count, preview.added_connection_count
+                    "{} regressions · {} additions · {} relationship-property changes vs previous capture",
+                    preview.regression_count,
+                    preview.added_connection_count,
+                    preview.connection_property_change_count
                 )
             } else {
                 "Baseline capture · no prior comparison".into()
@@ -3816,6 +4709,8 @@ impl App {
                                     DeltaKind::Removed => "REMOVED",
                                     DeltaKind::ConfidenceDeclined => "CONFIDENCE DOWN",
                                     DeltaKind::DateChanged => "DATE CHANGED",
+                                    DeltaKind::EntityIdentityChanged => "ENTITY ID CHANGED",
+                                    DeltaKind::ConnectionAttributesChanged => "RELATIONSHIP PROPERTIES CHANGED",
                                     DeltaKind::Updated => "CONNECTION DETAILS",
                                     DeltaKind::DirectionChanged => "DIRECTION CHANGED",
                                     DeltaKind::EvidenceChanged => "EVIDENCE CHANGED",
@@ -3832,10 +4727,22 @@ impl App {
                             let notes_before = before_details
                                 .map(|connection| connection.notes.as_str())
                                 .unwrap_or("—");
+                            let source_attributes_before = before_details
+                                .map(|connection| format_sql_attributes(&connection.source_attributes))
+                                .unwrap_or_else(|| "—".into());
+                            let target_attributes_before = before_details
+                                .map(|connection| format_sql_attributes(&connection.target_attributes))
+                                .unwrap_or_else(|| "—".into());
+                            let connection_attributes_before = before_details
+                                .map(|connection| format_sql_attributes(&connection.attributes))
+                                .unwrap_or_else(|| "—".into());
                             ui.label(change).on_hover_text(format!(
-                                "Evidence before: {evidence_before}\nEvidence current: {}\nSource notes before: {notes_before}\nSource notes current: {}",
+                                "Evidence before: {evidence_before}\nEvidence current: {}\nSource notes before: {notes_before}\nSource notes current: {}\nSource attributes before: {source_attributes_before}\nSource attributes current: {}\nTarget attributes before: {target_attributes_before}\nTarget attributes current: {}\nConnection attributes before: {connection_attributes_before}\nConnection attributes current: {}",
                                 delta.connection.source_reference,
-                                delta.connection.notes
+                                delta.connection.notes,
+                                format_sql_attributes(&delta.connection.source_attributes),
+                                format_sql_attributes(&delta.connection.target_attributes),
+                                format_sql_attributes(&delta.connection.attributes),
                             ));
                             let direction = if delta.connection.directed {
                                 "→"
@@ -3916,9 +4823,12 @@ impl App {
                             "Connection ID",
                             "Source",
                             "Source ID",
+                            "Source properties",
                             "Relationship",
                             "Target",
                             "Target ID",
+                            "Target properties",
+                            "Connection properties",
                             "Direction",
                             "Date",
                             "Confidence",
@@ -3939,12 +4849,15 @@ impl App {
                                 connection.source, connection.source_type
                             ));
                             ui.label(&connection.source_entity_id);
+                            ui.label(format_sql_attributes(&connection.source_attributes));
                             ui.label(&connection.relationship);
                             ui.label(format!(
                                 "{} · {}",
                                 connection.target, connection.target_type
                             ));
                             ui.label(&connection.target_entity_id);
+                            ui.label(format_sql_attributes(&connection.target_attributes));
+                            ui.label(format_sql_attributes(&connection.attributes));
                             ui.label(if connection.directed {
                                 "Directed →"
                             } else {
@@ -3959,6 +4872,43 @@ impl App {
                     });
             });
         });
+        if preview.skipped_rows > 0 {
+            egui::CollapsingHeader::new(format!(
+                "SKIPPED ROW EXAMPLES · SHOWING {} OF {}",
+                preview.skipped_endpoints.len(),
+                preview.skipped_rows
+            ))
+            .id_salt("sql_validation_skipped_rows")
+            .show(ui, |ui| {
+                ui.label("Rows with a blank or NULL endpoint are excluded from the captured snapshot. These examples are held only in the current validation preview.");
+                egui::Grid::new("sql_validation_skipped_rows_grid")
+                    .striped(true)
+                    .show(ui, |ui| {
+                        ui.strong("Connection ID");
+                        ui.strong("Source");
+                        ui.strong("Target");
+                        ui.end_row();
+                        for row in &preview.skipped_endpoints {
+                            ui.label(if row.connection_id.is_empty() {
+                                "(no ID)"
+                            } else {
+                                &row.connection_id
+                            });
+                            ui.label(if row.source.is_empty() {
+                                "(blank or NULL)"
+                            } else {
+                                &row.source
+                            });
+                            ui.label(if row.target.is_empty() {
+                                "(blank or NULL)"
+                            } else {
+                                &row.target
+                            });
+                            ui.end_row();
+                        }
+                    });
+            });
+        }
     }
 
     fn show_minimum_confidence_selector(
@@ -3991,19 +4941,7 @@ impl App {
             .find(|job| job.id == id)
             .cloned()
         {
-            self.automation_editor_before_edit = Some((
-                self.automation_job_name.clone(),
-                self.sql_path.clone(),
-                self.sql_series.clone(),
-                self.sql_query.clone(),
-                self.sql_parameter_text.clone(),
-                self.automation_minimum_connections,
-                self.automation_minimum_confidence,
-                self.automation_maximum_connections,
-                self.automation_maximum_regressions,
-                self.automation_maximum_added_connections,
-                self.automation_maximum_skipped_rows,
-            ));
+            self.remember_automation_editor_before_edit();
             self.automation_job_name = job.name;
             self.sql_path = job.database_path;
             self.sql_series = job.series;
@@ -4014,6 +4952,8 @@ impl App {
             self.automation_maximum_connections = job.maximum_connections;
             self.automation_maximum_regressions = job.maximum_regressions;
             self.automation_maximum_added_connections = job.maximum_added_connections;
+            self.automation_maximum_connection_property_changes =
+                job.maximum_connection_property_changes;
             self.automation_maximum_skipped_rows = job.maximum_skipped_rows;
             self.editing_automation_job = Some(id);
             self.status = "EDITING AUTOMATION JOB".into();
@@ -4059,19 +4999,7 @@ impl App {
             job.id = Uuid::new_v4();
             job.name = candidate;
         }
-        self.automation_editor_before_edit = Some((
-            self.automation_job_name.clone(),
-            self.sql_path.clone(),
-            self.sql_series.clone(),
-            self.sql_query.clone(),
-            self.sql_parameter_text.clone(),
-            self.automation_minimum_connections,
-            self.automation_minimum_confidence,
-            self.automation_maximum_connections,
-            self.automation_maximum_regressions,
-            self.automation_maximum_added_connections,
-            self.automation_maximum_skipped_rows,
-        ));
+        self.remember_automation_editor_before_edit();
         self.automation_job_name = job.name.clone();
         self.sql_path = job.database_path;
         self.sql_series = job.series;
@@ -4082,6 +5010,8 @@ impl App {
         self.automation_maximum_connections = job.maximum_connections;
         self.automation_maximum_regressions = job.maximum_regressions;
         self.automation_maximum_added_connections = job.maximum_added_connections;
+        self.automation_maximum_connection_property_changes =
+            job.maximum_connection_property_changes;
         self.automation_maximum_skipped_rows = job.maximum_skipped_rows;
         self.editing_automation_job = Some(job.id);
         self.data_mode = DataMode::Automation;
@@ -4096,6 +5026,30 @@ impl App {
 
     fn cancel_automation_job_edit(&mut self) {
         self.editing_automation_job = None;
+        self.restore_automation_editor_before_edit();
+        self.status = "JOB EDIT CANCELED".into();
+    }
+
+    fn remember_automation_editor_before_edit(&mut self) {
+        if self.automation_editor_before_edit.is_none() {
+            self.automation_editor_before_edit = Some((
+                self.automation_job_name.clone(),
+                self.sql_path.clone(),
+                self.sql_series.clone(),
+                self.sql_query.clone(),
+                self.sql_parameter_text.clone(),
+                self.automation_minimum_connections,
+                self.automation_minimum_confidence,
+                self.automation_maximum_connections,
+                self.automation_maximum_regressions,
+                self.automation_maximum_added_connections,
+                self.automation_maximum_connection_property_changes,
+                self.automation_maximum_skipped_rows,
+            ));
+        }
+    }
+
+    fn restore_automation_editor_before_edit(&mut self) {
         if let Some((
             name,
             path,
@@ -4107,6 +5061,7 @@ impl App {
             maximum_connections,
             maximum_regressions,
             maximum_added_connections,
+            maximum_connection_property_changes,
             maximum_skipped_rows,
         )) = self.automation_editor_before_edit.take()
         {
@@ -4120,20 +5075,23 @@ impl App {
             self.automation_maximum_connections = maximum_connections;
             self.automation_maximum_regressions = maximum_regressions;
             self.automation_maximum_added_connections = maximum_added_connections;
+            self.automation_maximum_connection_property_changes =
+                maximum_connection_property_changes;
             self.automation_maximum_skipped_rows = maximum_skipped_rows;
         }
-        self.status = "JOB EDIT CANCELED".into();
     }
 
     fn start_automation_jobs(&mut self, job_ids: Vec<Uuid>, batch: bool) {
-        if self.case.automation_jobs.iter().any(|job| {
-            job_ids.contains(&job.id)
-                && job
-                    .minimum_confidence
-                    .is_some_and(|minimum| !(1..=3).contains(&minimum))
-        }) {
-            self.status = "AUTOMATION NOT STARTED · a selected job has minimum confidence outside 1 through 3".into();
-            return;
+        for job in self
+            .case
+            .automation_jobs
+            .iter()
+            .filter(|job| job_ids.contains(&job.id))
+        {
+            if let Some(error) = automation_job_configuration_error(job) {
+                self.status = format!("AUTOMATION NOT STARTED · {} · {error}", job.name);
+                return;
+            }
         }
         let parameter_overrides =
             match parse_automation_parameter_overrides(&self.automation_run_parameter_text) {
@@ -4183,7 +5141,7 @@ impl App {
                 return;
             }
         }
-        self.start_automation_work(job_ids, None, batch, parameter_overrides);
+        self.start_automation_work(job_ids, None, batch, parameter_overrides, None);
     }
 
     fn sql_ui_request(&self) -> SqlUiRequest {
@@ -4197,6 +5155,8 @@ impl App {
             maximum_connections: self.automation_maximum_connections,
             maximum_regressions: self.automation_maximum_regressions,
             maximum_added_connections: self.automation_maximum_added_connections,
+            maximum_connection_property_changes: self
+                .automation_maximum_connection_property_changes,
             maximum_skipped_rows: self.automation_maximum_skipped_rows,
             data_mode: self.data_mode,
             editing_job: self.editing_automation_job,
@@ -4242,6 +5202,8 @@ impl App {
                 worker.automation_maximum_connections = request.maximum_connections;
                 worker.automation_maximum_regressions = request.maximum_regressions;
                 worker.automation_maximum_added_connections = request.maximum_added_connections;
+                worker.automation_maximum_connection_property_changes =
+                    request.maximum_connection_property_changes;
                 worker.automation_maximum_skipped_rows = request.maximum_skipped_rows;
                 worker.data_mode = request.data_mode;
                 worker.editing_automation_job = request.editing_job;
@@ -4284,6 +5246,7 @@ impl App {
         replay_run_id: Option<Uuid>,
         batch: bool,
         parameter_overrides: AutomationParameterOverrides,
+        resume_batch_id: Option<Uuid>,
     ) {
         if self.automation_worker.is_some() {
             self.status = "AUTOMATION ALREADY RUNNING".into();
@@ -4303,7 +5266,16 @@ impl App {
             .selected_link
             .and_then(|index| self.case.links.get(index))
             .cloned();
-        let progress = Arc::new(Mutex::new("Waiting for the case lock".to_owned()));
+        let batch_id = replay_run_id
+            .is_none()
+            .then(|| resume_batch_id.unwrap_or_else(Uuid::new_v4));
+        let batch_label = batch_id
+            .map(|id| format!(" · batch {id}"))
+            .unwrap_or_default();
+        let status_batch_label = batch_label.clone();
+        let progress = Arc::new(Mutex::new(format!(
+            "Waiting for the case lock{batch_label}"
+        )));
         let worker_progress = Arc::clone(&progress);
         let durable_checkpoint = Arc::new(Mutex::new(
             None::<(CaseFile, String, Option<(String, usize)>)>,
@@ -4347,10 +5319,55 @@ impl App {
                                 .map(|job| (job, None))
                         })
                         .collect();
+                    if let Some(resume_batch_id) = resume_batch_id {
+                        let manifest = worker
+                            .case
+                            .automation_batches
+                            .iter()
+                            .find(|batch| batch.batch_id == resume_batch_id)
+                            .ok_or_else(|| format!("automation batch not found: {resume_batch_id}"))?;
+                        if manifest.effective_jobs.is_empty()
+                            || automation_batch_configuration_fingerprint(&manifest.effective_jobs)?
+                                != manifest.configuration_fingerprint
+                        {
+                            return Err(format!(
+                                "automation batch {resume_batch_id} has no valid saved configuration; resume it from the CLI if it is an older manifest"
+                            ));
+                        }
+                        let selected_ids: HashSet<Uuid> = manifest
+                            .selected_jobs
+                            .iter()
+                            .map(|selection| selection.job_id)
+                            .collect();
+                        let effective_ids: HashSet<Uuid> = manifest
+                            .effective_jobs
+                            .iter()
+                            .map(|job| job.id)
+                            .collect();
+                        if selected_ids.len() != manifest.selected_jobs.len()
+                            || effective_ids.len() != manifest.effective_jobs.len()
+                            || selected_ids != effective_ids
+                        {
+                            return Err(format!(
+                                "automation batch {resume_batch_id} has an inconsistent saved job selection"
+                            ));
+                        }
+                        jobs = manifest
+                            .effective_jobs
+                            .iter()
+                            .cloned()
+                            .map(|job| (job, None))
+                            .collect();
+                    }
                     if jobs.len() != job_ids.len() {
-                        return Err("one or more automation jobs no longer exist; reload the case".into());
+                        if resume_batch_id.is_none() {
+                            return Err("one or more automation jobs no longer exist; reload the case".into());
+                        }
                     }
                     for (job, _) in &mut jobs {
+                        if resume_batch_id.is_some() {
+                            continue;
+                        }
                         for (name, value) in &parameter_overrides.global {
                             if let Some((_, configured_value)) = job
                                 .parameters
@@ -4364,6 +5381,9 @@ impl App {
                         }
                     }
                     for (selector, name, value) in &parameter_overrides.scoped {
+                        if resume_batch_id.is_some() {
+                            continue;
+                        }
                         let Some((job, _)) = jobs.iter_mut().find(|(job, _)| {
                             job.name.eq_ignore_ascii_case(selector)
                                 || job.id.to_string().eq_ignore_ascii_case(selector)
@@ -4392,10 +5412,90 @@ impl App {
                             .ok_or_else(|| "saved automation run no longer exists; reload the case".to_string())?;
                         jobs.push((automation_job_from_run(&prior_run)?, Some(run_id)));
                     }
+                    let batch_configuration_fingerprint = if batch_id.is_some() {
+                        let selected_jobs: Vec<AutomationJob> =
+                            jobs.iter().map(|(job, _)| job.clone()).collect();
+                        Some(automation_batch_configuration_fingerprint(&selected_jobs)?)
+                    } else {
+                        None
+                    };
+                    if let (Some(batch_id), Some(fingerprint)) =
+                        (batch_id, batch_configuration_fingerprint.as_ref())
+                    {
+                        if resume_batch_id.is_none() {
+                            worker
+                                .case
+                                .automation_batches
+                                .retain(|checkpoint| checkpoint.batch_id != batch_id);
+                            worker
+                                .case
+                                .automation_batches
+                                .push(AutomationBatchCheckpoint {
+                                batch_id,
+                                configuration_fingerprint: fingerprint.clone(),
+                                selected_jobs: jobs
+                                    .iter()
+                                    .map(|(job, _)| AutomationBatchJobSelection {
+                                        job_id: job.id,
+                                        job_name: job.name.clone(),
+                                    })
+                                    .collect(),
+                                effective_jobs: jobs
+                                    .iter()
+                                    .map(|(job, _)| job.clone())
+                                    .collect(),
+                                completed_jobs: Vec::new(),
+                            });
+                        } else if worker
+                            .case
+                            .automation_batches
+                            .iter()
+                            .find(|checkpoint| checkpoint.batch_id == batch_id)
+                            .is_none_or(|checkpoint| {
+                                checkpoint.configuration_fingerprint != *fingerprint
+                            })
+                        {
+                            return Err(format!(
+                                "saved SQL configuration differs from batch {batch_id}"
+                            ));
+                        }
+                        if worker.case.automation_batches.len() > 200 {
+                            worker
+                                .case
+                                .automation_batches
+                                .drain(..worker.case.automation_batches.len() - 200);
+                        }
+                    }
                     let job_count = jobs.len();
                     let job_names: Vec<_> = jobs.iter().map(|(job, _)| job.name.clone()).collect();
                     let mut passed = 0;
                     for (index, (job, rerun_of)) in jobs.into_iter().enumerate() {
+                        let prior_checkpoint = resume_batch_id.and_then(|resume_batch_id| {
+                            worker
+                                .case
+                                .automation_batches
+                                .iter()
+                                .find(|batch| batch.batch_id == resume_batch_id)
+                                .and_then(|batch| {
+                                    batch
+                                        .completed_jobs
+                                        .iter()
+                                        .find(|checkpoint| checkpoint.job_id == job.id)
+                                })
+                                .cloned()
+                        });
+                        if let Some(checkpoint) = prior_checkpoint {
+                            if checkpoint.success {
+                                passed += 1;
+                            }
+                            update_progress(format!(
+                                "Skipping saved job {} of {job_count} · {} · {}",
+                                index + 1,
+                                job.name,
+                                if checkpoint.success { "PASS" } else { "FAIL" }
+                            ));
+                            continue;
+                        }
                         update_progress(format!(
                             "Running job {} of {job_count} · {}",
                             index + 1,
@@ -4431,6 +5531,37 @@ impl App {
                             if let Some(run) = worker.case.automation_runs.last_mut() {
                                 run.rerun_of = Some(run_id);
                                 run.parameter_overrides = prior_parameter_overrides;
+                            }
+                        }
+                        if let (Some(batch_id), Some(fingerprint)) =
+                            (batch_id, batch_configuration_fingerprint.as_ref())
+                        {
+                            let successful_checkpoint =
+                                worker.case.automation_runs.last_mut().and_then(|run| {
+                                    run.batch_id = Some(batch_id);
+                                    run.batch_configuration_fingerprint =
+                                        Some(fingerprint.clone());
+                                    (run.success || run.snapshot_id.is_some()).then(|| {
+                                        AutomationJobCheckpoint {
+                                        job_id: run.job_id,
+                                        run_id: run.id,
+                                        finished_at: run.finished_at.clone(),
+                                        success: run.success,
+                                        message: run.message.clone(),
+                                        duration_ms: run.duration_ms,
+                                        sqlite_lock_retries: run.sqlite_lock_retries,
+                                        snapshot_id: run.snapshot_id,
+                                        }
+                                    })
+                                });
+                            if let Some(checkpoint) = successful_checkpoint
+                                && let Some(batch) = worker
+                                    .case
+                                    .automation_batches
+                                    .iter_mut()
+                                    .find(|batch| batch.batch_id == batch_id)
+                            {
+                                batch.completed_jobs.push(checkpoint);
                             }
                         }
                         let serialized = serde_json::to_string_pretty(&worker.case)
@@ -4480,7 +5611,7 @@ impl App {
                             },
                         );
                         update_progress(format!(
-                            "Saved checkpoint {} of {job_count} · {} · {} · {summary}",
+                            "Saved checkpoint {} of {job_count}{batch_label} · {} · {} · {summary}",
                             index + 1,
                             job.name,
                             if run.success { "PASS" } else { "FAIL" },
@@ -4488,7 +5619,7 @@ impl App {
                     }
                     let status = if batch {
                         format!(
-                            "AUTOMATION RUN COMPLETE · {passed} PASSED · {} FAILED · {job_count} JOBS · CASE SAVED",
+                            "AUTOMATION RUN COMPLETE · {passed} PASSED · {} FAILED · {job_count} JOBS{batch_label} · CASE SAVED",
                             job_count - passed
                         )
                     } else if replay_run_id.is_some() {
@@ -4499,7 +5630,7 @@ impl App {
                         )
                     } else {
                         format!(
-                            "JOB RUN · {} · {} · CASE SAVED",
+                            "JOB RUN · {} · {}{batch_label} · CASE SAVED",
                             job_names.first().map(String::as_str).unwrap_or("(unnamed)"),
                             if passed == 1 { "PASSED" } else { "FAILED" },
                         )
@@ -4547,11 +5678,14 @@ impl App {
             });
         match spawn_result {
             Ok(_) => {
-                self.automation_run_parameter_text.clear();
+                if resume_batch_id.is_none() {
+                    self.automation_run_parameter_text.clear();
+                }
                 self.automation_worker = Some(receiver);
                 self.automation_progress = Some(progress);
-                self.status =
-                    "AUTOMATION RUNNING · CASE LOCKED · CHECKPOINTS SAVED AFTER EACH JOB".into();
+                self.status = format!(
+                    "AUTOMATION RUNNING · CASE LOCKED · CHECKPOINTS SAVED AFTER EACH JOB{status_batch_label}"
+                );
             }
             Err(error) => self.status = format!("AUTOMATION START FAILED · {error}"),
         }
@@ -4578,11 +5712,70 @@ impl App {
         request.maximum_connections = job.maximum_connections;
         request.maximum_regressions = job.maximum_regressions;
         request.maximum_added_connections = job.maximum_added_connections;
+        request.maximum_connection_property_changes = job.maximum_connection_property_changes;
         request.maximum_skipped_rows = job.maximum_skipped_rows;
         request.data_mode = DataMode::Automation;
         request.editing_job = Some(id);
         self.start_sql_ui_operation(request, true);
         true
+    }
+
+    fn explain_automation_job(&mut self, id: Uuid) {
+        if self.automation_worker.is_some()
+            || self.automation_schedule_worker.is_some()
+            || self.sql_plan_worker.is_some()
+        {
+            self.status = "ANOTHER SQL OPERATION IS RUNNING".into();
+            return;
+        }
+        if self.has_unsaved_changes() || self.disk_case_json.is_none() {
+            self.status = "SAVE THE CASE AND JOB CHANGES BEFORE INSPECTING A QUERY PLAN".into();
+            return;
+        }
+        let Some(job) = self
+            .case
+            .automation_jobs
+            .iter()
+            .find(|job| job.id == id)
+            .cloned()
+        else {
+            self.status = "SQL QUERY PLAN FAILED · job not found".into();
+            return;
+        };
+        let case_path = self.case_path.clone();
+        let expected_disk_json = self.disk_case_json.clone().unwrap_or_default();
+        let display_name = job.name.clone();
+        let name = job.name;
+        let database_path = job.database_path;
+        let query = job.query;
+        let parameters = job.parameters;
+        let (sender, receiver) = mpsc::channel();
+        let spawn_result = thread::Builder::new()
+            .name("arch-notebook-sql-plan".into())
+            .spawn(move || {
+                let result = (|| {
+                    let _case_lock = lock_automation_case(Path::new(&case_path))?;
+                    let disk_json = fs::read_to_string(&case_path)
+                        .map_err(|error| format!("cannot read case: {error}"))?;
+                    if disk_json != expected_disk_json {
+                        return Err(
+                            "case file changed outside this app; reload it before inspecting the query plan"
+                                .into(),
+                        );
+                    }
+                    inspect_sql_query_plan(&database_path, &case_path, &query, &parameters)
+                        .map(|(_, steps)| steps)
+                })();
+                let _ = sender.send((id, name, database_path, result));
+            });
+        match spawn_result {
+            Ok(_) => {
+                self.sql_plan_worker = Some(receiver);
+                self.sql_plan_result = None;
+                self.status = format!("INSPECTING SQL QUERY PLAN · {display_name}");
+            }
+            Err(error) => self.status = format!("SQL QUERY PLAN FAILED · {error}"),
+        }
     }
 
     fn run_automation_job_cli(&mut self, job: &AutomationJob) -> (bool, String) {
@@ -4602,6 +5795,38 @@ impl App {
                 global: Vec::new(),
                 scoped: Vec::new(),
             },
+            None,
+        );
+    }
+
+    fn resume_automation_batch(&mut self, batch_id: Uuid) {
+        let Some(batch) = self
+            .case
+            .automation_batches
+            .iter()
+            .find(|batch| batch.batch_id == batch_id)
+        else {
+            self.status = format!("AUTOMATION BATCH NOT FOUND · {batch_id}");
+            return;
+        };
+        if batch.effective_jobs.is_empty() {
+            self.status = format!("BATCH CONFIGURATION UNAVAILABLE · RESUME FROM CLI · {batch_id}");
+            return;
+        }
+        let job_ids = batch
+            .effective_jobs
+            .iter()
+            .map(|job| job.id)
+            .collect::<Vec<_>>();
+        self.start_automation_work(
+            job_ids,
+            None,
+            true,
+            AutomationParameterOverrides {
+                global: Vec::new(),
+                scoped: Vec::new(),
+            },
+            Some(batch_id),
         );
     }
 
@@ -4609,11 +5834,8 @@ impl App {
         self.sql_lock_retry_count = 0;
         let elapsed = Instant::now();
         let started_at = epoch_timestamp();
-        if job
-            .minimum_confidence
-            .is_some_and(|minimum| !(1..=3).contains(&minimum))
-        {
-            let message = "JOB RUN FAILED · minimum confidence must be between 1 and 3".to_owned();
+        if let Some(error) = automation_job_configuration_error(job) {
+            let message = format!("JOB RUN FAILED · invalid configuration · {error}");
             self.record_automation_run(
                 job,
                 started_at,
@@ -4682,6 +5904,8 @@ impl App {
                 .unwrap_or_default();
             let regression_count = automation_regression_count(&self.case, &source_key);
             let added_connection_count = automation_added_connection_count(&self.case, &source_key);
+            let property_change_count =
+                automation_connection_property_change_count(&self.case, &source_key);
             if count < job.minimum_connections {
                 self.status = format!(
                     "{} · BELOW MINIMUM ({} CONNECTIONS; {} REQUIRED)",
@@ -4722,6 +5946,18 @@ impl App {
                 };
                 self.status = format!("{} · {limit_status}", self.status);
             }
+            if let Some(maximum) = job.maximum_connection_property_changes {
+                let limit_status = if property_change_count > maximum {
+                    format!(
+                        "RELATIONSHIP PROPERTY CHANGE LIMIT EXCEEDED ({property_change_count}; MAXIMUM {maximum})"
+                    )
+                } else {
+                    format!(
+                        "RELATIONSHIP PROPERTY CHANGE LIMIT MET ({property_change_count}; MAXIMUM {maximum})"
+                    )
+                };
+                self.status = format!("{} · {limit_status}", self.status);
+            }
             if let Some(maximum) = job.maximum_skipped_rows
                 && skipped_rows > maximum
             {
@@ -4745,12 +5981,14 @@ impl App {
                 below_minimum_confidence,
                 regression_count,
                 added_connection_count,
+                property_change_count,
                 skipped_rows,
                 job.minimum_connections,
                 job.minimum_confidence,
                 job.maximum_connections,
                 job.maximum_regressions,
                 job.maximum_added_connections,
+                job.maximum_connection_property_changes,
                 job.maximum_skipped_rows,
             );
         }
@@ -4804,6 +6042,8 @@ impl App {
         };
         self.case.automation_runs.push(AutomationRun {
             id: Uuid::new_v4(),
+            batch_id: None,
+            batch_configuration_fingerprint: None,
             job_id: job.id,
             job_name: job.name.clone(),
             database_path: job.database_path.clone(),
@@ -4816,6 +6056,7 @@ impl App {
             maximum_connections: job.maximum_connections,
             maximum_regressions: job.maximum_regressions,
             maximum_added_connections: job.maximum_added_connections,
+            maximum_connection_property_changes: job.maximum_connection_property_changes,
             maximum_skipped_rows: job.maximum_skipped_rows,
             enabled: job.enabled,
             configuration_recorded: true,
@@ -4865,10 +6106,23 @@ impl App {
                 return Err("export path cannot be empty".into());
             }
             if paths_refer_to_same_file(self.export_path.trim(), &self.case_path) {
-                return Err("SQL comparison output path matches the case file".into());
+                return Err("CSV/TSV export path matches the case file".into());
             }
             self.ensure_export_path_is_not_sql_source()?;
+            for (index, link) in self.case.links.iter().enumerate() {
+                validate_connection_attributes(&link.attributes).map_err(|error| {
+                    format!("cannot export relationship {}: {error}", index + 1)
+                })?;
+            }
             let mut attribute_columns: Vec<(bool, String)> = Vec::new();
+            let mut connection_attribute_keys: Vec<String> = self
+                .case
+                .links
+                .iter()
+                .flat_map(|link| link.attributes.iter().map(|(key, _)| key.clone()))
+                .collect();
+            connection_attribute_keys.sort_by_key(|key| key.to_ascii_lowercase());
+            connection_attribute_keys.dedup_by(|first, second| first.eq_ignore_ascii_case(second));
             let known_entities: HashSet<Uuid> =
                 self.case.entities.iter().map(|entity| entity.id).collect();
             let linked_entities: HashSet<Uuid> = self
@@ -4930,6 +6184,7 @@ impl App {
                 "source_type".to_string(),
                 "source_detail_json".to_string(),
                 "source_aliases_json".to_string(),
+                "source_merged_records_json".to_string(),
                 "source_color".to_string(),
                 "source_x".to_string(),
                 "source_y".to_string(),
@@ -4940,6 +6195,7 @@ impl App {
                 "target_type".to_string(),
                 "target_detail_json".to_string(),
                 "target_aliases_json".to_string(),
+                "target_merged_records_json".to_string(),
                 "target_color".to_string(),
                 "target_x".to_string(),
                 "target_y".to_string(),
@@ -4959,79 +6215,122 @@ impl App {
                     if *is_source { "source" } else { "target" }
                 )
             }));
+            headers.extend(
+                connection_attribute_keys
+                    .iter()
+                    .map(|key| format!("connection_attribute:{key}")),
+            );
             writer.write_record(&headers).map_err(|e| e.to_string())?;
-            for link in &self.case.links {
-                let a = self.case.entities.iter().find(|e| e.id == link.from);
-                let b = self.case.entities.iter().find(|e| e.id == link.to);
-                if let (Some(a), Some(b)) = (a, b) {
-                    let conf = link.confidence.to_string();
-                    let source_entity_id = a.id.to_string();
-                    let target_entity_id = b.id.to_string();
-                    let source_external_ids = serde_json::to_string(&a.external_ids)
-                        .map_err(|error| error.to_string())?;
-                    let target_external_ids = serde_json::to_string(&b.external_ids)
-                        .map_err(|error| error.to_string())?;
-                    let source_detail =
-                        serde_json::to_string(&a.detail).map_err(|error| error.to_string())?;
-                    let source_aliases =
-                        serde_json::to_string(&a.aliases).map_err(|error| error.to_string())?;
-                    let target_detail =
-                        serde_json::to_string(&b.detail).map_err(|error| error.to_string())?;
-                    let target_aliases =
-                        serde_json::to_string(&b.aliases).map_err(|error| error.to_string())?;
-                    let source_color =
-                        format!("#{:02X}{:02X}{:02X}", a.color[0], a.color[1], a.color[2]);
-                    let target_color =
-                        format!("#{:02X}{:02X}{:02X}", b.color[0], b.color[1], b.color[2]);
-                    let source_x = a.x.to_string();
-                    let source_y = a.y.to_string();
-                    let target_x = b.x.to_string();
-                    let target_y = b.y.to_string();
-                    let mut values = vec![
-                        "connection",
-                        link.connection_id.as_str(),
-                        a.name.as_str(),
-                        source_entity_id.as_str(),
-                        source_external_ids.as_str(),
-                        a.kind.as_str(),
-                        source_detail.as_str(),
-                        source_aliases.as_str(),
-                        source_color.as_str(),
-                        source_x.as_str(),
-                        source_y.as_str(),
-                        link.label.as_str(),
-                        b.name.as_str(),
-                        target_entity_id.as_str(),
-                        target_external_ids.as_str(),
-                        b.kind.as_str(),
-                        target_detail.as_str(),
-                        target_aliases.as_str(),
-                        target_color.as_str(),
-                        target_x.as_str(),
-                        target_y.as_str(),
-                        link.date.as_str(),
-                        conf.as_str(),
-                        if link.directed { "true" } else { "false" },
-                        link.notes.as_str(),
-                        link.source_notes.as_str(),
-                        link.source_reference.as_str(),
-                        link.ingest_source.as_deref().unwrap_or(""),
-                        if a.position_locked { "true" } else { "false" },
-                        if b.position_locked { "true" } else { "false" },
-                    ];
-                    for (is_source, key) in &attribute_columns {
-                        let entity = if *is_source { a } else { b };
-                        values.push(
-                            entity
-                                .attributes
-                                .iter()
-                                .find(|(attribute, _)| attribute.eq_ignore_ascii_case(key))
-                                .map(|(_, value)| value.as_str())
-                                .unwrap_or(""),
-                        );
-                    }
-                    writer.write_record(values).map_err(|e| e.to_string())?;
+            for (link_index, link) in self.case.links.iter().enumerate() {
+                let connection_label = if link.connection_id.trim().is_empty() {
+                    format!("connection record {}", link_index + 1)
+                } else {
+                    format!("connection {}", link.connection_id)
+                };
+                let a = self
+                    .case
+                    .entities
+                    .iter()
+                    .find(|entity| entity.id == link.from)
+                    .ok_or_else(|| {
+                        format!(
+                            "cannot export {connection_label}: source entity {} is missing",
+                            link.from
+                        )
+                    })?;
+                let b = self
+                    .case
+                    .entities
+                    .iter()
+                    .find(|entity| entity.id == link.to)
+                    .ok_or_else(|| {
+                        format!(
+                            "cannot export {connection_label}: target entity {} is missing",
+                            link.to
+                        )
+                    })?;
+                let conf = link.confidence.to_string();
+                let source_entity_id = a.id.to_string();
+                let target_entity_id = b.id.to_string();
+                let source_external_ids =
+                    serde_json::to_string(&a.external_ids).map_err(|error| error.to_string())?;
+                let target_external_ids =
+                    serde_json::to_string(&b.external_ids).map_err(|error| error.to_string())?;
+                let source_detail =
+                    serde_json::to_string(&a.detail).map_err(|error| error.to_string())?;
+                let source_aliases =
+                    serde_json::to_string(&a.aliases).map_err(|error| error.to_string())?;
+                let source_merged_records =
+                    serde_json::to_string(&a.merged_records).map_err(|error| error.to_string())?;
+                let target_detail =
+                    serde_json::to_string(&b.detail).map_err(|error| error.to_string())?;
+                let target_aliases =
+                    serde_json::to_string(&b.aliases).map_err(|error| error.to_string())?;
+                let target_merged_records =
+                    serde_json::to_string(&b.merged_records).map_err(|error| error.to_string())?;
+                let source_color =
+                    format!("#{:02X}{:02X}{:02X}", a.color[0], a.color[1], a.color[2]);
+                let target_color =
+                    format!("#{:02X}{:02X}{:02X}", b.color[0], b.color[1], b.color[2]);
+                let source_x = a.x.to_string();
+                let source_y = a.y.to_string();
+                let target_x = b.x.to_string();
+                let target_y = b.y.to_string();
+                let mut values = vec![
+                    "connection",
+                    link.connection_id.as_str(),
+                    a.name.as_str(),
+                    source_entity_id.as_str(),
+                    source_external_ids.as_str(),
+                    a.kind.as_str(),
+                    source_detail.as_str(),
+                    source_aliases.as_str(),
+                    source_merged_records.as_str(),
+                    source_color.as_str(),
+                    source_x.as_str(),
+                    source_y.as_str(),
+                    link.label.as_str(),
+                    b.name.as_str(),
+                    target_entity_id.as_str(),
+                    target_external_ids.as_str(),
+                    b.kind.as_str(),
+                    target_detail.as_str(),
+                    target_aliases.as_str(),
+                    target_merged_records.as_str(),
+                    target_color.as_str(),
+                    target_x.as_str(),
+                    target_y.as_str(),
+                    link.date.as_str(),
+                    conf.as_str(),
+                    if link.directed { "true" } else { "false" },
+                    link.notes.as_str(),
+                    link.source_notes.as_str(),
+                    link.source_reference.as_str(),
+                    link.ingest_source.as_deref().unwrap_or(""),
+                    if a.position_locked { "true" } else { "false" },
+                    if b.position_locked { "true" } else { "false" },
+                ];
+                for (is_source, key) in &attribute_columns {
+                    let entity = if *is_source { a } else { b };
+                    values.push(
+                        entity
+                            .attributes
+                            .iter()
+                            .find(|(attribute, _)| attribute.eq_ignore_ascii_case(key))
+                            .map(|(_, value)| value.as_str())
+                            .unwrap_or(""),
+                    );
                 }
+                for key in &connection_attribute_keys {
+                    values.push(
+                        link.attributes
+                            .iter()
+                            .find(|(attribute, _)| attribute.eq_ignore_ascii_case(key))
+                            .map(|(_, value)| value.as_str())
+                            .unwrap_or(""),
+                    );
+                }
+                writer.write_record(values).map_err(|e| e.to_string())?;
             }
             for entity in self
                 .case
@@ -5046,6 +6345,8 @@ impl App {
                     serde_json::to_string(&entity.detail).map_err(|error| error.to_string())?;
                 let aliases =
                     serde_json::to_string(&entity.aliases).map_err(|error| error.to_string())?;
+                let merged_records = serde_json::to_string(&entity.merged_records)
+                    .map_err(|error| error.to_string())?;
                 let color = format!(
                     "#{:02X}{:02X}{:02X}",
                     entity.color[0], entity.color[1], entity.color[2]
@@ -5059,9 +6360,11 @@ impl App {
                     entity.kind.clone(),
                     detail,
                     aliases,
+                    merged_records,
                     color,
                     entity.x.to_string(),
                     entity.y.to_string(),
+                    String::new(),
                     String::new(),
                     String::new(),
                     String::new(),
@@ -5093,6 +6396,7 @@ impl App {
                         String::new()
                     });
                 }
+                values.extend(connection_attribute_keys.iter().map(|_| String::new()));
                 writer
                     .write_record(values)
                     .map_err(|error| error.to_string())?;
@@ -5144,6 +6448,9 @@ impl App {
                 );
             }
             for (index, link) in self.case.links.iter().enumerate() {
+                validate_connection_attributes(&link.attributes).map_err(|error| {
+                    format!("cannot export relationship {}: {error}", index + 1)
+                })?;
                 if !valid_entities.contains(&link.from) || !valid_entities.contains(&link.to) {
                     return Err(format!(
                         "cannot export relationship {} because an endpoint entity is missing",
@@ -5195,6 +6502,7 @@ impl App {
                 ),
                 ("edge_source_notes", "edge", "source_notes", "string"),
                 ("edge_analyst_notes", "edge", "analyst_notes", "string"),
+                ("edge_attributes", "edge", "attributes_json", "string"),
                 ("edge_ingest_source", "edge", "ingest_source", "string"),
             ] {
                 xml.push_str(&format!(
@@ -5343,6 +6651,11 @@ impl App {
                 graphml_data(&mut xml, "edge_analyst_notes", &link.notes);
                 graphml_data(
                     &mut xml,
+                    "edge_attributes",
+                    &serde_json::to_string(&link.attributes).map_err(|error| error.to_string())?,
+                );
+                graphml_data(
+                    &mut xml,
                     "edge_ingest_source",
                     link.ingest_source.as_deref().unwrap_or_default(),
                 );
@@ -5368,6 +6681,16 @@ impl App {
         self.status = match result {
             Ok(()) => format!("GRAPHML EXPORTED · {output_path}"),
             Err(error) => format!("GRAPHML EXPORT FAILED · {error}"),
+        };
+    }
+
+    fn export_kml(&mut self) {
+        let output_path = self.kml_export_path.trim().to_owned();
+        self.status = match write_case_kml(&self.case, &self.case_path, &output_path) {
+            Ok((entities, relationships, skipped_relationships)) => format!(
+                "KML EXPORTED · {entities} MAPPED ENTITIES · {relationships} RELATIONSHIPS · {skipped_relationships} WITHOUT BOTH COORDINATES · {output_path}"
+            ),
+            Err(error) => format!("KML EXPORT FAILED · {error}"),
         };
     }
 
@@ -5397,6 +6720,8 @@ impl App {
                     "removed",
                     "confidence_declined",
                     "date_changed",
+                    "entity_identity_changed",
+                    "connection_properties_changed",
                     "connection_details_changed",
                     "direction_changed",
                     "evidence_changed",
@@ -5417,6 +6742,9 @@ impl App {
                     "date_before",
                     "source_reference_before",
                     "source_notes_before",
+                    "source_attributes_before_json",
+                    "target_attributes_before_json",
+                    "connection_attributes_before_json",
                     "source",
                     "source_type",
                     "source_entity_id",
@@ -5429,6 +6757,9 @@ impl App {
                     "date",
                     "source_reference",
                     "source_notes",
+                    "source_attributes_json",
+                    "target_attributes_json",
+                    "connection_attributes_json",
                     "database_path",
                     "series",
                     "baseline_snapshot_id",
@@ -5450,6 +6781,8 @@ impl App {
                         DeltaKind::Removed => "REMOVED",
                         DeltaKind::ConfidenceDeclined => "CONFIDENCE DOWN",
                         DeltaKind::DateChanged => "DATE CHANGED",
+                        DeltaKind::EntityIdentityChanged => "ENTITY ID CHANGED",
+                        DeltaKind::ConnectionAttributesChanged => "RELATIONSHIP PROPERTIES CHANGED",
                         DeltaKind::Updated => "CONNECTION DETAILS",
                         DeltaKind::DirectionChanged => "DIRECTION CHANGED",
                         DeltaKind::EvidenceChanged => "EVIDENCE CHANGED",
@@ -5465,6 +6798,8 @@ impl App {
                         DeltaKind::Removed,
                         DeltaKind::ConfidenceDeclined,
                         DeltaKind::DateChanged,
+                        DeltaKind::EntityIdentityChanged,
+                        DeltaKind::ConnectionAttributesChanged,
                         DeltaKind::Updated,
                         DeltaKind::DirectionChanged,
                         DeltaKind::EvidenceChanged,
@@ -5473,7 +6808,17 @@ impl App {
                         DeltaKind::ConfidenceIncreased,
                     ]
                     .iter()
-                    .map(|kind| delta.kinds.contains(kind).to_string()),
+                    .map(|kind| {
+                        let changed = if *kind == DeltaKind::Updated {
+                            delta.kinds.contains(kind)
+                                || delta
+                                    .kinds
+                                    .contains(&DeltaKind::ConnectionAttributesChanged)
+                        } else {
+                            delta.kinds.contains(kind)
+                        };
+                        changed.to_string()
+                    }),
                 );
                 record.push(delta.connection.connection_id.clone());
                 record.push(comparison_key(&delta.connection));
@@ -5499,6 +6844,12 @@ impl App {
                         fact.map(|value| value.source_reference.clone())
                             .unwrap_or_default(),
                         fact.map(|value| value.notes.clone()).unwrap_or_default(),
+                        fact.and_then(|value| serde_json::to_string(&value.source_attributes).ok())
+                            .unwrap_or_default(),
+                        fact.and_then(|value| serde_json::to_string(&value.target_attributes).ok())
+                            .unwrap_or_default(),
+                        fact.and_then(|value| serde_json::to_string(&value.attributes).ok())
+                            .unwrap_or_default(),
                     ]);
                 };
                 append_fact(&mut record, previous);
@@ -5539,6 +6890,177 @@ impl App {
             ),
             Err(error) => format!("SQL COMPARISON EXPORT FAILED · {error}"),
         };
+    }
+
+    fn export_sql_series(&mut self, source_key: &str) {
+        let output_path = self.export_path.trim().to_owned();
+        let result = (|| -> Result<usize, String> {
+            if output_path.is_empty() {
+                return Err("export path cannot be empty".into());
+            }
+            if paths_refer_to_same_file(&output_path, &self.case_path) {
+                return Err("series export cannot replace the case file".into());
+            }
+            self.ensure_path_is_not_sql_source(&output_path)?;
+            let snapshots: Vec<&ConnectionSnapshot> = self
+                .case
+                .snapshots
+                .iter()
+                .filter(|snapshot| snapshot.source_key == source_key)
+                .collect();
+            if snapshots.is_empty() {
+                return Err("no SQL captures are saved for this series".into());
+            }
+            let connection_count = snapshots
+                .iter()
+                .map(|snapshot| snapshot.connections.len())
+                .sum();
+            write_sql_snapshots_csv_atomically(&output_path, &snapshots)?;
+            Ok(connection_count)
+        })();
+        self.status = match result {
+            Ok(count) => format!(
+                "SQL SERIES EXPORTED · {count} CONNECTIONS · {}",
+                output_path
+            ),
+            Err(error) => format!("SQL SERIES EXPORT FAILED · {error}"),
+        };
+    }
+
+    fn export_sql_snapshot(&mut self, snapshot_index: usize) {
+        let output_path = self.export_path.trim().to_owned();
+        let result = (|| -> Result<usize, String> {
+            if output_path.is_empty() {
+                return Err("export path cannot be empty".into());
+            }
+            if paths_refer_to_same_file(&output_path, &self.case_path) {
+                return Err("snapshot export cannot replace the case file".into());
+            }
+            self.ensure_path_is_not_sql_source(&output_path)?;
+            let snapshot = self
+                .case
+                .snapshots
+                .get(snapshot_index)
+                .ok_or_else(|| "snapshot is no longer available".to_owned())?;
+            let connection_count = snapshot.connections.len();
+            write_sql_snapshots_csv_atomically(&output_path, &[snapshot])?;
+            Ok(connection_count)
+        })();
+        self.status = match result {
+            Ok(count) => format!(
+                "SQL SNAPSHOT EXPORTED · {count} CONNECTIONS · {}",
+                output_path
+            ),
+            Err(error) => format!("SQL SNAPSHOT EXPORT FAILED · {error}"),
+        };
+    }
+
+    fn export_automation_runs(&mut self, run_ids: &[Uuid]) {
+        let output_path = self.export_path.trim().to_owned();
+        let result = (|| -> Result<usize, String> {
+            if output_path.is_empty() {
+                return Err("export path cannot be empty".into());
+            }
+            if paths_refer_to_same_file(&output_path, &self.case_path) {
+                return Err("run history export cannot replace the case file".into());
+            }
+            self.ensure_path_is_not_sql_source(&output_path)?;
+            let runs: Vec<&AutomationRun> = run_ids
+                .iter()
+                .filter_map(|run_id| {
+                    self.case
+                        .automation_runs
+                        .iter()
+                        .find(|run| run.id == *run_id)
+                })
+                .collect();
+            if runs.is_empty() {
+                return Err("no automation runs match the current history filters".into());
+            }
+            write_automation_runs_csv_atomically(&output_path, &self.case, &runs)?;
+            Ok(runs.len())
+        })();
+        self.status = match result {
+            Ok(count) => format!("AUTOMATION RUNS EXPORTED · {count} RUNS · {}", output_path),
+            Err(error) => format!("AUTOMATION RUN EXPORT FAILED · {error}"),
+        };
+    }
+
+    fn open_sql_snapshot_review(&mut self, snapshot_index: usize) {
+        let Some(source_key) = self
+            .case
+            .snapshots
+            .get(snapshot_index)
+            .map(|snapshot| snapshot.source_key.clone())
+        else {
+            return;
+        };
+        self.sql_snapshot_source = Some(source_key);
+        self.sql_snapshot_index = Some(snapshot_index);
+        self.sql_snapshot_filter.clear();
+        self.sql_comparison_baseline_id = None;
+        self.sql_delta_filter = SnapshotDeltaFilter::All;
+        self.sql_delta_search.clear();
+        self.data_mode = DataMode::SqlRegressions;
+        self.page = WorkspacePage::Data;
+        self.show_timeline = false;
+    }
+
+    fn highlight_sql_source_on_chart(&mut self, source_key: String) {
+        let mut source_entities: Vec<Uuid> = self
+            .case
+            .links
+            .iter()
+            .filter(|link| link.ingest_source.as_deref() == Some(source_key.as_str()))
+            .flat_map(|link| [link.from, link.to])
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect();
+        source_entities.sort_unstable();
+        self.sql_source_focus = Some(source_key);
+        self.chart_fit_entities = (!source_entities.is_empty()).then_some(source_entities);
+        self.chart_fit_path = None;
+        self.chart_focus = None;
+        self.chart_focus_link = None;
+        self.chart_focus_group = None;
+        self.path_result.clear();
+        self.path_link_result.clear();
+        self.path_timeline_range = None;
+        self.timeline_range = None;
+        self.selected = None;
+        self.selected_link = None;
+        self.page = WorkspacePage::Chart;
+        self.show_timeline = false;
+    }
+
+    fn focus_entity_from_chart_search(&mut self, entity_id: Uuid) {
+        self.selected = Some(entity_id);
+        self.selected_link = None;
+        self.chart_focus = Some(entity_id);
+        self.chart_focus_link = None;
+        self.chart_fit_entities = None;
+        self.chart_fit_path = None;
+        self.chart_focus_group = None;
+        self.sql_source_focus = None;
+        self.path_result.clear();
+        self.path_link_result.clear();
+        self.path_timeline_range = None;
+        self.timeline_range = None;
+    }
+
+    fn focus_link_from_chart_search(&mut self, link_index: usize) {
+        self.selected = None;
+        self.selected_link = Some(link_index);
+        self.chart_focus = None;
+        self.chart_focus_link = Some(link_index);
+        self.chart_fit_entities = None;
+        self.chart_fit_path = None;
+        self.chart_focus_group = None;
+        self.sql_source_focus = None;
+        self.path_result.clear();
+        self.path_link_result.clear();
+        self.path_timeline_range = None;
+        self.timeline_range = None;
     }
 
     fn ensure_export_path_is_not_sql_source(&self) -> Result<(), String> {
@@ -5760,6 +7282,7 @@ impl App {
     }
 
     fn new_case(&mut self) {
+        let cleared_one_run_overrides = !self.automation_run_parameter_text.trim().is_empty();
         self.case = CaseFile {
             format_version: CURRENT_CASE_FORMAT_VERSION,
             title: "UNTITLED CASE".into(),
@@ -5769,8 +7292,10 @@ impl App {
             snapshots: Vec::new(),
             automation_jobs: Vec::new(),
             automation_runs: Vec::new(),
+            automation_batches: Vec::new(),
             import_specifications: Vec::new(),
             graphml_source_catalogs: Vec::new(),
+            saved_paths: Vec::new(),
         };
         self.network_groups = None;
         self.chart_focus_group = None;
@@ -5781,6 +7306,7 @@ impl App {
         self.data_source_filter = None;
         self.editing_automation_job = None;
         self.automation_editor_before_edit = None;
+        self.automation_run_parameter_text.clear();
         self.selected_import_spec = None;
         self.import_spec_name.clear();
         self.show_import_wizard = false;
@@ -5805,7 +7331,11 @@ impl App {
         self.path_result.clear();
         self.duplicate_candidates.clear();
         self.merge_candidate = None;
-        self.status = "NEW CASE CREATED".into();
+        self.status = if cleared_one_run_overrides {
+            "NEW CASE CREATED · ONE-RUN SQL OVERRIDES CLEARED".into()
+        } else {
+            "NEW CASE CREATED".into()
+        };
     }
 
     fn analyze_path(&mut self) {
@@ -5818,11 +7348,178 @@ impl App {
             self.status = "CHOOSE AN END ENTITY".into();
             return;
         };
-        self.path_result = shortest_path(&self.case, start, end).unwrap_or_default();
-        if self.path_result.is_empty() {
-            self.status = "NO CONNECTION PATH FOUND".into();
+        let timeline_range = self
+            .path_use_timeline_range
+            .then_some(self.timeline_range)
+            .flatten();
+        let path = shortest_path(
+            &self.case,
+            start,
+            end,
+            self.path_follow_directions,
+            self.path_time_flow,
+            timeline_range,
+        );
+        (self.path_result, self.path_link_result) =
+            path.unwrap_or_else(|| (Vec::new(), Vec::new()));
+        self.path_timeline_range = timeline_range;
+        let time_flow_label = match self.path_time_flow {
+            PathTimeFlow::Any => "",
+            PathTimeFlow::Forward => " · FORWARD IN TIME",
+            PathTimeFlow::Backward => " · BACKWARD IN TIME",
+        };
+        let timeline_range_label = if timeline_range.is_some() {
+            " · ACTIVE TIMELINE RANGE"
         } else {
-            self.status = format!("PATH FOUND · {} ENTITIES", self.path_result.len());
+            ""
+        };
+        if self.path_result.is_empty() {
+            self.status = format!(
+                "NO CONNECTION PATH FOUND{}{}{}",
+                if self.path_follow_directions {
+                    " · FOLLOWING LINK DIRECTIONS"
+                } else {
+                    ""
+                },
+                time_flow_label,
+                timeline_range_label,
+            );
+        } else {
+            self.status = format!(
+                "PATH FOUND · {} ENTITIES{}{}{}",
+                self.path_result.len(),
+                if self.path_follow_directions {
+                    " · LINK DIRECTIONS FOLLOWED"
+                } else {
+                    " · LINK DIRECTIONS IGNORED"
+                },
+                time_flow_label,
+                timeline_range_label,
+            );
+        }
+    }
+
+    fn save_current_path(&mut self, name: &str) {
+        let name = name.trim();
+        if name.is_empty() {
+            self.status = "SAVED PATH NEEDS A NAME".into();
+            return;
+        }
+        let (Some(start_entity_id), Some(end_entity_id)) = (self.path_start, self.path_end) else {
+            self.status = "CHOOSE BOTH PATH ENDPOINTS BEFORE SAVING".into();
+            return;
+        };
+        if start_entity_id == end_entity_id {
+            self.status = "SAVED PATH NEEDS TWO DIFFERENT ENDPOINTS".into();
+            return;
+        }
+        if self
+            .case
+            .saved_paths
+            .iter()
+            .any(|saved| saved.name.eq_ignore_ascii_case(name))
+        {
+            self.status = format!("SAVED PATH NAME ALREADY EXISTS · {name}");
+            return;
+        }
+        self.case.saved_paths.push(SavedPath {
+            id: Uuid::new_v4(),
+            name: name.to_owned(),
+            start_entity_id,
+            end_entity_id,
+            follow_directions: self.path_follow_directions,
+            time_flow: self.path_time_flow,
+            use_timeline_range: self.path_use_timeline_range,
+        });
+        self.status = format!("PATH SAVED · {name} · SAVE CASE TO KEEP IT");
+    }
+
+    fn open_saved_path(&mut self, id: Uuid) {
+        let Some(saved) = self
+            .case
+            .saved_paths
+            .iter()
+            .find(|saved| saved.id == id)
+            .cloned()
+        else {
+            self.status = "SAVED PATH IS NO LONGER AVAILABLE".into();
+            return;
+        };
+        let entity_ids: HashSet<Uuid> = self.case.entities.iter().map(|entity| entity.id).collect();
+        if !entity_ids.contains(&saved.start_entity_id)
+            || !entity_ids.contains(&saved.end_entity_id)
+        {
+            self.status = format!("SAVED PATH ENDPOINT IS MISSING · {}", saved.name);
+            return;
+        }
+        self.path_start = Some(saved.start_entity_id);
+        self.path_end = Some(saved.end_entity_id);
+        self.path_follow_directions = saved.follow_directions;
+        self.path_time_flow = saved.time_flow;
+        self.path_use_timeline_range = saved.use_timeline_range;
+        self.path_result.clear();
+        self.path_link_result.clear();
+        self.chart_fit_path = None;
+        self.page = WorkspacePage::Data;
+        self.show_timeline = false;
+        self.data_mode = DataMode::Relationships;
+        self.analyze_path();
+        if !self.path_result.is_empty() {
+            self.status = format!("SAVED PATH OPENED · {} · ROUTE RECOMPUTED", saved.name);
+        }
+    }
+
+    fn delete_saved_path(&mut self, id: Uuid) {
+        if let Some(index) = self
+            .case
+            .saved_paths
+            .iter()
+            .position(|saved| saved.id == id)
+        {
+            let name = self.case.saved_paths.remove(index).name;
+            self.status = format!("SAVED PATH DELETED · {name} · SAVE CASE TO KEEP THE CHANGE");
+        }
+    }
+
+    fn export_saved_path_package(&mut self, id: Uuid) {
+        let output_path = self.saved_path_package_path.trim();
+        let result = self
+            .case
+            .saved_paths
+            .iter()
+            .find(|path| path.id == id)
+            .ok_or_else(|| "saved path is no longer available".to_owned())
+            .and_then(|path| saved_path_package_for_case(&self.case, path))
+            .and_then(|package| {
+                write_saved_path_package(&self.case, &self.case_path, output_path, &package)
+            });
+        match result {
+            Ok(name) => self.status = format!("SAVED PATH EXPORTED · {name} · {output_path}"),
+            Err(error) => self.status = format!("SAVED PATH EXPORT FAILED · {error}"),
+        }
+    }
+
+    fn import_saved_path_package(&mut self) {
+        let input_path = self.saved_path_package_path.trim();
+        let result = read_saved_path_package(input_path)
+            .and_then(|package| {
+                import_saved_path_definition(
+                    package.path,
+                    &self.case,
+                    Some(self.saved_path_import_name.trim()),
+                )
+            })
+            .map(|saved| {
+                let name = saved.name.clone();
+                self.case.saved_paths.push(saved);
+                self.saved_path_import_name.clear();
+                name
+            });
+        match result {
+            Ok(name) => {
+                self.status = format!("SAVED PATH IMPORTED · {name} · SAVE CASE TO KEEP IT")
+            }
+            Err(error) => self.status = format!("SAVED PATH IMPORT FAILED · {error}"),
         }
     }
 
@@ -5906,7 +7603,23 @@ impl App {
             kind: removed.kind.clone(),
             detail: removed.detail.clone(),
             attributes: removed.attributes.clone(),
+            sql_attribute_values: removed.sql_attribute_values.clone(),
+            sql_attribute_baselines: removed.sql_attribute_baselines.clone(),
         });
+        for value in &removed.sql_attribute_values {
+            if !keep.sql_attribute_values.contains(value) {
+                keep.sql_attribute_values.push(value.clone());
+            }
+        }
+        for baseline in &removed.sql_attribute_baselines {
+            if !keep
+                .sql_attribute_baselines
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case(&baseline.0))
+            {
+                keep.sql_attribute_baselines.push(baseline.clone());
+            }
+        }
         for (key, value) in &removed.attributes {
             if let Some((_, existing)) = keep
                 .attributes
@@ -5951,14 +7664,6 @@ impl App {
         } else {
             self.path_end
         };
-        let mut path = Vec::new();
-        for id in &self.path_result {
-            let merged = if *id == remove_id { keep_id } else { *id };
-            if path.last() != Some(&merged) {
-                path.push(merged);
-            }
-        }
-        self.path_result = path;
         self.selected = Some(keep_id);
         self.selected_link = None;
         self.chart_focus = Some(keep_id);
@@ -5994,6 +7699,25 @@ fn record_imported_entity_value(
         }
     } else {
         values.insert(key, value.to_string());
+    }
+    Ok(())
+}
+
+fn record_imported_merged_records(
+    values: &mut HashMap<(Uuid, String), String>,
+    entity_id: Uuid,
+    serialized_records: &str,
+    entity_name: &str,
+) -> Result<(), String> {
+    let key = (entity_id, "merged_records".into());
+    if let Some(previous) = values.get(&key) {
+        if previous != serialized_records {
+            return Err(format!(
+                "CSV has conflicting merged-record histories for entity {entity_name}; make its source and target JSON values identical across rows"
+            ));
+        }
+    } else {
+        values.insert(key, serialized_records.to_owned());
     }
     Ok(())
 }
@@ -6092,21 +7816,38 @@ fn find_duplicate_pairs(entities: &[Entity]) -> Vec<(Uuid, Uuid)> {
     let mut matches = Vec::new();
     for i in 0..entities.len() {
         let a = normalized_name(&entities[i].name);
-        if a.len() < 3 {
+        if a.len() < 3 && entities[i].external_ids.is_empty() {
             continue;
         }
         for b_entity in entities.iter().skip(i + 1) {
             if !compatible_entity_types(&entities[i].kind, &b_entity.kind) {
                 continue;
             }
+            if external_identity_conflicts(&entities[i], b_entity) {
+                continue;
+            }
+            let shared_identity = entities[i].external_ids.iter().any(|(source, id)| {
+                b_entity
+                    .external_ids
+                    .iter()
+                    .any(|(other_source, other_id)| source == other_source && id == other_id)
+            });
             let b = normalized_name(&b_entity.name);
-            if b.len() < 3 || a.chars().next() != b.chars().next() || a.len().abs_diff(b.len()) > 2
+            if !shared_identity
+                && (a.len() < 3
+                    || b.len() < 3
+                    || a.chars().next() != b.chars().next()
+                    || a.len().abs_diff(b.len()) > 2)
             {
                 continue;
             }
-            let distance = edit_distance(&a, &b);
+            let distance = if shared_identity {
+                0
+            } else {
+                edit_distance(&a, &b)
+            };
             let threshold = if a.len().max(b.len()) < 8 { 1 } else { 2 };
-            if distance <= threshold {
+            if shared_identity || distance <= threshold {
                 matches.push((
                     distance,
                     entities[i].name.clone(),
@@ -6127,6 +7868,38 @@ fn find_duplicate_pairs(entities: &[Entity]) -> Vec<(Uuid, Uuid)> {
         .take(20)
         .map(|(_, _, _, a, b)| (a, b))
         .collect()
+}
+
+fn external_identity_conflicts(first: &Entity, second: &Entity) -> bool {
+    first.external_ids.iter().any(|(source, id)| {
+        second
+            .external_ids
+            .iter()
+            .any(|(other_source, other_id)| source == other_source && id != other_id)
+    })
+}
+
+fn duplicate_match_basis(first: &Entity, second: &Entity) -> String {
+    let shared_identities: Vec<String> = first
+        .external_ids
+        .iter()
+        .filter(|(source, id)| {
+            second
+                .external_ids
+                .iter()
+                .any(|(other_source, other_id)| source == other_source && id == other_id)
+        })
+        .map(|(source, id)| format!("{source} · {id}"))
+        .take(2)
+        .collect();
+    if !shared_identities.is_empty() {
+        return format!("Shared source identity · {}", shared_identities.join(" · "));
+    }
+    let distance = edit_distance(
+        &normalized_name(&first.name),
+        &normalized_name(&second.name),
+    );
+    format!("Similar names · edit distance {distance}")
 }
 
 fn compatible_entity_types(a: &str, b: &str) -> bool {
@@ -6216,6 +7989,8 @@ impl EntityIndex {
             kind: if is_generic(kind) { "ENTITY" } else { kind }.into(),
             detail: String::new(),
             attributes: Vec::new(),
+            sql_attribute_values: Vec::new(),
+            sql_attribute_baselines: Vec::new(),
             aliases: Vec::new(),
             external_ids: Vec::new(),
             merged_records: Vec::new(),
@@ -6383,6 +8158,8 @@ impl EntityIndex {
             kind: if is_generic(kind) { "ENTITY" } else { kind }.into(),
             detail: String::new(),
             attributes: Vec::new(),
+            sql_attribute_values: Vec::new(),
+            sql_attribute_baselines: Vec::new(),
             aliases: Vec::new(),
             external_ids: Vec::new(),
             merged_records: Vec::new(),
@@ -6688,6 +8465,112 @@ fn connected_components(case: &CaseFile) -> Vec<Vec<Uuid>> {
     groups
 }
 
+fn network_articulation_points(case: &CaseFile) -> Vec<(Uuid, usize)> {
+    let names: HashMap<Uuid, String> = case
+        .entities
+        .iter()
+        .map(|entity| (entity.id, entity.name.to_lowercase()))
+        .collect();
+    let mut adjacency: HashMap<Uuid, Vec<Uuid>> = case
+        .entities
+        .iter()
+        .map(|entity| (entity.id, Vec::new()))
+        .collect();
+    for link in &case.links {
+        if link.from == link.to
+            || !adjacency.contains_key(&link.from)
+            || !adjacency.contains_key(&link.to)
+        {
+            continue;
+        }
+        adjacency.entry(link.from).or_default().push(link.to);
+        adjacency.entry(link.to).or_default().push(link.from);
+    }
+    for neighbors in adjacency.values_mut() {
+        neighbors.sort_by(|a, b| names.get(a).cmp(&names.get(b)).then_with(|| a.cmp(b)));
+        neighbors.dedup();
+    }
+
+    let mut discovery = HashMap::<Uuid, usize>::new();
+    let mut low = HashMap::<Uuid, usize>::new();
+    let mut parent = HashMap::<Uuid, Option<Uuid>>::new();
+    let mut root_children = HashMap::<Uuid, usize>::new();
+    let mut separating_children = HashMap::<Uuid, usize>::new();
+    let mut time = 0;
+    let mut roots: Vec<Uuid> = case.entities.iter().map(|entity| entity.id).collect();
+    roots.sort_by(|a, b| names.get(a).cmp(&names.get(b)).then_with(|| a.cmp(b)));
+
+    for root in roots {
+        if discovery.contains_key(&root) {
+            continue;
+        }
+        time += 1;
+        discovery.insert(root, time);
+        low.insert(root, time);
+        parent.insert(root, None);
+        root_children.insert(root, 0);
+        let mut stack = vec![(root, 0usize)];
+        while let Some((node, next_neighbor)) = stack.last_mut() {
+            let current = *node;
+            let neighbor = adjacency
+                .get(&current)
+                .and_then(|neighbors| neighbors.get(*next_neighbor))
+                .copied();
+            if let Some(neighbor) = neighbor {
+                *next_neighbor += 1;
+                if !discovery.contains_key(&neighbor) {
+                    if parent.get(&current).copied().flatten().is_none() {
+                        *root_children.entry(current).or_default() += 1;
+                    }
+                    time += 1;
+                    discovery.insert(neighbor, time);
+                    low.insert(neighbor, time);
+                    parent.insert(neighbor, Some(current));
+                    stack.push((neighbor, 0));
+                } else if parent.get(&current).copied().flatten() != Some(neighbor) {
+                    let neighbor_discovery = discovery[&neighbor];
+                    low.entry(current)
+                        .and_modify(|value| *value = (*value).min(neighbor_discovery));
+                }
+            } else {
+                let (finished, _) = stack.pop().expect("DFS frame exists");
+                if let Some(predecessor) = parent.get(&finished).copied().flatten() {
+                    let child_low = low[&finished];
+                    let predecessor_discovery = discovery[&predecessor];
+                    low.entry(predecessor)
+                        .and_modify(|value| *value = (*value).min(child_low));
+                    if parent.get(&predecessor).copied().flatten().is_some()
+                        && child_low >= predecessor_discovery
+                    {
+                        *separating_children.entry(predecessor).or_default() += 1;
+                    }
+                } else if root_children.get(&finished).copied().unwrap_or_default() > 1 {
+                    separating_children.insert(finished, root_children[&finished]);
+                }
+            }
+        }
+    }
+
+    let mut points: Vec<(Uuid, usize)> = separating_children
+        .into_iter()
+        .filter_map(|(entity, child_count)| {
+            let fragments = if parent.get(&entity).copied().flatten().is_none() {
+                child_count
+            } else {
+                child_count + 1
+            };
+            (fragments > 1).then_some((entity, fragments))
+        })
+        .collect();
+    points.sort_by(|(first, first_fragments), (second, second_fragments)| {
+        second_fragments
+            .cmp(first_fragments)
+            .then_with(|| names.get(first).cmp(&names.get(second)))
+            .then_with(|| first.cmp(second))
+    });
+    points
+}
+
 fn refreshed_link_index(links: &[Link], selected: &Link) -> Option<usize> {
     if !selected.connection_id.is_empty() {
         return links.iter().position(|link| {
@@ -6760,6 +8643,193 @@ fn same_sql_connection(existing: &Link, imported: &Link) -> bool {
         && existing.source_notes == imported.source_notes
         && existing.source_reference == imported.source_reference
         && existing.ingest_source == imported.ingest_source
+        && existing.attributes == imported.attributes
+}
+
+fn format_sql_attributes(attributes: &[(String, String)]) -> String {
+    if attributes.is_empty() {
+        return "—".into();
+    }
+    attributes
+        .iter()
+        .map(|(name, value)| format!("{name}={value}"))
+        .collect::<Vec<_>>()
+        .join(" · ")
+}
+
+fn validate_connection_attributes(attributes: &[(String, String)]) -> Result<(), String> {
+    let mut names = HashSet::new();
+    for (name, _) in attributes {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err("connection attribute needs a property name".into());
+        }
+        if !names.insert(name.to_ascii_lowercase()) {
+            return Err(format!("duplicate connection attribute: {name}"));
+        }
+    }
+    Ok(())
+}
+
+fn validate_entity_attributes(attributes: &[(String, String)]) -> Result<(), String> {
+    let mut names = HashSet::new();
+    for (name, _) in attributes {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err("entity attribute needs a property name".into());
+        }
+        if !names.insert(name.to_ascii_lowercase()) {
+            return Err(format!("duplicate entity attribute: {name}"));
+        }
+    }
+    Ok(())
+}
+
+fn sql_attribute_source_label(source_key: &str, snapshots: &[ConnectionSnapshot]) -> String {
+    snapshots
+        .iter()
+        .rev()
+        .find(|snapshot| snapshot.source_key == source_key)
+        .map(|snapshot| format!("{} · {}", snapshot.series, snapshot.database_path))
+        .unwrap_or_else(|| source_key.to_owned())
+}
+
+fn entity_attribute_provenance(entity: &Entity, snapshots: &[ConnectionSnapshot]) -> String {
+    entity
+        .attributes
+        .iter()
+        .map(|(name, value)| {
+            let owners = entity
+                .sql_attribute_values
+                .iter()
+                .filter(|(_, attribute, _)| attribute.eq_ignore_ascii_case(name))
+                .map(|(source, _, _)| sql_attribute_source_label(source, snapshots))
+                .collect::<Vec<_>>();
+            if owners.is_empty() {
+                format!("{name}={value} · analyst/import value")
+            } else {
+                format!("{name}={value} · SQL: {}", owners.join("; "))
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn set_entity_attribute(entity: &mut Entity, name: &str, value: Option<&str>) {
+    if let Some(index) = entity
+        .attributes
+        .iter()
+        .position(|(key, _)| key.eq_ignore_ascii_case(name))
+    {
+        if let Some(value) = value {
+            entity.attributes[index].1 = value.to_owned();
+        } else {
+            entity.attributes.remove(index);
+        }
+    } else if let Some(value) = value {
+        entity.attributes.push((name.to_owned(), value.to_owned()));
+    }
+}
+
+fn set_entity_base_attribute(entity: &mut Entity, name: &str, value: &str) {
+    if let Some((_, baseline)) = entity
+        .sql_attribute_baselines
+        .iter_mut()
+        .find(|(attribute, _)| attribute.eq_ignore_ascii_case(name))
+    {
+        let sql_value = entity
+            .sql_attribute_values
+            .iter()
+            .rev()
+            .find(|(_, attribute, _)| attribute.eq_ignore_ascii_case(name))
+            .map(|(_, _, value)| value.clone());
+        if sql_value.as_deref() != Some(value) {
+            *baseline = Some(value.to_owned());
+        }
+        set_entity_attribute(entity, name, sql_value.as_deref().or(Some(value)));
+    } else {
+        set_entity_attribute(entity, name, Some(value));
+    }
+}
+
+fn clear_sql_entity_attributes(
+    entity: &mut Entity,
+    source_key: &str,
+    legacy_names: &HashSet<String>,
+) {
+    let mut affected_names = legacy_names.clone();
+    affected_names.extend(
+        entity
+            .sql_attribute_values
+            .iter()
+            .filter(|(source, _, _)| source == source_key)
+            .map(|(_, name, _)| name.to_ascii_lowercase()),
+    );
+    entity
+        .sql_attribute_values
+        .retain(|(source, _, _)| source != source_key);
+
+    for name in affected_names {
+        let remaining_value = entity
+            .sql_attribute_values
+            .iter()
+            .rev()
+            .find(|(_, attribute, _)| attribute.eq_ignore_ascii_case(&name))
+            .map(|(_, _, value)| value.clone());
+        if let Some(value) = remaining_value {
+            set_entity_attribute(entity, &name, Some(&value));
+            continue;
+        }
+        let baseline = entity
+            .sql_attribute_baselines
+            .iter()
+            .position(|(attribute, _)| attribute.eq_ignore_ascii_case(&name))
+            .map(|index| entity.sql_attribute_baselines.remove(index).1);
+        match baseline {
+            Some(Some(value)) => set_entity_attribute(entity, &name, Some(&value)),
+            Some(None) => set_entity_attribute(entity, &name, None),
+            None if legacy_names.contains(&name) => set_entity_attribute(entity, &name, None),
+            None => {}
+        }
+    }
+}
+
+fn apply_sql_entity_attributes(
+    entity: &mut Entity,
+    source_key: &str,
+    attributes: &[(String, String)],
+) {
+    for (name, value) in attributes {
+        if !entity
+            .sql_attribute_baselines
+            .iter()
+            .any(|(attribute, _)| attribute.eq_ignore_ascii_case(name))
+        {
+            let baseline = entity
+                .attributes
+                .iter()
+                .find(|(attribute, _)| attribute.eq_ignore_ascii_case(name))
+                .map(|(_, value)| value.clone());
+            entity
+                .sql_attribute_baselines
+                .push((name.clone(), baseline));
+        }
+        if let Some((_, _, current)) =
+            entity
+                .sql_attribute_values
+                .iter_mut()
+                .find(|(source, attribute, _)| {
+                    source == source_key && attribute.eq_ignore_ascii_case(name)
+                })
+        {
+            *current = value.clone();
+        } else {
+            entity
+                .sql_attribute_values
+                .push((source_key.to_owned(), name.clone(), value.clone()));
+        }
+        set_entity_attribute(entity, name, Some(value));
+    }
 }
 
 fn sql_value(row: &rusqlite::Row<'_>, index: Option<usize>) -> rusqlite::Result<String> {
@@ -7033,14 +9103,23 @@ fn compare_snapshots(
                 if now.date != previous.date {
                     kinds.push(DeltaKind::DateChanged);
                 }
+                let entity_identity_changed = now.source_entity_id != previous.source_entity_id
+                    || now.target_entity_id != previous.target_entity_id;
+                if entity_identity_changed {
+                    kinds.push(DeltaKind::EntityIdentityChanged);
+                }
+                if now.attributes != previous.attributes {
+                    kinds.push(DeltaKind::ConnectionAttributesChanged);
+                }
                 if now.source != previous.source
                     || now.source_type != previous.source_type
                     || now.target != previous.target
                     || now.target_type != previous.target_type
-                    || now.source_entity_id != previous.source_entity_id
-                    || now.target_entity_id != previous.target_entity_id
+                    || entity_identity_changed
                     || now.relationship != previous.relationship
                     || now.directed != previous.directed
+                    || now.source_attributes != previous.source_attributes
+                    || now.target_attributes != previous.target_attributes
                 {
                     kinds.push(DeltaKind::Updated);
                 }
@@ -7097,6 +9176,8 @@ fn connection_delta_matches_filter(
         SnapshotDeltaFilter::Regressions => {
             has(DeltaKind::Removed) || has(DeltaKind::ConfidenceDeclined)
         }
+        SnapshotDeltaFilter::EntityIdentity => has(DeltaKind::EntityIdentityChanged),
+        SnapshotDeltaFilter::ConnectionProperties => has(DeltaKind::ConnectionAttributesChanged),
         SnapshotDeltaFilter::Direction => has(DeltaKind::DirectionChanged),
         SnapshotDeltaFilter::Evidence => has(DeltaKind::EvidenceChanged),
         SnapshotDeltaFilter::SourceNotes => has(DeltaKind::SourceNotesChanged),
@@ -7106,6 +9187,7 @@ fn connection_delta_matches_filter(
                 && !has(DeltaKind::DirectionChanged)
                 && !has(DeltaKind::EvidenceChanged)
                 && !has(DeltaKind::SourceNotesChanged)
+                && !has(DeltaKind::ConnectionAttributesChanged)
         }
     };
     if !matches_category {
@@ -7119,7 +9201,7 @@ fn connection_delta_matches_filter(
         .chain(delta.previous_connection.iter())
         .any(|fact| {
             format!(
-                "{} {} {} {} {} {} {} {} {} {} {} {}",
+                "{} {} {} {} {} {} {} {} {} {} {} {} {} {} {}",
                 comparison_key(fact),
                 fact.connection_id,
                 fact.source,
@@ -7131,7 +9213,10 @@ fn connection_delta_matches_filter(
                 fact.confidence,
                 fact.directed,
                 fact.source_reference,
-                fact.notes
+                fact.notes,
+                format_sql_attributes(&fact.source_attributes),
+                format_sql_attributes(&fact.target_attributes),
+                format_sql_attributes(&fact.attributes)
             )
             .to_lowercase()
             .contains(&search)
@@ -7272,6 +9357,8 @@ fn delta_order(kinds: &[DeltaKind]) -> u8 {
         DeltaKind::Removed,
         DeltaKind::ConfidenceDeclined,
         DeltaKind::DateChanged,
+        DeltaKind::EntityIdentityChanged,
+        DeltaKind::ConnectionAttributesChanged,
         DeltaKind::Updated,
         DeltaKind::EvidenceChanged,
         DeltaKind::SourceNotesChanged,
@@ -7289,6 +9376,7 @@ fn automation_run_matches_filter(
     filter: &str,
     trigger_filter: &str,
     failures_only: bool,
+    schema_adaptation_only: bool,
     unreviewed_failures_only: bool,
     unreviewed_regressions_only: bool,
 ) -> bool {
@@ -7307,6 +9395,8 @@ fn automation_run_matches_filter(
     };
     (trigger_filter == "all" || run.trigger.eq_ignore_ascii_case(trigger_filter))
         && (!failures_only || !run.success)
+        && (!schema_adaptation_only
+            || (!run.success && sql_schema_adaptation_kind(&run.message).is_some()))
         && (!unreviewed_failures_only || (!run.success && run.analyst_note.trim().is_empty()))
         && has_unreviewed_regression
         && (filter.is_empty()
@@ -7340,7 +9430,12 @@ fn automation_snapshot_regression_count(case: &CaseFile, snapshot_index: usize) 
                 .iter()
                 .filter(|delta| {
                     delta.kinds.iter().any(|kind| {
-                        matches!(kind, DeltaKind::Removed | DeltaKind::ConfidenceDeclined)
+                        matches!(
+                            kind,
+                            DeltaKind::Removed
+                                | DeltaKind::ConfidenceDeclined
+                                | DeltaKind::ConnectionAttributesChanged
+                        )
                     })
                 })
                 .count()
@@ -7389,11 +9484,82 @@ fn automation_added_connection_count(case: &CaseFile, source_key: &str) -> usize
         .count()
 }
 
+fn automation_connection_property_change_count(case: &CaseFile, source_key: &str) -> usize {
+    let mut snapshots = case
+        .snapshots
+        .iter()
+        .rev()
+        .filter(|snapshot| snapshot.source_key == source_key);
+    let Some(current) = snapshots.next() else {
+        return 0;
+    };
+    let Some(previous) = snapshots.next() else {
+        return 0;
+    };
+    compare_snapshots(previous, current)
+        .iter()
+        .filter(|delta| {
+            delta
+                .kinds
+                .contains(&DeltaKind::ConnectionAttributesChanged)
+        })
+        .count()
+}
+
+fn connection_attribute_differences(
+    previous: &serde_json::Value,
+    current: &serde_json::Value,
+) -> Vec<(String, String, String)> {
+    let values = |attributes: &serde_json::Value| {
+        attributes
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|attribute| {
+                Some((
+                    attribute.get(0)?.as_str()?.to_owned(),
+                    attribute.get(1)?.as_str()?.to_owned(),
+                ))
+            })
+            .collect::<BTreeMap<_, _>>()
+    };
+    let previous = values(previous);
+    let current = values(current);
+    previous
+        .keys()
+        .chain(current.keys())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .filter_map(|key| {
+            let before = previous.get(key);
+            let after = current.get(key);
+            (before != after).then(|| {
+                (
+                    key.clone(),
+                    before.cloned().unwrap_or_else(|| "(not set)".into()),
+                    after.cloned().unwrap_or_else(|| "(not set)".into()),
+                )
+            })
+        })
+        .collect()
+}
+
 fn automation_job_configuration_error(job: &AutomationJob) -> Option<String> {
-    job.minimum_confidence
+    if let Some(minimum) = job
+        .minimum_confidence
         .filter(|minimum| !(1..=3).contains(minimum))
-        .map(|minimum| {
-            format!("minimum confidence {minimum} is outside the supported range 1 through 3")
+    {
+        return Some(format!(
+            "minimum confidence {minimum} is outside the supported range 1 through 3"
+        ));
+    }
+    job.maximum_connections
+        .filter(|maximum| job.minimum_connections > *maximum)
+        .map(|maximum| {
+            format!(
+                "minimum connections {} exceeds maximum connections {maximum}",
+                job.minimum_connections
+            )
         })
 }
 
@@ -7402,12 +9568,14 @@ fn automation_limits_pass(
     below_minimum_confidence: usize,
     regressions: usize,
     added_connections: usize,
+    connection_property_changes: usize,
     skipped_rows: usize,
     minimum_connections: usize,
     minimum_confidence: Option<u8>,
     maximum_connections: Option<usize>,
     maximum_regressions: Option<usize>,
     maximum_added_connections: Option<usize>,
+    maximum_connection_property_changes: Option<usize>,
     maximum_skipped_rows: Option<usize>,
 ) -> bool {
     connections >= minimum_connections
@@ -7416,6 +9584,8 @@ fn automation_limits_pass(
         && maximum_connections.is_none_or(|maximum| connections <= maximum)
         && maximum_regressions.is_none_or(|maximum| regressions <= maximum)
         && maximum_added_connections.is_none_or(|maximum| added_connections <= maximum)
+        && maximum_connection_property_changes
+            .is_none_or(|maximum| connection_property_changes <= maximum)
         && maximum_skipped_rows.is_none_or(|maximum| skipped_rows <= maximum)
 }
 
@@ -7439,13 +9609,35 @@ fn previous_snapshot_index(case: &CaseFile, current_index: usize) -> Option<usiz
         .find(|index| case.snapshots[*index].source_key == current.source_key)
 }
 
+fn snapshot_sql_configuration_changes(
+    baseline: &ConnectionSnapshot,
+    current: &ConnectionSnapshot,
+) -> (bool, bool) {
+    let query_changed = baseline.query.trim() != current.query.trim();
+    let mut baseline_parameters = baseline.parameters.clone();
+    let mut current_parameters = current.parameters.clone();
+    baseline_parameters.sort();
+    current_parameters.sort();
+    (query_changed, baseline_parameters != current_parameters)
+}
+
 fn source_entity_ids(case: &CaseFile, source_key: &str) -> HashSet<Uuid> {
     let database_path = case
         .snapshots
         .iter()
         .rev()
         .find(|snapshot| snapshot.source_key == source_key)
-        .map(|snapshot| snapshot.database_path.as_str());
+        .map(|snapshot| snapshot.database_path.as_str())
+        .or_else(|| {
+            case.graphml_source_catalogs
+                .iter()
+                .find(|catalog| catalog["source_key"].as_str() == Some(source_key))
+                .and_then(|catalog| {
+                    catalog["database_path"]
+                        .as_str()
+                        .or_else(|| catalog["configured_database_path"].as_str())
+                })
+        });
     let mut entity_ids: HashSet<Uuid> = case
         .links
         .iter()
@@ -7472,10 +9664,14 @@ fn snapshot_delta_json(
         return serde_json::json!({
             "baseline": true,
             "compared_to_snapshot_id": null,
+            "configuration_changed": false,
+            "configuration_changes": {"query": false, "parameters": false},
             "counts": {
                 "removed": 0,
                 "confidence_declined": 0,
                 "date_changed": 0,
+                "entity_identity_changed": 0,
+                "connection_properties_changed": 0,
                 "connection_updated": 0,
                 "direction_changed": 0,
                 "evidence_changed": 0,
@@ -7487,6 +9683,7 @@ fn snapshot_delta_json(
             "changes": []
         });
     };
+    let (query_changed, parameters_changed) = snapshot_sql_configuration_changes(previous, current);
     let deltas = compare_snapshots(previous, current);
     let count = |kind| {
         deltas
@@ -7494,6 +9691,15 @@ fn snapshot_delta_json(
             .filter(|delta| delta.kinds.contains(&kind))
             .count()
     };
+    let updated_count = deltas
+        .iter()
+        .filter(|delta| {
+            delta.kinds.contains(&DeltaKind::Updated)
+                || delta
+                    .kinds
+                    .contains(&DeltaKind::ConnectionAttributesChanged)
+        })
+        .count();
     let changes: Vec<_> = deltas
         .iter()
         .map(|delta| {
@@ -7504,6 +9710,8 @@ fn snapshot_delta_json(
                     DeltaKind::Removed => "removed",
                     DeltaKind::ConfidenceDeclined => "confidence_declined",
                     DeltaKind::DateChanged => "date_changed",
+                    DeltaKind::EntityIdentityChanged => "entity_identity_changed",
+                    DeltaKind::ConnectionAttributesChanged => "connection_properties_changed",
                     DeltaKind::Updated => "connection_updated",
                     DeltaKind::DirectionChanged => "direction_changed",
                     DeltaKind::EvidenceChanged => "evidence_changed",
@@ -7527,7 +9735,10 @@ fn snapshot_delta_json(
                     "confidence": connection.confidence,
                     "directed": connection.directed,
                     "source_reference": connection.source_reference,
-                    "source_notes": connection.notes
+                    "source_notes": connection.notes,
+                    "source_attributes": connection.source_attributes,
+                    "target_attributes": connection.target_attributes,
+                    "connection_attributes": connection.attributes
                 })
             };
             serde_json::json!({
@@ -7540,11 +9751,18 @@ fn snapshot_delta_json(
     serde_json::json!({
         "baseline": false,
         "compared_to_snapshot_id": previous.id,
+        "configuration_changed": query_changed || parameters_changed,
+        "configuration_changes": {
+            "query": query_changed,
+            "parameters": parameters_changed
+        },
         "counts": {
             "removed": count(DeltaKind::Removed),
             "confidence_declined": count(DeltaKind::ConfidenceDeclined),
             "date_changed": count(DeltaKind::DateChanged),
-            "connection_updated": count(DeltaKind::Updated),
+            "entity_identity_changed": count(DeltaKind::EntityIdentityChanged),
+            "connection_properties_changed": count(DeltaKind::ConnectionAttributesChanged),
+            "connection_updated": updated_count,
             "direction_changed": count(DeltaKind::DirectionChanged),
             "evidence_changed": count(DeltaKind::EvidenceChanged),
             "source_notes_changed": count(DeltaKind::SourceNotesChanged),
@@ -7617,7 +9835,58 @@ fn automation_outcome_json(
                 .and_then(serde_json::Value::as_u64)
         })
         .unwrap_or_default() as usize;
+    let connection_property_change_count = delta
+        .as_ref()
+        .and_then(|delta| {
+            delta
+                .pointer("/counts/connection_properties_changed")
+                .and_then(serde_json::Value::as_u64)
+        })
+        .unwrap_or_default() as usize;
     let result_quality = snapshot.map(snapshot_result_quality);
+    let schema_adaptation_kind = sql_schema_adaptation_kind(message);
+    let schema_adaptation = serde_json::json!({
+        "required": schema_adaptation_kind.is_some(),
+        "kind": schema_adaptation_kind,
+        "hint": sql_schema_adaptation_hint(message),
+    });
+    let limits = serde_json::json!({
+        "minimum_connections": {
+            "required": job.minimum_connections,
+            "observed": connection_count,
+            "passed": connection_count.map(|count| count >= job.minimum_connections)
+        },
+        "minimum_confidence": {
+            "required": job.minimum_confidence,
+            "observed_below_minimum": below_minimum_confidence,
+            "passed": snapshot.map(|_| job.minimum_confidence.is_none_or(|_| below_minimum_confidence.unwrap_or_default() == 0))
+        },
+        "maximum_connections": {
+            "limit": job.maximum_connections,
+            "observed": connection_count,
+            "passed": connection_count.map(|count| job.maximum_connections.is_none_or(|limit| count <= limit))
+        },
+        "maximum_regressions": {
+            "limit": job.maximum_regressions,
+            "observed": snapshot.map(|_| regression_count),
+            "passed": snapshot.map(|_| job.maximum_regressions.is_none_or(|limit| regression_count <= limit))
+        },
+        "maximum_added_connections": {
+            "limit": job.maximum_added_connections,
+            "observed": snapshot.map(|_| added_connection_count),
+            "passed": snapshot.map(|_| job.maximum_added_connections.is_none_or(|limit| added_connection_count <= limit))
+        },
+        "maximum_connection_property_changes": {
+            "limit": job.maximum_connection_property_changes,
+            "observed": snapshot.map(|_| connection_property_change_count),
+            "passed": snapshot.map(|_| job.maximum_connection_property_changes.is_none_or(|limit| connection_property_change_count <= limit))
+        },
+        "maximum_skipped_rows": {
+            "limit": job.maximum_skipped_rows,
+            "observed": skipped_rows,
+            "passed": skipped_rows.map(|count| job.maximum_skipped_rows.is_none_or(|limit| count <= limit))
+        }
+    });
     serde_json::json!({
         "schema_version": 1,
         "status": if success { "PASS" } else { "FAIL" },
@@ -7629,6 +9898,7 @@ fn automation_outcome_json(
         "database_path": job.database_path,
         "series": job.series,
         "message": message,
+        "schema_adaptation": schema_adaptation,
         "query_valid": snapshot.is_some(),
         "result_quality": result_quality,
         "has_usable_connections": connection_count.is_some_and(|count| count > 0),
@@ -7638,12 +9908,14 @@ fn automation_outcome_json(
                 below_minimum_confidence.unwrap_or_default(),
                 regression_count,
                 added_connection_count,
+                connection_property_change_count,
                 skipped_rows.unwrap_or_default(),
                 job.minimum_connections,
                 job.minimum_confidence,
                 job.maximum_connections,
                 job.maximum_regressions,
                 job.maximum_added_connections,
+                job.maximum_connection_property_changes,
                 job.maximum_skipped_rows,
             )
         }),
@@ -7659,41 +9931,12 @@ fn automation_outcome_json(
         "maximum_regressions": job.maximum_regressions,
         "added_connection_count": snapshot.map(|_| added_connection_count),
         "maximum_added_connections": job.maximum_added_connections,
+        "connection_property_change_count": snapshot.map(|_| connection_property_change_count),
+        "maximum_connection_property_changes": job.maximum_connection_property_changes,
         "maximum_skipped_rows": job.maximum_skipped_rows,
         "query": job.query,
         "parameters": job.parameters,
-        "limits": {
-            "minimum_connections": {
-                "required": job.minimum_connections,
-                "observed": connection_count,
-                "passed": connection_count.map(|count| count >= job.minimum_connections)
-            },
-            "minimum_confidence": {
-                "required": job.minimum_confidence,
-                "observed_below_minimum": below_minimum_confidence,
-                "passed": snapshot.map(|_| job.minimum_confidence.is_none_or(|_| below_minimum_confidence.unwrap_or_default() == 0))
-            },
-            "maximum_connections": {
-                "limit": job.maximum_connections,
-                "observed": connection_count,
-                "passed": connection_count.map(|count| job.maximum_connections.is_none_or(|limit| count <= limit))
-            },
-            "maximum_regressions": {
-                "limit": job.maximum_regressions,
-                "observed": snapshot.map(|_| regression_count),
-                "passed": snapshot.map(|_| job.maximum_regressions.is_none_or(|limit| regression_count <= limit))
-            },
-            "maximum_added_connections": {
-                "limit": job.maximum_added_connections,
-                "observed": snapshot.map(|_| added_connection_count),
-                "passed": snapshot.map(|_| job.maximum_added_connections.is_none_or(|limit| added_connection_count <= limit))
-            },
-            "maximum_skipped_rows": {
-                "limit": job.maximum_skipped_rows,
-                "observed": skipped_rows,
-                "passed": skipped_rows.map(|count| job.maximum_skipped_rows.is_none_or(|limit| count <= limit))
-            }
-        },
+        "limits": limits,
         "delta": delta
     })
 }
@@ -7720,6 +9963,8 @@ fn automation_regression_summary(case: &CaseFile, source_key: &str) -> String {
     let removed = count(DeltaKind::Removed);
     let declined = count(DeltaKind::ConfidenceDeclined);
     let dates = count(DeltaKind::DateChanged);
+    let identity_changes = count(DeltaKind::EntityIdentityChanged);
+    let property_changes = count(DeltaKind::ConnectionAttributesChanged);
     let added = count(DeltaKind::Added);
     let increased = count(DeltaKind::ConfidenceIncreased);
     let details = count(DeltaKind::Updated);
@@ -7730,49 +9975,148 @@ fn automation_regression_summary(case: &CaseFile, source_key: &str) -> String {
         "NO CONNECTION CHANGES".into()
     } else {
         format!(
-            "SNAPSHOT DELTA · {removed} removed · {declined} confidence declines · {dates} date changes · {details} connection detail changes · {direction} direction changes · {evidence} evidence changes · {source_notes} source note changes · {added} added · {increased} confidence increases"
+            "SNAPSHOT DELTA · {removed} removed · {declined} confidence declines · {dates} date changes · {identity_changes} endpoint identity changes · {property_changes} relationship property changes · {details} connection detail changes · {direction} direction changes · {evidence} evidence changes · {source_notes} source note changes · {added} added · {increased} confidence increases"
         )
     }
 }
 
-fn shortest_path(case: &CaseFile, start: Uuid, goal: Uuid) -> Option<Vec<Uuid>> {
+fn shortest_path(
+    case: &CaseFile,
+    start: Uuid,
+    goal: Uuid,
+    follow_directions: bool,
+    time_flow: PathTimeFlow,
+    timeline_range: Option<(i64, i64)>,
+) -> Option<(Vec<Uuid>, Vec<usize>)> {
     if !case.entities.iter().any(|entity| entity.id == start)
         || !case.entities.iter().any(|entity| entity.id == goal)
     {
         return None;
     }
-    let mut adjacency: HashMap<Uuid, Vec<Uuid>> = HashMap::new();
-    for link in &case.links {
-        adjacency.entry(link.from).or_default().push(link.to);
-        if !link.directed {
-            adjacency.entry(link.to).or_default().push(link.from);
+    let mut adjacency: HashMap<Uuid, Vec<(Uuid, Option<i64>, usize)>> = HashMap::new();
+    for (link_index, link) in case.links.iter().enumerate() {
+        let date = if time_flow != PathTimeFlow::Any || timeline_range.is_some() {
+            let Some(date) = parse_iso_date_ordinal(&link.date) else {
+                continue;
+            };
+            if timeline_range.is_some_and(|(start, end)| !(start..=end).contains(&date)) {
+                continue;
+            }
+            Some(date)
+        } else {
+            None
+        };
+        let traversal_date = if time_flow == PathTimeFlow::Any {
+            None
+        } else {
+            date
+        };
+        adjacency
+            .entry(link.from)
+            .or_default()
+            .push((link.to, traversal_date, link_index));
+        if !link.directed || !follow_directions {
+            adjacency
+                .entry(link.to)
+                .or_default()
+                .push((link.from, traversal_date, link_index));
         }
     }
-    let mut queue = VecDeque::from([start]);
-    let mut previous: HashMap<Uuid, Uuid> = HashMap::new();
-    let mut seen = std::collections::HashSet::from([start]);
-    while let Some(current) = queue.pop_front() {
+    let initial_state = (start, None);
+    let mut queue = VecDeque::from([initial_state]);
+    let mut previous: HashMap<(Uuid, Option<i64>), ((Uuid, Option<i64>), usize)> = HashMap::new();
+    let mut seen = HashSet::from([initial_state]);
+    let mut goal_state = None;
+    while let Some((current, last_date)) = queue.pop_front() {
         if current == goal {
+            goal_state = Some((current, last_date));
             break;
         }
-        for next in adjacency.get(&current).into_iter().flatten() {
-            if seen.insert(*next) {
-                previous.insert(*next, current);
-                queue.push_back(*next);
+        for (next, edge_date, link_index) in adjacency.get(&current).into_iter().flatten() {
+            let next_date = match time_flow {
+                PathTimeFlow::Any => None,
+                PathTimeFlow::Forward => {
+                    let Some(date) = *edge_date else {
+                        continue;
+                    };
+                    if last_date.is_some_and(|previous| date < previous) {
+                        continue;
+                    }
+                    Some(date)
+                }
+                PathTimeFlow::Backward => {
+                    let Some(date) = *edge_date else {
+                        continue;
+                    };
+                    if last_date.is_some_and(|previous| date > previous) {
+                        continue;
+                    }
+                    Some(date)
+                }
+            };
+            let next_state = (*next, next_date);
+            if seen.insert(next_state) {
+                previous.insert(next_state, ((current, last_date), *link_index));
+                queue.push_back(next_state);
             }
         }
     }
-    if !seen.contains(&goal) {
-        return None;
-    }
-    let mut path = vec![goal];
-    let mut current = goal;
-    while current != start {
-        current = *previous.get(&current)?;
-        path.push(current);
+    let mut current_state = goal_state?;
+    let mut path = vec![current_state.0];
+    let mut path_links = Vec::new();
+    while current_state != initial_state {
+        let (previous_state, link_index) = *previous.get(&current_state)?;
+        path_links.push(link_index);
+        current_state = previous_state;
+        path.push(current_state.0);
     }
     path.reverse();
-    Some(path)
+    path_links.reverse();
+    Some((path, path_links))
+}
+
+fn path_record_exclusion_reason(
+    link: &Link,
+    from: Uuid,
+    to: Uuid,
+    follow_directions: bool,
+    time_flow: PathTimeFlow,
+    timeline_range: Option<(i64, i64)>,
+    previous_date: Option<i64>,
+    next_date: Option<i64>,
+) -> Option<&'static str> {
+    if follow_directions && link.directed && (link.from != from || link.to != to) {
+        return Some("direction opposes this traversal");
+    }
+    let date = if time_flow != PathTimeFlow::Any || timeline_range.is_some() {
+        let Some(date) = parse_iso_date_ordinal(&link.date) else {
+            return Some("no valid ISO date");
+        };
+        date
+    } else {
+        return None;
+    };
+    if timeline_range.is_some_and(|(start, end)| !(start..=end).contains(&date)) {
+        return Some("outside the active timeline range");
+    }
+    match time_flow {
+        PathTimeFlow::Any => {}
+        PathTimeFlow::Forward => {
+            if previous_date.is_some_and(|previous| date < previous)
+                || next_date.is_some_and(|next| date > next)
+            {
+                return Some("breaks forward time flow");
+            }
+        }
+        PathTimeFlow::Backward => {
+            if previous_date.is_some_and(|previous| date > previous)
+                || next_date.is_some_and(|next| date < next)
+            {
+                return Some("breaks backward time flow");
+            }
+        }
+    }
+    None
 }
 
 impl eframe::App for App {
@@ -7780,6 +10124,15 @@ impl eframe::App for App {
         if self.page != WorkspacePage::Chart || !self.show_timeline {
             self.timeline_range = None;
             self.timeline_brush_anchor = None;
+        }
+        let active_path_timeline_range = self
+            .path_use_timeline_range
+            .then_some(self.timeline_range)
+            .flatten();
+        if !self.path_result.is_empty() && self.path_timeline_range != active_path_timeline_range {
+            self.path_result.clear();
+            self.path_link_result.clear();
+            self.chart_fit_path = None;
         }
         if let Some(inspection_state) = self
             .import_inspection_worker
@@ -7815,6 +10168,116 @@ impl eframe::App for App {
                 }
             }
         }
+        if let Some(plan_state) = self.sql_plan_worker.as_ref().map(Receiver::try_recv) {
+            match plan_state {
+                Ok((job_id, job_name, database_path, result)) => {
+                    self.status = match &result {
+                        Ok(steps) => {
+                            format!("SQL QUERY PLAN READY · {job_name} · {} STEPS", steps.len())
+                        }
+                        Err(error) => format!("SQL QUERY PLAN FAILED · {error}"),
+                    };
+                    self.sql_plan_result = Some((job_id, job_name, database_path, result));
+                    self.sql_plan_worker = None;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.sql_plan_worker = None;
+                    self.status =
+                        "SQL QUERY PLAN FAILED · background worker stopped unexpectedly".into();
+                }
+                Err(mpsc::TryRecvError::Empty) => {
+                    ctx.request_repaint_after(Duration::from_millis(250));
+                }
+            }
+        }
+        if self
+            .sql_schema_request
+            .as_ref()
+            .is_some_and(|(_, database_path, case_path)| {
+                database_path != &self.sql_path || case_path != &self.case_path
+            })
+        {
+            self.sql_schema_worker = None;
+            self.sql_schema_request = None;
+            self.sql_schema_templates.clear();
+            self.sql_schema_objects.clear();
+            self.sql_schema_template_index = 0;
+            self.sql_schema_template_source = None;
+            self.status = "SQL SCHEMA INSPECTION DISCARDED · SOURCE PATH CHANGED".into();
+        }
+        if let Some(schema_state) = self.sql_schema_worker.as_ref().map(Receiver::try_recv) {
+            match schema_state {
+                Ok((request_id, configured_path, case_path, result)) => {
+                    let is_current_request = self
+                        .sql_schema_request
+                        .as_ref()
+                        .is_some_and(|(current_id, _, _)| *current_id == request_id);
+                    self.sql_schema_worker = None;
+                    self.sql_schema_request = None;
+                    if !is_current_request
+                        || configured_path != self.sql_path
+                        || case_path != self.case_path
+                    {
+                        self.status =
+                            "SQL SCHEMA RESULT DISCARDED · REQUEST OR SOURCE PATH CHANGED DURING INSPECTION"
+                                .into();
+                    } else {
+                        match result {
+                            Ok((templates, broken_views, schema_objects)) => {
+                                self.sql_schema_templates = templates;
+                                self.sql_schema_objects = schema_objects;
+                                self.sql_schema_template_index = 0;
+                                self.sql_schema_template_source =
+                                    Some((configured_path, case_path));
+                                let selected_table = self
+                                    .sql_schema_templates
+                                    .first()
+                                    .map(|(table, _)| table.as_str())
+                                    .unwrap_or("unknown");
+                                self.status = if self.sql_schema_templates.is_empty() {
+                                    format!(
+                                        "SQL SCHEMA INSPECTED · NO QUERY TEMPLATES · {} OBJECTS AVAILABLE FOR MANUAL QUERY ADAPTATION",
+                                        self.sql_schema_objects.len()
+                                    )
+                                } else {
+                                    format!(
+                                        "SQL SCHEMA INSPECTED · {} QUERY TEMPLATES · SELECTED {selected_table}",
+                                        self.sql_schema_templates.len()
+                                    )
+                                };
+                                if !broken_views.is_empty() {
+                                    self.status.push_str(&format!(
+                                        " · {} VIEW(S) UNAVAILABLE: {}",
+                                        broken_views.len(),
+                                        broken_views.join(", ")
+                                    ));
+                                }
+                            }
+                            Err(error) => {
+                                self.sql_schema_templates.clear();
+                                self.sql_schema_objects.clear();
+                                self.sql_schema_template_index = 0;
+                                self.sql_schema_template_source = None;
+                                self.status = format!("SQL SCHEMA INSPECTION FAILED · {error}");
+                            }
+                        }
+                    }
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.sql_schema_worker = None;
+                    self.sql_schema_request = None;
+                    self.sql_schema_templates.clear();
+                    self.sql_schema_objects.clear();
+                    self.sql_schema_template_source = None;
+                    self.status =
+                        "SQL SCHEMA INSPECTION FAILED · background worker stopped unexpectedly"
+                            .into();
+                }
+                Err(mpsc::TryRecvError::Empty) => {
+                    ctx.request_repaint_after(Duration::from_millis(250));
+                }
+            }
+        }
         if let Some(schedule_state) = self
             .automation_schedule_worker
             .as_ref()
@@ -7822,6 +10285,12 @@ impl eframe::App for App {
         {
             match schedule_state {
                 Ok((case_path, Ok(message))) => {
+                    if self.status.starts_with("CHECKING")
+                        && case_path == self.case_path
+                        && let Some(cadence) = schedule_cadence_from_status(&message)
+                    {
+                        self.automation_schedule = cadence.into();
+                    }
                     self.automation_schedule_worker = None;
                     self.automation_schedule_target_path = None;
                     self.automation_progress = None;
@@ -8017,6 +10486,8 @@ impl eframe::App for App {
             delete,
             escape,
             workspace_shortcut,
+            entities_shortcut,
+            sources_shortcut,
             automation_shortcut,
             sql_review_shortcut,
         ) = ctx.input(|input| {
@@ -8034,8 +10505,10 @@ impl eframe::App for App {
                 } else {
                     None
                 },
-                input.modifiers.command && input.key_pressed(egui::Key::Num4),
+                input.modifiers.command && input.key_pressed(egui::Key::Num6),
+                input.modifiers.command && input.key_pressed(egui::Key::Num7),
                 input.modifiers.command && input.key_pressed(egui::Key::Num5),
+                input.modifiers.command && input.key_pressed(egui::Key::Num4),
             )
         });
         if save_as {
@@ -8048,11 +10521,24 @@ impl eframe::App for App {
         {
             self.page = page;
             self.show_timeline = show_timeline;
+            if page == WorkspacePage::Data {
+                self.data_mode = DataMode::Relationships;
+            }
         }
         if automation_shortcut && !ctx.wants_keyboard_input() {
             self.page = WorkspacePage::Data;
             self.show_timeline = false;
             self.data_mode = DataMode::Automation;
+        }
+        if entities_shortcut && !ctx.wants_keyboard_input() {
+            self.page = WorkspacePage::Data;
+            self.show_timeline = false;
+            self.data_mode = DataMode::Entities;
+        }
+        if sources_shortcut && !ctx.wants_keyboard_input() {
+            self.page = WorkspacePage::Data;
+            self.show_timeline = false;
+            self.data_mode = DataMode::Sources;
         }
         if sql_review_shortcut && !ctx.wants_keyboard_input() {
             self.page = WorkspacePage::Data;
@@ -8078,6 +10564,7 @@ impl eframe::App for App {
 
         let connected_counts = connected_entity_counts(&self.case);
         let network_groups = self.network_groups.clone();
+        let network_bridges = self.network_bridges.clone();
         let bg = egui::Color32::from_rgb(12, 19, 27);
         let panel = egui::Color32::from_rgb(18, 28, 39);
         let muted = egui::Color32::from_rgb(125, 148, 166);
@@ -8100,34 +10587,43 @@ impl eframe::App for App {
                 });
                 ui.add_space(1.0);
                 ui.horizontal(|ui| {
-                    for (label, active) in [("CHART",self.page==WorkspacePage::Chart && !self.show_timeline),("TIMELINE",self.show_timeline),("DATA",self.page==WorkspacePage::Data)] {
-                        let shortcut = match label {
-                            "CHART" => "Ctrl/Command+1",
-                            "TIMELINE" => "Ctrl/Command+2",
-                            _ => "Ctrl/Command+3",
-                        };
+                    let automation_unreviewed_failure_count = self
+                        .case
+                        .automation_runs
+                        .iter()
+                        .filter(|run| !run.success && run.analyst_note.trim().is_empty())
+                        .count();
+                    let automation_label = if automation_unreviewed_failure_count > 0 {
+                        format!("AUTOMATION · {automation_unreviewed_failure_count}")
+                    } else { "AUTOMATION".to_owned() };
+                    let destinations = [
+                        ("CHART", self.page==WorkspacePage::Chart && !self.show_timeline, "Ctrl/Command+1"),
+                        ("TIMELINE", self.show_timeline, "Ctrl/Command+2"),
+                        ("CONNECTIONS", self.page==WorkspacePage::Data && self.data_mode==DataMode::Relationships, "Ctrl/Command+3"),
+                        ("SQL REVIEW", self.page==WorkspacePage::Data && self.data_mode==DataMode::SqlRegressions, "Ctrl/Command+4"),
+                        ("ENTITIES", self.page==WorkspacePage::Data && self.data_mode==DataMode::Entities, "Ctrl/Command+6"),
+                        ("SOURCES", self.page==WorkspacePage::Data && self.data_mode==DataMode::Sources, "Ctrl/Command+7"),
+                    ];
+                    for (label, active, shortcut) in destinations {
                         let response=ui.selectable_label(active,label).on_hover_text(format!("Open {label} · {shortcut}"));
-                        if response.clicked() && label=="TIMELINE" { self.page=WorkspacePage::Chart;self.show_timeline=!self.show_timeline; }
-                        if response.clicked() && label=="CHART" { self.page=WorkspacePage::Chart;self.show_timeline=false; }
-                        if response.clicked() && label=="DATA" { self.page=WorkspacePage::Data;self.show_timeline=false; }
+                        if response.clicked() {
+                            match label {
+                                "CHART" => { self.page=WorkspacePage::Chart;self.show_timeline=false; },
+                                "TIMELINE" => { self.page=WorkspacePage::Chart;self.show_timeline=true; },
+                                "CONNECTIONS" => { self.page=WorkspacePage::Data;self.show_timeline=false;self.data_mode=DataMode::Relationships; },
+                                "SQL REVIEW" => { self.page=WorkspacePage::Data;self.show_timeline=false;self.data_mode=DataMode::SqlRegressions; },
+                                "ENTITIES" => { self.page=WorkspacePage::Data;self.show_timeline=false;self.data_mode=DataMode::Entities; },
+                                "SOURCES" => { self.page=WorkspacePage::Data;self.show_timeline=false;self.data_mode=DataMode::Sources; },
+                                _ => {}
+                            }
+                        }
                     }
-                    let automation_active = self.page == WorkspacePage::Data
-                        && self.data_mode == DataMode::Automation;
-                    if ui.selectable_label(automation_active, "AUTOMATION").on_hover_text("Open SQL automation · Ctrl/Command+4").clicked() {
-                        self.page = WorkspacePage::Data;
-                        self.show_timeline = false;
-                        self.data_mode = DataMode::Automation;
-                    }
-                    let sql_review_active = self.page == WorkspacePage::Data
-                        && self.data_mode == DataMode::SqlRegressions;
-                    if ui.selectable_label(sql_review_active, "SQL REVIEW").on_hover_text("Review SQL snapshots · Ctrl/Command+5").clicked() {
-                        self.page = WorkspacePage::Data;
-                        self.show_timeline = false;
-                        self.data_mode = DataMode::SqlRegressions;
+                    if ui.selectable_label(self.page==WorkspacePage::Data && self.data_mode==DataMode::Automation, egui::RichText::new(automation_label).color(if automation_unreviewed_failure_count>0 { egui::Color32::from_rgb(238,174,83) } else { cyan }).strong()).on_hover_text(format!("Open SQL automation · Ctrl/Command+5 · {automation_unreviewed_failure_count} unreviewed failures")).clicked() {
+                        self.page=WorkspacePage::Data;self.show_timeline=false;self.data_mode=DataMode::Automation;
                     }
                     ui.separator();
                     if ui.button("＋ Entity").clicked() {
-                        let item=Entity { id:Uuid::new_v4(),name:"New entity".into(),kind:"PERSON".into(),detail:"Add an analyst note".into(),attributes:Vec::new(),aliases:Vec::new(),external_ids:Vec::new(),merged_records:Vec::new(),x:0.5,y:0.5,position_locked:false,color:[55,128,162] };
+                        let item=Entity { id:Uuid::new_v4(),name:"New entity".into(),kind:"PERSON".into(),detail:"Add an analyst note".into(),attributes:Vec::new(),sql_attribute_values:Vec::new(),sql_attribute_baselines:Vec::new(),aliases:Vec::new(),external_ids:Vec::new(),merged_records:Vec::new(),x:0.5,y:0.5,position_locked:false,color:[55,128,162] };
                         self.selected=Some(item.id); self.selected_link=None; self.case.entities.push(item);self.duplicate_candidates.clear();
                         self.invalidate_network_groups();
                     }
@@ -8203,6 +10699,7 @@ impl eframe::App for App {
                                     source_notes: String::new(),
                                     source_reference: String::new(),
                                     ingest_source: None,
+                                    attributes: Vec::new(),
                                 });
                                 self.invalidate_network_groups();
                                 self.selected = None;
@@ -8228,6 +10725,7 @@ impl eframe::App for App {
                     if ui.button("Import GraphML").clicked(){self.import_graphml();}
                     if ui.button("Export CSV/TSV").clicked(){self.export_delimited();}
                     if ui.button("Export GraphML").clicked(){self.export_graphml();}
+                    if ui.button("Export KML").clicked(){self.export_kml();}
                     egui::ComboBox::from_id_salt("layout_mode")
                         .selected_text(match self.layout_mode {
                             LayoutMode::Connectivity => "Connectivity layout",
@@ -8332,7 +10830,19 @@ impl eframe::App for App {
                             self.sql_source_focus = None;
                         }
                     }
-                    if self.page==WorkspacePage::Data && (self.selected.is_some() || self.selected_link.is_some()) && ui.button("View on chart").clicked(){self.chart_focus=self.selected;self.chart_focus_link=self.selected_link;self.chart_focus_group=None;self.page=WorkspacePage::Chart;self.show_timeline=false;}
+                    if self.page==WorkspacePage::Data && (self.selected.is_some() || self.selected_link.is_some()) && ui.button("View on chart").clicked(){
+                        self.chart_focus=self.selected;
+                        self.chart_focus_link=self.selected_link;
+                        self.chart_focus_group=None;
+                        self.chart_fit_entities=None;
+                        self.chart_fit_path=None;
+                        self.sql_source_focus=None;
+                        self.path_result.clear();
+                        self.path_link_result.clear();
+                        self.timeline_range=None;
+                        self.page=WorkspacePage::Chart;
+                        self.show_timeline=false;
+                    }
                     if self.selected.is_some() || self.selected_link.is_some() {if ui.button("Delete selected").clicked(){self.delete_selected();}}
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| { ui.label(egui::RichText::new(&self.status).small().color(muted)); });
                 }).response;
@@ -8341,6 +10851,8 @@ impl eframe::App for App {
                 ui.horizontal(|ui| {
                     let left=190.0; let right=260.0;
                     ui.allocate_ui_with_layout(egui::vec2(left,avail.y),egui::Layout::top_down(egui::Align::Min),|ui| {
+                    let mut entity_to_focus = None;
+                    let mut link_to_focus = None;
                     egui::Frame::new().fill(panel).inner_margin(12).show(ui,|ui| {
                         ui.set_min_width(left); ui.set_max_width(left);
                         ui.label(egui::RichText::new("CASE FILE").size(10.0).strong().color(muted));
@@ -8352,33 +10864,155 @@ impl eframe::App for App {
                         ui.label(format!("{} entities",self.case.entities.len())); ui.label(format!("{} relationships",self.case.links.len()));
                         ui.add_space(18.0);
                         ui.label(egui::RichText::new("FILTER ITEMS").size(10.0).strong().color(muted));
-                        ui.add(egui::TextEdit::singleline(&mut self.query).hint_text("Search chart…").desired_width(160.0));
+                        ui.add(egui::TextEdit::singleline(&mut self.query).hint_text("Search chart items…").desired_width(160.0));
+                        egui::ComboBox::from_id_salt("chart_search_scope")
+                            .selected_text(match self.chart_search_scope {
+                                ChartSearchScope::All => "Search: all items",
+                                ChartSearchScope::Entities => "Search: entities",
+                                ChartSearchScope::Relationships => "Search: relationships",
+                            })
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(&mut self.chart_search_scope, ChartSearchScope::All, "All items");
+                                ui.selectable_value(&mut self.chart_search_scope, ChartSearchScope::Entities, "Entities only");
+                                ui.selectable_value(&mut self.chart_search_scope, ChartSearchScope::Relationships, "Relationships only");
+                            });
                         egui::ComboBox::from_id_salt("entity_sort").selected_text(match self.entity_sort {EntitySort::Name=>"Sort: name",EntitySort::Type=>"Sort: type",EntitySort::Connections=>"Sort: connections"}).show_ui(ui,|ui|{
                             ui.selectable_value(&mut self.entity_sort,EntitySort::Name,"Name");ui.selectable_value(&mut self.entity_sort,EntitySort::Type,"Type");ui.selectable_value(&mut self.entity_sort,EntitySort::Connections,"Connections");
                         });
                         ui.add_space(10.0);
-                        let mut sorted:Vec<_>=self.case.entities.iter().collect();
-                        sorted.sort_by(|a,b|match self.entity_sort {
-                            EntitySort::Name=>a.name.to_lowercase().cmp(&b.name.to_lowercase()),
-                            EntitySort::Type=>a.kind.to_lowercase().cmp(&b.kind.to_lowercase()).then_with(||a.name.cmp(&b.name)),
-                            EntitySort::Connections=>connected_counts.get(&b.id).copied().unwrap_or_default().cmp(&connected_counts.get(&a.id).copied().unwrap_or_default()),
+                        let search_entities = self.chart_search_scope != ChartSearchScope::Relationships;
+                        let search_relationships = self.chart_search_scope != ChartSearchScope::Entities;
+                        let query_terms = chart_search_terms(&self.query);
+                        let query_lower = self.query.trim().to_lowercase();
+                        let entity_search_index: HashMap<Uuid, String> = if query_terms.is_empty() {
+                            HashMap::new()
+                        } else {
+                            self.case.entities.iter().map(|entity| {
+                                (entity.id, entity_search_text(entity).to_lowercase())
+                            }).collect()
+                        };
+                        let entity_names: HashMap<Uuid, String> = if query_terms.is_empty() {
+                            HashMap::new()
+                        } else {
+                            self.case.entities.iter()
+                                .map(|entity| (entity.id, entity.name.clone()))
+                                .collect()
+                        };
+                        let mut sorted: Vec<(usize, &Entity)> = self.case.entities.iter()
+                            .filter(|_| search_entities)
+                            .filter_map(|entity| {
+                                let rank = if query_terms.is_empty() {
+                                    0
+                                } else {
+                                    let searchable = entity_search_index.get(&entity.id)?;
+                                    if !chart_search_text_matches(searchable, &query_terms) {
+                                        return None;
+                                    }
+                                    chart_search_rank(&entity.name.to_lowercase(), searchable, &query_lower, &query_terms)
+                                };
+                                Some((rank, entity))
+                            })
+                            .collect();
+                        sorted.sort_by(|(rank_a,a),(rank_b,b)| {
+                            if !query_terms.is_empty() {
+                                let rank_order = rank_b.cmp(rank_a);
+                                if rank_order != std::cmp::Ordering::Equal {
+                                    return rank_order;
+                                }
+                            }
+                            match self.entity_sort {
+                                EntitySort::Name=>a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+                                EntitySort::Type=>a.kind.to_lowercase().cmp(&b.kind.to_lowercase()).then_with(||a.name.cmp(&b.name)),
+                                EntitySort::Connections=>connected_counts.get(&b.id).copied().unwrap_or_default().cmp(&connected_counts.get(&a.id).copied().unwrap_or_default()),
+                            }
                         });
-                        egui::ScrollArea::vertical().show(ui,|ui| for ent in sorted {
-                            if !self.query.is_empty() && !format!("{} {} {}",ent.name,ent.kind,ent.detail).to_lowercase().contains(&self.query.to_lowercase()) {continue;}
-                            let chosen=self.selected==Some(ent.id);
-                            if ui.selectable_label(chosen,format!("● {}",ent.name)).clicked(){
-                                self.selected=Some(ent.id);
-                                self.selected_link=None;
-                                self.chart_focus=Some(ent.id);
-                                self.chart_focus_link=None;
-                                self.chart_fit_entities=None;
-                                self.chart_fit_path=None;
-                                self.chart_focus_group=None;
-                                self.sql_source_focus=None;
-                                self.path_result.clear();
+                        egui::ScrollArea::vertical().show(ui,|ui| {
+                            let entity_matches = sorted.len();
+                            if query_terms.is_empty()
+                                && self.chart_search_scope == ChartSearchScope::Relationships
+                            {
+                                ui.label(egui::RichText::new("Enter terms to search relationship records.")
+                                    .small().color(muted));
+                            }
+                            if !self.query.trim().is_empty() && search_entities {
+                                ui.label(egui::RichText::new(format!("MATCHING ENTITIES · {entity_matches}"))
+                                    .small().strong().color(cyan));
+                            }
+                            for (_, ent) in sorted {
+                                let chosen=self.selected==Some(ent.id);
+                                if ui.selectable_label(chosen,format!("● {}",ent.name)).clicked(){
+                                    entity_to_focus = Some(ent.id);
+                                }
+                            }
+                            if !self.query.trim().is_empty() {
+                                let mut link_match_count = 0;
+                                if search_relationships {
+                                    ui.separator();
+                                    ui.label(egui::RichText::new("MATCHING RELATIONSHIPS").small().strong().color(cyan));
+                                    let mut matching_links: Vec<_> = self.case.links.iter().enumerate()
+                                        .filter_map(|(index, link)| {
+                                            let (primary, searchable) = link_search_fields_indexed(
+                                                link,
+                                                &entity_search_index,
+                                                &entity_names,
+                                            );
+                                            if !chart_search_text_matches(&searchable, &query_terms) {
+                                                return None;
+                                            }
+                                            let rank = chart_search_rank(
+                                                &primary,
+                                                &searchable,
+                                                &query_lower,
+                                                &query_terms,
+                                            );
+                                            Some((rank, index, link))
+                                        })
+                                        .collect();
+                                    link_match_count = matching_links.len();
+                                    matching_links.sort_by(|(rank_a, index_a, _), (rank_b, index_b, _)| {
+                                        rank_b
+                                            .cmp(rank_a)
+                                            .then_with(|| index_a.cmp(index_b))
+                                    });
+                                    ui.label(egui::RichText::new(format!("{link_match_count} matches"))
+                                        .small().color(muted));
+                                    for (_, index, link) in matching_links {
+                                    let endpoint_name = |id| entity_names
+                                        .get(&id)
+                                        .map(String::as_str)
+                                        .unwrap_or("(missing)");
+                                    let label = format!(
+                                        "{} {} {} · {}",
+                                        endpoint_name(link.from),
+                                        if link.directed { "→" } else { "↔" },
+                                        endpoint_name(link.to),
+                                        link.label
+                                    );
+                                    if ui.selectable_label(self.selected_link == Some(index), label)
+                                        .on_hover_text(format!(
+                                            "{} · {} · {} · {}",
+                                            if link.connection_id.is_empty() { "no connection ID" } else { &link.connection_id },
+                                            if link.date.is_empty() { "no date" } else { &link.date },
+                                            if link.source_reference.is_empty() { "no evidence reference" } else { &link.source_reference },
+                                            link.ingest_source.as_deref().unwrap_or("Manual"),
+                                        ))
+                                        .clicked()
+                                    {
+                                        link_to_focus = Some(index);
+                                    }
+                                    }
+                                }
+                                if entity_matches == 0 && link_match_count == 0 {
+                                    ui.label(egui::RichText::new("No chart items match all search terms.").small().color(muted));
+                                }
                             }
                         });
                     });
+                    if let Some(entity_id) = entity_to_focus {
+                        self.focus_entity_from_chart_search(entity_id);
+                    } else if let Some(link_index) = link_to_focus {
+                        self.focus_link_from_chart_search(link_index);
+                    }
                     });
                     let canvas_w=(ui.available_width()-right-8.0).max(320.0);
                     ui.allocate_ui_with_layout(egui::vec2(canvas_w,avail.y),egui::Layout::top_down(egui::Align::Min),|ui|{
@@ -8386,7 +11020,7 @@ impl eframe::App for App {
                         if self.page==WorkspacePage::Data {
                             ui.horizontal(|ui|{ui.label(egui::RichText::new("CASE RECORDS").strong().color(cyan));ui.selectable_value(&mut self.data_mode,DataMode::Entities,"Entities");ui.selectable_value(&mut self.data_mode,DataMode::Relationships,"Connections");ui.selectable_value(&mut self.data_mode,DataMode::Sources,"Sources");ui.selectable_value(&mut self.data_mode,DataMode::SqlRegressions,"SQL regressions");ui.selectable_value(&mut self.data_mode,DataMode::Automation,"Automation");if self.data_mode==DataMode::Entities||self.data_mode==DataMode::Relationships{ui.label(egui::RichText::new("CSV/TSV carries connection identity, provenance, entity properties and colors").small().color(muted));}});
                             ui.horizontal(|ui|{ui.label("Case file");ui.add(egui::TextEdit::singleline(&mut self.case_path_input).desired_width(260.0));ui.label("Description");ui.add(egui::TextEdit::singleline(&mut self.case.description).desired_width(260.0));});
-                            ui.horizontal(|ui|{ui.label("Import path");ui.add_enabled(self.import_inspection_worker.is_none(),egui::TextEdit::singleline(&mut self.import_path).desired_width(180.0));ui.label("Export path");ui.add(egui::TextEdit::singleline(&mut self.export_path).desired_width(180.0));ui.label("GraphML");ui.add(egui::TextEdit::singleline(&mut self.graphml_export_path).desired_width(180.0));});
+                            ui.horizontal(|ui|{ui.label("Import path");ui.add_enabled(self.import_inspection_worker.is_none(),egui::TextEdit::singleline(&mut self.import_path).desired_width(180.0));ui.label("Export path");ui.add(egui::TextEdit::singleline(&mut self.export_path).desired_width(180.0));ui.label("GraphML");ui.add(egui::TextEdit::singleline(&mut self.graphml_export_path).desired_width(180.0));ui.label("KML");ui.add(egui::TextEdit::singleline(&mut self.kml_export_path).desired_width(180.0));});
                             if self.data_mode==DataMode::Automation {
                                 let automation_case_saved =
                                     self.disk_case_json.is_some() && !self.has_unsaved_changes();
@@ -8472,6 +11106,8 @@ impl eframe::App for App {
                                             ui.label("Series");
                                             ui.add(egui::TextEdit::singleline(&mut self.automation_job_import_series).hint_text("Keep package series").desired_width(260.0));
                                         });
+                                        ui.label(egui::RichText::new("Parameter overrides are saved as the imported job’s defaults (one name=value per line).").small().color(muted));
+                                        ui.add(egui::TextEdit::multiline(&mut self.automation_job_import_parameter_text).hint_text("region=text:north\nminimum=int:10").desired_rows(3).desired_width(520.0).code_editor());
                                     });
                                 ui.horizontal(|ui| {
                                     ui.label("Export JSON");
@@ -8533,21 +11169,43 @@ impl eframe::App for App {
                                     }
                                 });
                                 ui.horizontal(|ui| {
+                                    let mut limit_properties = self
+                                        .automation_maximum_connection_property_changes
+                                        .is_some();
+                                    if ui
+                                        .checkbox(
+                                            &mut limit_properties,
+                                            "Limit relationship property changes",
+                                        )
+                                        .changed()
+                                    {
+                                        self.automation_maximum_connection_property_changes =
+                                            limit_properties.then_some(0);
+                                    }
+                                    if let Some(maximum) = self
+                                        .automation_maximum_connection_property_changes
+                                        .as_mut()
+                                    {
+                                        ui.label("Maximum changed links");
+                                        ui.add(egui::DragValue::new(maximum).range(0..=1_000_000));
+                                    }
+                                });
+                                ui.horizontal(|ui| {
                                     if ui.button("Build query from schema").clicked() { self.build_sql_query_from_schema(); }
                                     if ui.button("Validate query").clicked() { self.start_sql_validation(); }
                                     if ui.button(if recovered_job_draft { "Save recovered job" } else if editing_saved_job { "Save job changes" } else { "Add job" }).clicked() { self.save_automation_job(); }
                                     if self.editing_automation_job.is_some() && ui.button(if recovered_job_draft { "Discard recovered draft" } else { "Cancel edit" }).clicked() { self.cancel_automation_job_edit(); }
                                 });
-                                if self.sql_schema_templates.len() > 1 {
-                                    ui.horizontal(|ui| {
-                                        ui.label("Query source table or view");
-                                        self.show_sql_schema_template_picker(ui);
-                                    });
+                                if !self.sql_schema_templates.is_empty() || !self.sql_schema_objects.is_empty() {
+                                    self.show_sql_schema_template_picker(ui);
                                 }
-                                ui.label(egui::RichText::new("A regression is a removed connection or confidence decline. Confidence floors, connection totals, regressions, additions, and skipped rows are evaluated independently; failed runs retain their captured snapshots.").small().color(muted));
+                                ui.label(egui::RichText::new("A regression is a removed connection or confidence decline. Confidence floors, connection totals, regressions, additions, relationship-property changes, and skipped rows are evaluated independently; failed runs retain their captured snapshots.").small().color(muted));
                                 ui.add(egui::TextEdit::multiline(&mut self.sql_query).desired_width(canvas_w-20.0).desired_rows(5).code_editor());
                                 ui.label(egui::RichText::new("Named SQL parameters · name=value per line; bind as text with :name, @name, or $name").small().color(muted));
                                 ui.add(egui::TextEdit::multiline(&mut self.sql_parameter_text).desired_width(canvas_w-20.0).desired_rows(2).code_editor());
+                                if editing_saved_job {
+                                    ui.label(egui::RichText::new("After a series has captures, changing its query or base SQL parameters requires a new series so comparisons stay valid.").small().color(muted));
+                                }
                                 Self::show_sql_validation_preview(
                                     ui,
                                     self.sql_validation_preview.as_ref(),
@@ -8560,6 +11218,7 @@ impl eframe::App for App {
                                     self.automation_maximum_connections,
                                     self.automation_maximum_regressions,
                                     self.automation_maximum_added_connections,
+                                    self.automation_maximum_connection_property_changes,
                                     self.automation_maximum_skipped_rows,
                                     &mut self.sql_validation_preview_regressions_only,
                                 );
@@ -8612,6 +11271,138 @@ impl eframe::App for App {
                                         self.start_enabled_automation_jobs();
                                     }
                                 });
+                                let retained_batch_count = self.case.automation_batches.len();
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "RECOVERABLE BATCHES · {retained_batch_count}/200"
+                                    ))
+                                    .small()
+                                    .color(if retained_batch_count == 200 {
+                                        egui::Color32::from_rgb(236, 174, 83)
+                                    } else {
+                                        muted
+                                    }),
+                                )
+                                .on_hover_text(
+                                    "The case retains resumable checkpoints for the latest 200 batches. New runs evict older batch IDs after this limit; starting a fresh SQL run can create new snapshots.",
+                                );
+                                let mut resume_batch_request = None;
+                                for batch in self.case.automation_batches.iter().rev().take(5) {
+                                    let completed_ids: HashSet<Uuid> = batch
+                                        .completed_jobs
+                                        .iter()
+                                        .map(|checkpoint| checkpoint.job_id)
+                                        .collect();
+                                    let pending_count = batch
+                                        .selected_jobs
+                                        .iter()
+                                        .filter(|selection| !completed_ids.contains(&selection.job_id))
+                                        .count();
+                                    let failed_count = batch
+                                        .completed_jobs
+                                        .iter()
+                                        .filter(|checkpoint| !checkpoint.success)
+                                        .count();
+                                    let batch_state = if batch.selected_jobs.is_empty() {
+                                        "SELECTION NOT RECORDED"
+                                    } else if pending_count > 0 {
+                                        "INCOMPLETE"
+                                    } else if failed_count > 0 {
+                                        "COMPLETE WITH FAILURES"
+                                    } else {
+                                        "COMPLETE"
+                                    };
+                                    egui::CollapsingHeader::new(format!(
+                                        "{batch_state} · {} of {} jobs · {} failed · {} retry required · {}",
+                                        batch.completed_jobs.len(),
+                                        batch.selected_jobs.len(),
+                                        failed_count,
+                                        pending_count,
+                                        batch.batch_id
+                                    ))
+                                    .id_salt(("automation_batch", batch.batch_id))
+                                    .show(ui, |ui| {
+                                        for selection in &batch.selected_jobs {
+                                            if let Some(effective_job) = batch
+                                                .effective_jobs
+                                                .iter()
+                                                .find(|job| job.id == selection.job_id)
+                                                && !effective_job.parameters.is_empty()
+                                            {
+                                                let parameters = effective_job
+                                                    .parameters
+                                                    .iter()
+                                                    .map(|(name, value)| format!("{name}={value}"))
+                                                    .collect::<Vec<_>>()
+                                                    .join(" · ");
+                                                ui.label(egui::RichText::new(format!(
+                                                    "EFFECTIVE SQL PARAMETERS · {} · {parameters}",
+                                                    selection.job_name
+                                                )).small().color(muted));
+                                            }
+                                            if let Some(checkpoint) = batch
+                                                .completed_jobs
+                                                .iter()
+                                                .find(|checkpoint| checkpoint.job_id == selection.job_id)
+                                            {
+                                                ui.label(format!(
+                                                    "{} · {} · run {} · {}",
+                                                    if checkpoint.success { "PASS" } else { "FAIL" },
+                                                    selection.job_name,
+                                                    checkpoint.run_id,
+                                                    checkpoint.message
+                                                ));
+                                            } else {
+                                                let latest_run = self.case.automation_runs.iter().rev().find(|run| {
+                                                    run.batch_id == Some(batch.batch_id)
+                                                        && run.job_id == selection.job_id
+                                                });
+                                                ui.label(format!(
+                                                    "RETRY REQUIRED · {}{}",
+                                                    selection.job_name,
+                                                    latest_run.map(|run| format!(" · {}", run.message)).unwrap_or_default()
+                                                ));
+                                                if let Some(run) = latest_run
+                                                    && let Some(hint) = sql_schema_adaptation_hint(&run.message)
+                                                {
+                                                    ui.label(egui::RichText::new(format!("SCHEMA REPAIR · {hint}")).small().color(egui::Color32::from_rgb(238, 174, 83)));
+                                                }
+                                            }
+                                        }
+                                        if batch.selected_jobs.is_empty() {
+                                            ui.label("This older batch has no saved job selection. Inspect it with --list-batches before resuming.");
+                                        }
+                                        if pending_count > 0 {
+                                            ui.label(egui::RichText::new(format!(
+                                                "Resume using the saved job set and effective parameters: arch-notebook --run-enabled-jobs <case.json> --resume-batch {}",
+                                                batch.batch_id
+                                            )).small().color(muted));
+                                            let can_resume_batch = !batch.effective_jobs.is_empty()
+                                                && automation_case_saved
+                                                && self.automation_worker.is_none()
+                                                && self.automation_schedule_worker.is_none();
+                                            if ui
+                                                .add_enabled(
+                                                    can_resume_batch,
+                                                    egui::Button::new("Resume batch in app"),
+                                                )
+                                                .on_hover_text(if batch.effective_jobs.is_empty() {
+                                                    "This older batch does not contain effective job definitions; resume it from the CLI."
+                                                } else if !automation_case_saved {
+                                                    "Save the current case before resuming the saved batch configuration."
+                                                } else {
+                                                    "Resume pending jobs using the saved effective SQL parameters. The current override editor remains unchanged."
+                                                })
+                                                .clicked()
+                                            {
+                                                resume_batch_request = Some(batch.batch_id);
+                                            }
+                                        }
+                                    });
+                                }
+                                if let Some(batch_id) = resume_batch_request {
+                                    self.resume_automation_batch(batch_id);
+                                }
                                 ui.horizontal(|ui| {
                                     ui.label(egui::RichText::new("SCHEDULE SQL AUTOMATION").small().strong().color(cyan));
                                     egui::ComboBox::from_id_salt("automation_schedule_cadence")
@@ -8820,6 +11611,7 @@ impl eframe::App for App {
                                 let mut action: Option<(String,Uuid)> = None;
                                 let mut focus_run = None;
                                 let mut focus_job_history = None;
+                                let mut review_latest_capture = None;
                                 for job in &mut self.case.automation_jobs {
                                     if !visible_job_ids.contains(&job.id) {
                                         continue;
@@ -8859,6 +11651,28 @@ impl eframe::App for App {
                                             )
                                         });
                                     let latest_run_id = latest_run.as_ref().map(|run| run.0);
+                                    let latest_run_needs_schema_adaptation = latest_run.as_ref()
+                                        .is_some_and(|run| !run.1 && sql_schema_adaptation_kind(&run.3).is_some());
+                                    let latest_snapshot_index = self
+                                        .case
+                                        .automation_runs
+                                        .iter()
+                                        .rev()
+                                        .find(|run| run.job_id == job.id)
+                                        .and_then(|run| {
+                                            run.snapshot_id
+                                                .and_then(|id| {
+                                                    self.case
+                                                        .snapshots
+                                                        .iter()
+                                                        .position(|snapshot| snapshot.id == id)
+                                                })
+                                                .or_else(|| {
+                                                    run.snapshot_index.filter(|index| {
+                                                        *index < self.case.snapshots.len()
+                                                    })
+                                                })
+                                        });
                                     let job_override_selectors_match = run_parameter_overrides
                                         .as_ref()
                                         .is_ok_and(|overrides| {
@@ -8882,18 +11696,22 @@ impl eframe::App for App {
                                         ui.strong(&job.name);
                                         ui.label(format!("{} · {}", job.series, job.database_path));
                                         ui.label(format!(
-                                            "min {} connections · min confidence {} · max connections {} · max regressions {} · max additions {} · max skipped rows {}",
+                                            "min {} connections · min confidence {} · max connections {} · max regressions {} · max additions {} · max relationship-property changes {} · max skipped rows {}",
                                             job.minimum_connections,
                                             job.minimum_confidence.map(|value|value.to_string()).unwrap_or_else(||"none".into()),
                                             job.maximum_connections.map(|value|value.to_string()).unwrap_or_else(||"unlimited".into()),
                                             job.maximum_regressions.map(|value|value.to_string()).unwrap_or_else(||"unlimited".into()),
                                             job.maximum_added_connections.map(|value|value.to_string()).unwrap_or_else(||"unlimited".into()),
+                                            job.maximum_connection_property_changes.map(|value|value.to_string()).unwrap_or_else(||"unlimited".into()),
                                             job.maximum_skipped_rows.map(|value|value.to_string()).unwrap_or_else(||"unlimited".into())
                                         ));
                                     });
                                     ui.horizontal(|ui| {
+                                        if ui.small_button("Explain plan").clicked() {
+                                            action = Some(("explain".into(), job.id));
+                                        }
                                         if ui.small_button("Validate").clicked(){action=Some(("validate".into(),job.id));}
-                                        if ui.small_button("Edit").clicked(){action=Some(("edit".into(),job.id));}
+                                        if ui.small_button(if latest_run_needs_schema_adaptation { "Repair SQL" } else { "Edit" }).on_hover_text(if latest_run_needs_schema_adaptation { "Load this saved job and inspect the current SQLite schema for replacement query templates." } else { "Edit this saved SQL automation job." }).clicked(){action=Some((if latest_run_needs_schema_adaptation { "repair" } else { "edit" }.into(),job.id));}
                                         if ui
                                             .add_enabled(
                                                 automation_case_saved
@@ -8921,15 +11739,33 @@ impl eframe::App for App {
                                         {
                                             focus_run = Some(run_id);
                                         }
+                                        if let Some(snapshot_index) = latest_snapshot_index
+                                            && ui.small_button("Review latest capture").clicked()
+                                        {
+                                            review_latest_capture = Some(snapshot_index);
+                                        }
                                         if ui.small_button("View job history").clicked() {
                                             focus_job_history = Some(job.name.clone());
                                         }
                                         if ui.small_button("Delete").clicked(){action=Some(("delete".into(),job.id));}
                                     });
                                     if let Some((_, success, finished_at, message, duration_ms, quality, connection_count, skipped_rows)) = latest_run {
-                                        let result = if success { "PASS" } else { "FAIL" };
+                                        let has_skipped_rows = skipped_rows.is_some_and(|count| count > 0);
+                                        let result = if !success {
+                                            "FAIL"
+                                        } else if has_skipped_rows {
+                                            "PASS · PARTIAL DATA"
+                                        } else {
+                                            "PASS"
+                                        };
                                         ui.colored_label(
-                                            if success { egui::Color32::from_rgb(102, 190, 146) } else { egui::Color32::from_rgb(222, 112, 104) },
+                                            if !success {
+                                                egui::Color32::from_rgb(222, 112, 104)
+                                            } else if has_skipped_rows {
+                                                egui::Color32::from_rgb(236, 174, 83)
+                                            } else {
+                                                egui::Color32::from_rgb(102, 190, 146)
+                                            },
                                             egui::RichText::new(format!(
                                                 "LAST RUN · {result} · {finished_at} · {quality} · {} connections · {} skipped · {} ms",
                                                 connection_count.map(|value| value.to_string()).unwrap_or_else(|| "unknown".into()),
@@ -8938,7 +11774,11 @@ impl eframe::App for App {
                                                     .map(|value| value.to_string())
                                                     .unwrap_or_else(|| "unknown duration".into())
                                             )).small(),
-                                        ).on_hover_text(&message);
+                                        ).on_hover_text(if has_skipped_rows {
+                                            format!("{message}\nRows with blank or NULL endpoints were excluded from the captured snapshot.")
+                                        } else {
+                                            message.clone()
+                                        });
                                         if !success {
                                             let mut characters = message.chars();
                                             let mut failure_summary: String =
@@ -8981,16 +11821,44 @@ impl eframe::App for App {
                                                 job.maximum_connections,
                                                 job.maximum_regressions,
                                                 job.maximum_added_connections,
+                                                job.maximum_connection_property_changes,
                                                 job.maximum_skipped_rows,
                                                 &mut self.sql_validation_preview_regressions_only,
                                             );
                                         });
                                 }
-                                if let Some((verb,id))=action {match verb.as_str(){"validate"=>{self.validate_automation_job(id);},"edit"=>self.edit_automation_job(id),"run"=>self.start_automation_jobs(vec![id],false),"export"=>self.export_automation_job_package(id),"delete"=>{if self.editing_automation_job==Some(id){self.cancel_automation_job_edit();}self.case.automation_jobs.retain(|job|job.id!=id);self.status="AUTOMATION JOB DELETED".into();},_=>{}}}
+                                if let Some((verb,id))=action {match verb.as_str(){"explain"=>self.explain_automation_job(id),"validate"=>{self.validate_automation_job(id);},"edit"=>self.edit_automation_job(id),"repair"=>{self.edit_automation_job(id);self.build_sql_query_from_schema();},"run"=>self.start_automation_jobs(vec![id],false),"export"=>self.export_automation_job_package(id),"delete"=>{if self.editing_automation_job==Some(id){self.cancel_automation_job_edit();}self.case.automation_jobs.retain(|job|job.id!=id);self.status="AUTOMATION JOB DELETED".into();},_=>{}}}
+                                if let Some((_, job_name, database_path, result)) = &self.sql_plan_result {
+                                    egui::CollapsingHeader::new(format!("Latest SQL query plan · {job_name}"))
+                                        .id_salt(("sql_query_plan_result", job_name))
+                                        .default_open(true)
+                                        .show(ui, |ui| {
+                                            ui.label(format!("SQLite source · {database_path}"));
+                                            match result {
+                                                Ok(steps) => {
+                                                    let scans = steps.iter().filter(|step| step.detail.to_ascii_uppercase().contains("SCAN ")).count();
+                                                    ui.label(format!("{} planner steps · {scans} scan steps. Planner output only; query rows were not read.", steps.len()));
+                                                    let depths = sql_plan_step_depths(steps);
+                                                    egui::ScrollArea::vertical().max_height(120.0).show(ui, |ui| {
+                                                        for (step, depth) in steps.iter().zip(depths) {
+                                                            ui.horizontal(|ui| {
+                                                                ui.add_space((depth as f32 * 14.0).min(112.0));
+                                                                ui.label(format!("{} · parent {} · {}", step.id, step.parent, step.detail));
+                                                            });
+                                                        }
+                                                    });
+                                                }
+                                                Err(error) => {
+                                                    ui.colored_label(egui::Color32::from_rgb(222, 112, 104), error);
+                                                }
+                                            }
+                                        });
+                                }
                                 if let Some(run_id) = focus_run {
                                     self.automation_run_filter = run_id.to_string();
                                     self.automation_run_trigger_filter = "all".into();
                                     self.automation_failed_runs_only = false;
+                                    self.automation_schema_adaptation_only = false;
                                     self.automation_runs_needing_review = false;
                                     self.automation_runs_with_unreviewed_regressions = false;
                                 }
@@ -8998,8 +11866,12 @@ impl eframe::App for App {
                                     self.automation_run_filter = job_name;
                                     self.automation_run_trigger_filter = "all".into();
                                     self.automation_failed_runs_only = false;
+                                    self.automation_schema_adaptation_only = false;
                                     self.automation_runs_needing_review = false;
                                     self.automation_runs_with_unreviewed_regressions = false;
+                                }
+                                if let Some(snapshot_index) = review_latest_capture {
+                                    self.open_sql_snapshot_review(snapshot_index);
                                 }
                                 ui.add_space(8.0);
                                 ui.horizontal(|ui| {
@@ -9028,23 +11900,54 @@ impl eframe::App for App {
                                         });
                                     ui.checkbox(&mut self.automation_failed_runs_only, "Failures only");
                                     ui.checkbox(
+                                        &mut self.automation_schema_adaptation_only,
+                                        "Schema adaptation needed",
+                                    )
+                                    .on_hover_text(
+                                        "Show failed SQL runs with a missing SQLite table or column, so those saved jobs can be repaired.",
+                                    );
+                                    ui.checkbox(
                                         &mut self.automation_runs_needing_review,
                                         "Unreviewed failures",
                                     );
                                     ui.checkbox(
                                         &mut self.automation_runs_with_unreviewed_regressions,
-                                        "Unreviewed regressions",
-                                    ).on_hover_text("Show captures with removals or confidence declines and no analyst comment, even when the job passed.");
+                                        "Unreviewed regressions or properties",
+                                    ).on_hover_text("Show captures with removals, confidence declines, or SQL relationship-property changes and no review mark, even when the job passed.");
                                     if ui.small_button("Clear history filters").clicked() {
                                         self.automation_run_filter.clear();
                                         self.automation_run_trigger_filter = "all".into();
                                         self.automation_failed_runs_only = false;
+                                        self.automation_schema_adaptation_only = false;
                                         self.automation_runs_needing_review = false;
                                         self.automation_runs_with_unreviewed_regressions = false;
                                     }
                                 });
                                 let run_filter = self.automation_run_filter.trim().to_lowercase();
-                                let visible_run_count = self
+                                let mut search_scope_count = 0usize;
+                                let mut failure_count = 0usize;
+                                let mut unreviewed_failure_count = 0usize;
+                                for run in self.case.automation_runs.iter().filter(|run| {
+                                    automation_run_matches_filter(
+                                        &self.case,
+                                        run,
+                                        &run_filter,
+                                        &self.automation_run_trigger_filter,
+                                        false,
+                                        false,
+                                        false,
+                                        false,
+                                    )
+                                }) {
+                                    search_scope_count += 1;
+                                    if !run.success {
+                                        failure_count += 1;
+                                        if run.analyst_note.trim().is_empty() {
+                                            unreviewed_failure_count += 1;
+                                        }
+                                    }
+                                }
+                                let visible_run_ids: Vec<Uuid> = self
                                     .case
                                     .automation_runs
                                     .iter()
@@ -9055,17 +11958,33 @@ impl eframe::App for App {
                                             &run_filter,
                                             &self.automation_run_trigger_filter,
                                             self.automation_failed_runs_only,
+                                            self.automation_schema_adaptation_only,
                                             self.automation_runs_needing_review,
                                             self.automation_runs_with_unreviewed_regressions,
                                         )
                                     })
-                                    .count();
+                                    .map(|run| run.id)
+                                    .collect();
+                                let visible_run_count = visible_run_ids.len();
                                 ui.label(egui::RichText::new(format!(
-                                    "{visible_run_count} OF {} RECORDED RUNS",
-                                    self.case.automation_runs.len()
-                                )).small().color(muted));
+                                    "{visible_run_count} VISIBLE · {search_scope_count} MATCH SEARCH/ORIGIN · {failure_count} FAILURES · {unreviewed_failure_count} UNREVIEWED"
+                                )).small().color(muted)).on_hover_text(
+                                    "Failure counts follow the current text and origin filters. Unreviewed failures have no analyst comment; category checkboxes determine which runs appear below.",
+                                );
+                                let mut export_run_history = false;
+                                if ui
+                                    .add_enabled(
+                                        visible_run_count > 0,
+                                        egui::Button::new("Export visible run history CSV/TSV"),
+                                    )
+                                    .on_hover_text("Export runs matching the current search, origin, failure, and review filters.")
+                                    .clicked()
+                                {
+                                    export_run_history = true;
+                                }
                                 let mut review_snapshot = None;
                                 let mut review_changes = None;
+                                let mut export_snapshot = None;
                                 let mut focus_regression: Option<(Uuid, ConnectionFact)> = None;
                                 let mut set_regression_review: Option<(Uuid, bool)> = None;
                                 let mut replay_run = None;
@@ -9084,22 +12003,34 @@ impl eframe::App for App {
                                                 &run_filter,
                                                 &self.automation_run_trigger_filter,
                                                 self.automation_failed_runs_only,
+                                                self.automation_schema_adaptation_only,
                                                 self.automation_runs_needing_review,
                                                 self.automation_runs_with_unreviewed_regressions,
                                             )
                                         })
                                     {
-                                        let result = if run.success { "PASS" } else { "FAIL" };
                                         let snapshot = run
                                             .snapshot_id
                                             .and_then(|id| self.case.snapshots.iter().find(|snapshot| snapshot.id == id))
                                             .or_else(|| run.snapshot_index.and_then(|index| self.case.snapshots.get(index)));
+                                        let skipped_rows = snapshot.map(|snapshot| snapshot.skipped_rows);
+                                        let has_skipped_rows = skipped_rows.is_some_and(|count| count > 0);
+                                        let result = if !run.success {
+                                            "FAIL"
+                                        } else if has_skipped_rows {
+                                            "PASS · PARTIAL DATA"
+                                        } else {
+                                            "PASS"
+                                        };
                                         let quality = snapshot
                                             .map(snapshot_result_quality)
                                             .map(snapshot_result_quality_label)
                                             .unwrap_or("NO SNAPSHOT");
                                         egui::CollapsingHeader::new(format!(
-                                            "{result} · {quality} · {} · {} · {}",
+                                            "{result} · {quality} · {} skipped · {} · {} · {}",
+                                            skipped_rows
+                                                .map(|count| count.to_string())
+                                                .unwrap_or_else(|| "unknown".into()),
                                             automation_run_trigger_label(&run.trigger),
                                             run.job_name,
                                             run.started_at
@@ -9107,6 +12038,12 @@ impl eframe::App for App {
                                         .id_salt(("automation_run", run.id))
                                         .default_open(focus_run == Some(run.id))
                                         .show(ui, |ui| {
+                                            if has_skipped_rows {
+                                                ui.colored_label(
+                                                    egui::Color32::from_rgb(236, 174, 83),
+                                                    "Rows with blank or NULL endpoints were excluded from this snapshot.",
+                                                );
+                                            }
                                             ui.label(format!(
                                                 "Trigger: {}",
                                                 automation_run_trigger_label(&run.trigger)
@@ -9123,6 +12060,18 @@ impl eframe::App for App {
                                                     "Recovered after {} SQLite lock retries",
                                                     run.sqlite_lock_retries
                                                 ));
+                                            }
+                                            if let Some(kind) = sql_schema_adaptation_kind(&run.message) {
+                                                egui::Frame::new()
+                                                    .fill(egui::Color32::from_rgb(48, 39, 30))
+                                                    .inner_margin(egui::Margin::symmetric(8, 5))
+                                                    .show(ui, |ui| {
+                                                        ui.label(egui::RichText::new(format!(
+                                                            "SCHEMA ADAPTATION NEEDED · {}",
+                                                            kind.replace('_', " ").to_ascii_uppercase()
+                                                        )).strong().color(egui::Color32::from_rgb(238, 174, 83)));
+                                                        ui.label(sql_schema_adaptation_hint(&run.message).unwrap_or_default());
+                                                    });
                                             }
                                             ui.label(&run.message);
                                             let note = self
@@ -9147,6 +12096,15 @@ impl eframe::App for App {
                                                 .or_else(|| {
                                                     run.snapshot_index.filter(|index| *index < self.case.snapshots.len())
                                                 });
+                                            if let Some(batch_id) = run.batch_id {
+                                                ui.selectable_label(
+                                                    false,
+                                                    format!("BATCH ID · {batch_id}"),
+                                                )
+                                                .on_hover_text(
+                                                    "Select and copy this ID to inspect with --list-batches, then resume with --resume-batch and the same jobs and SQL parameter overrides.",
+                                                );
+                                            }
                                             if let Some(index) = snapshot_index {
                                                 let snapshot = &self.case.snapshots[index];
                                                 let previous = previous_snapshot_index(&self.case, index)
@@ -9162,11 +12120,12 @@ impl eframe::App for App {
                                                 ));
                                                 if let Some(previous) = previous {
                                                     ui.label(format!(
-                                                        "Compared with {} · removed {} · confidence declines {} · date changes {} · updates {} · added {}",
+                                                        "Compared with {} · removed {} · confidence declines {} · date changes {} · relationship property changes {} · updates {} · added {}",
                                                         previous.captured_at,
                                                         counts["removed"].as_u64().unwrap_or(0),
                                                         counts["confidence_declined"].as_u64().unwrap_or(0),
                                                         counts["date_changed"].as_u64().unwrap_or(0),
+                                                        counts["connection_properties_changed"].as_u64().unwrap_or(0),
                                                         counts["connection_updated"].as_u64().unwrap_or(0),
                                                         counts["added"].as_u64().unwrap_or(0),
                                                     ));
@@ -9179,7 +12138,7 @@ impl eframe::App for App {
                                                                 kinds.iter().any(|kind| {
                                                                     matches!(
                                                                         kind.as_str(),
-                                                                        Some("removed" | "confidence_declined")
+                                                                        Some("removed" | "confidence_declined" | "connection_attributes_changed")
                                                                     )
                                                                 })
                                                             })
@@ -9195,7 +12154,7 @@ impl eframe::App for App {
                                                             .show(ui, |ui| {
                                                                 ui.horizontal(|ui| {
                                                                     ui.label(egui::RichText::new(format!(
-                                                                        "REGRESSION DETAILS · showing {} of {} · {}",
+                                                                        "REVIEW DETAILS · showing {} of {} · {}",
                                                                         regressions.len().min(5),
                                                                         regressions.len(),
                                                                         if is_reviewed { "REVIEWED" } else { "NEEDS REVIEW" }
@@ -9211,8 +12170,13 @@ impl eframe::App for App {
                                                                         .is_some_and(|kinds| {
                                                                             kinds.iter().any(|kind| kind == "removed")
                                                                         });
+                                                                    let has_property_change = regression["kinds"]
+                                                                        .as_array()
+                                                                        .is_some_and(|kinds| kinds.iter().any(|kind| kind == "connection_attributes_changed"));
                                                                     let change = if is_removed {
                                                                         "REMOVED".to_owned()
+                                                                    } else if has_property_change {
+                                                                        "RELATIONSHIP PROPERTIES CHANGED".to_owned()
                                                                     } else {
                                                                         format!(
                                                                             "CONFIDENCE {} → {}",
@@ -9242,6 +12206,16 @@ impl eframe::App for App {
                                                                             focus_regression = Some((snapshot.id, fact));
                                                                         }
                                                                     });
+                                                                    if has_property_change {
+                                                                        for (name, before, after) in connection_attribute_differences(
+                                                                            &regression["previous"]["connection_attributes"],
+                                                                            &fact["connection_attributes"],
+                                                                        ) {
+                                                                            ui.label(egui::RichText::new(format!(
+                                                                                "{name}: {before} → {after}"
+                                                                            )).small().color(egui::Color32::from_rgb(195, 187, 176)));
+                                                                        }
+                                                                    }
                                                                 }
                                                             });
                                                     }
@@ -9257,12 +12231,13 @@ impl eframe::App for App {
                                             }
                                             if run.configuration_recorded {
                                                 ui.label(format!(
-                                                    "Minimum {} connections · minimum confidence {} · maximum connections {} · maximum regressions {} · maximum additions {} · maximum skipped rows {} · job {}",
+                                                    "Minimum {} connections · minimum confidence {} · maximum connections {} · maximum regressions {} · maximum additions {} · maximum relationship-property changes {} · maximum skipped rows {} · job {}",
                                                     run.minimum_connections,
                                                     run.minimum_confidence.map(|value|value.to_string()).unwrap_or_else(||"none".into()),
                                                     run.maximum_connections.map(|value|value.to_string()).unwrap_or_else(||"unlimited".into()),
                                                     run.maximum_regressions.map(|value|value.to_string()).unwrap_or_else(||"unlimited".into()),
                                                     run.maximum_added_connections.map(|value|value.to_string()).unwrap_or_else(||"unlimited".into()),
+                                                    run.maximum_connection_property_changes.map(|value|value.to_string()).unwrap_or_else(||"unlimited".into()),
                                                     run.maximum_skipped_rows.map(|value|value.to_string()).unwrap_or_else(||"unlimited".into()),
                                                     if run.enabled { "enabled" } else { "disabled" }
                                                 ));
@@ -9308,11 +12283,18 @@ impl eframe::App for App {
                                                 replay_run = Some(run.id);
                                             }
                                             if run.configuration_recorded
-                                                && ui.small_button("Load configuration into editor").clicked()
+                                                && ui.small_button(if sql_schema_adaptation_kind(&run.message).is_some() {
+                                                    "Load configuration to repair SQL"
+                                                } else {
+                                                    "Load configuration into editor"
+                                                }).clicked()
                                             {
                                                 load_run = Some(run.id);
                                             }
                                             if let Some(index) = snapshot_index {
+                                                if ui.small_button("Export capture CSV/TSV").clicked() {
+                                                    export_snapshot = Some(index);
+                                                }
                                                 if ui.small_button(format!("Review snapshot #{}", index + 1)).clicked() {
                                                     review_snapshot = Some(index);
                                                 }
@@ -9359,14 +12341,33 @@ impl eframe::App for App {
                                 if let Some(run_id) = load_run {
                                     self.load_automation_run_into_editor(run_id);
                                 }
-                                if let Some(index)=review_snapshot {self.sql_snapshot_source=Some(self.case.snapshots[index].source_key.clone());self.sql_snapshot_index=Some(index);self.data_mode=DataMode::SqlRegressions;}
+                                if let Some(index) = export_snapshot {
+                                    self.export_sql_snapshot(index);
+                                }
+                                if export_run_history {
+                                    self.export_automation_runs(&visible_run_ids);
+                                }
+                                if let Some(index) = review_snapshot {
+                                    self.open_sql_snapshot_review(index);
+                                }
                                 if let Some((snapshot_id, fact)) = focus_regression
-                                    && let Some(snapshot) = self.case.snapshots.iter().find(|snapshot| snapshot.id == snapshot_id)
+                                    && let Some(snapshot_index) = self
+                                        .case
+                                        .snapshots
+                                        .iter()
+                                        .position(|snapshot| snapshot.id == snapshot_id)
                                 {
+                                    let database_path = self.case.snapshots[snapshot_index]
+                                        .database_path
+                                        .clone();
+                                    let source_key = self.case.snapshots[snapshot_index]
+                                        .source_key
+                                        .clone();
+                                    self.open_sql_snapshot_review(snapshot_index);
                                     if let Some(link_index) = snapshot_case_link_index(
                                         &self.case,
-                                        &snapshot.database_path,
-                                        &snapshot.source_key,
+                                        &database_path,
+                                        &source_key,
                                         &fact,
                                     ) {
                                         self.selected = None;
@@ -9387,18 +12388,7 @@ impl eframe::App for App {
                                 if let Some(snapshot_id) = review_changes
                                     && let Some(index) = self.case.snapshots.iter().position(|snapshot| snapshot.id == snapshot_id)
                                 {
-                                    let source_key = self.case.snapshots[index].source_key.clone();
-                                    if self.sql_snapshot_source.as_deref() == Some(source_key.as_str()) {
-                                        self.sql_snapshot_index = Some(index);
-                                    } else {
-                                        self.sql_snapshot_source = Some(source_key);
-                                        self.sql_snapshot_index = Some(index);
-                                    }
-                                    self.sql_delta_filter = SnapshotDeltaFilter::All;
-                                    self.sql_delta_search.clear();
-                                    self.data_mode = DataMode::SqlRegressions;
-                                    self.page = WorkspacePage::Data;
-                                    self.show_timeline = false;
+                                    self.open_sql_snapshot_review(index);
                                 }
                                 return;
                             }
@@ -9424,7 +12414,7 @@ impl eframe::App for App {
                                         if identity_source.is_empty() {
                                             continue;
                                         }
-                                        let sql_source_keys: Vec<&str> = self
+                                        let mut sql_source_keys: Vec<&str> = self
                                             .case
                                             .snapshots
                                             .iter()
@@ -9433,6 +12423,23 @@ impl eframe::App for App {
                                             })
                                             .map(|snapshot| snapshot.source_key.as_str())
                                             .collect();
+                                        sql_source_keys.extend(
+                                            self.case.graphml_source_catalogs.iter().filter_map(
+                                                |catalog| {
+                                                    let database_path = catalog["database_path"]
+                                                        .as_str()
+                                                        .or_else(|| {
+                                                            catalog["configured_database_path"]
+                                                                .as_str()
+                                                        });
+                                                    (database_path == Some(identity_source.as_str()))
+                                                        .then(|| catalog["source_key"].as_str())
+                                                        .flatten()
+                                                },
+                                            ),
+                                        );
+                                        sql_source_keys.sort_unstable();
+                                        sql_source_keys.dedup();
                                         if sql_source_keys.is_empty() {
                                             inventory
                                                 .entry(identity_source.clone())
@@ -9453,6 +12460,14 @@ impl eframe::App for App {
                                 for snapshot in &self.case.snapshots {
                                     inventory.entry(snapshot.source_key.clone()).or_default();
                                 }
+                                for catalog in &self.case.graphml_source_catalogs {
+                                    if let Some(source_key) = catalog
+                                        .get("source_key")
+                                        .and_then(serde_json::Value::as_str)
+                                    {
+                                        inventory.entry(source_key.to_owned()).or_default();
+                                    }
+                                }
                                 ui.label(egui::RichText::new("DATA SOURCES · chart provenance")
                                     .small().strong().color(cyan));
                                 ui.label(egui::RichText::new(
@@ -9460,9 +12475,32 @@ impl eframe::App for App {
                                 ).small().color(muted));
                                 if inventory.is_empty() {
                                     ui.label("No imported source records yet. SQL, CSV/TSV, and GraphML provenance appears here after import.");
+                                } else {
+                                    ui.horizontal(|ui| {
+                                        ui.add(
+                                            egui::TextEdit::singleline(&mut self.data_query)
+                                                .hint_text("Search source, database, or series…")
+                                                .desired_width(300.0),
+                                        );
+                                        if !self.data_query.is_empty()
+                                            && ui.small_button("Clear").clicked()
+                                        {
+                                            self.data_query.clear();
+                                        }
+                                        ui.label(format!("{} sources", inventory.len())).on_hover_text(
+                                            "Search checks every term against the source key, database path, and series name.",
+                                        );
+                                    });
                                 }
                                 let mut automation_job_to_open = None;
                                 let mut snapshot_to_review = None;
+                                let mut source_to_highlight = None;
+                                let source_search_terms: Vec<String> = self
+                                    .data_query
+                                    .split_whitespace()
+                                    .map(str::to_lowercase)
+                                    .collect();
+                                let mut visible_source_count = 0usize;
                                 egui::ScrollArea::both().auto_shrink([false, false]).show(ui, |ui| {
                                     egui::Grid::new("data_source_inventory")
                                         .striped(true)
@@ -9477,9 +12515,25 @@ impl eframe::App for App {
                                                     .iter()
                                                     .rev()
                                                     .find(|snapshot| snapshot.source_key == *source_key);
+                                                let graphml_catalog = self.case.graphml_source_catalogs
+                                                    .iter()
+                                                    .find(|catalog| catalog["source_key"].as_str() == Some(source_key.as_str()));
                                                 let source_label = source_snapshot
                                                     .map(|snapshot| format!("SQLite · {} · {}", snapshot.series, snapshot.database_path))
+                                                    .or_else(|| graphml_catalog.map(|catalog| format!(
+                                                        "GraphML catalog · {} · {}",
+                                                        catalog["series"].as_str().unwrap_or("unknown series"),
+                                                        catalog["database_path"].as_str().unwrap_or("unknown database")
+                                                    )))
                                                     .unwrap_or_else(|| source_key.clone());
+                                                let searchable_source = format!("{source_key} {source_label}").to_lowercase();
+                                                if !source_search_terms
+                                                    .iter()
+                                                    .all(|term| searchable_source.contains(term))
+                                                {
+                                                    continue;
+                                                }
+                                                visible_source_count += 1;
                                                 let automation_job = source_snapshot.and_then(|snapshot| {
                                                     self.case.automation_jobs.iter().find(|job| {
                                                         same_sql_series(
@@ -9497,15 +12551,7 @@ impl eframe::App for App {
                                                 ui.label(link_count.to_string());
                                                 ui.horizontal(|ui| {
                                                     if ui.small_button("Highlight on chart").clicked() {
-                                                        self.sql_source_focus = Some(source_key.clone());
-                                                        self.chart_fit_entities = Some(source_entity_ids.iter().copied().collect());
-                                                        self.chart_fit_path = None;
-                                                        self.chart_focus = None;
-                                                        self.chart_focus_link = None;
-                                                        self.chart_focus_group = None;
-                                                        self.path_result.clear();
-                                                        self.page = WorkspacePage::Chart;
-                                                        self.show_timeline = false;
+                                                        source_to_highlight = Some(source_key.clone());
                                                     }
                                                     if !entities.is_empty() && ui.small_button("View entities").clicked() {
                                                         self.data_query.clear();
@@ -9541,16 +12587,62 @@ impl eframe::App for App {
                                             }
                                         });
                                 });
+                                if !inventory.is_empty() && visible_source_count == 0 {
+                                    ui.label("No sources match this search.");
+                                }
+                                if !self.case.graphml_source_catalogs.is_empty() {
+                                    egui::CollapsingHeader::new(format!(
+                                        "IMPORTED GRAPHML SQL CATALOGS · {} SOURCES",
+                                        self.case.graphml_source_catalogs.len()
+                                    ))
+                                    .id_salt("graphml_source_catalogs")
+                                    .show(ui, |ui| {
+                                        ui.label(egui::RichText::new(
+                                            "Capture details came from GraphML source-catalog metadata. GraphML does not carry the local SQL snapshots, so these entries cannot be compared or replayed here.",
+                                        ).small().color(muted));
+                                        egui::ScrollArea::horizontal().show(ui, |ui| {
+                                            egui::Grid::new("graphml_source_catalog_table")
+                                                .striped(true)
+                                                .show(ui, |ui| {
+                                                    for heading in ["SOURCE", "DATABASE", "SERIES", "LATEST CAPTURE", "CAPTURE HISTORY"] {
+                                                        ui.strong(heading);
+                                                    }
+                                                    ui.end_row();
+                                                    for catalog in &self.case.graphml_source_catalogs {
+                                                        ui.label(catalog["source_key"].as_str().unwrap_or("(unknown source)"));
+                                                        ui.label(catalog["configured_database_path"].as_str()
+                                                            .or_else(|| catalog["database_path"].as_str())
+                                                            .unwrap_or("(unknown database)"));
+                                                        ui.label(catalog["series"].as_str().unwrap_or("(unknown series)"));
+                                                        ui.label(catalog["latest_captured_at"].as_str().unwrap_or("(unknown time)"))
+                                                            .on_hover_text(catalog["latest_snapshot_id"].as_str().unwrap_or("No snapshot ID"));
+                                                        let captures = catalog["captures"].as_array().cloned().unwrap_or_default();
+                                                        ui.vertical(|ui| {
+                                                            ui.label(format!("{} captures · {} links · {} entities",
+                                                                captures.len(),
+                                                                catalog["link_count"].as_u64().unwrap_or_default(),
+                                                                catalog["entity_count"].as_u64().unwrap_or_default()));
+                                                            for capture in captures {
+                                                                ui.label(format!("{} · {} connections · {} skipped",
+                                                                    capture["captured_at"].as_str().unwrap_or("unknown time"),
+                                                                    capture["connection_count"].as_u64().unwrap_or_default(),
+                                                                    capture["skipped_rows"].as_u64().unwrap_or_default()))
+                                                                    .on_hover_text(capture["snapshot_id"].as_str().unwrap_or("No snapshot ID"));
+                                                            }
+                                                        });
+                                                        ui.end_row();
+                                                    }
+                                                });
+                                        });
+                                    });
+                                }
                                 if let Some(snapshot_id) = snapshot_to_review
                                     && let Some(index) = self.case.snapshots.iter().position(|snapshot| snapshot.id == snapshot_id)
                                 {
-                                    self.sql_snapshot_source = Some(self.case.snapshots[index].source_key.clone());
-                                    self.sql_snapshot_index = Some(index);
-                                    self.sql_delta_filter = SnapshotDeltaFilter::All;
-                                    self.sql_delta_search.clear();
-                                    self.data_mode = DataMode::SqlRegressions;
-                                    self.page = WorkspacePage::Data;
-                                    self.show_timeline = false;
+                                    self.open_sql_snapshot_review(index);
+                                }
+                                if let Some(source_key) = source_to_highlight {
+                                    self.highlight_sql_source_on_chart(source_key);
                                 }
                                 if let Some(job_id) = automation_job_to_open {
                                     self.edit_automation_job(job_id);
@@ -9591,6 +12683,7 @@ impl eframe::App for App {
                                     self.sql_snapshot_source = sources.first().map(|(key, _, _, _)| key.clone());
                                 }
                                 if !sources.is_empty() {
+                                    let mut source_changed = false;
                                     ui.horizontal(|ui| {
                                         ui.label("Review saved series");
                                         egui::ComboBox::from_id_salt("sql_snapshot_source")
@@ -9604,14 +12697,22 @@ impl eframe::App for App {
                                             )
                                             .show_ui(ui, |ui| {
                                                 for (key, label, links, entities) in &sources {
-                                                    ui.selectable_value(
+                                                    let response = ui.selectable_value(
                                                         &mut self.sql_snapshot_source,
                                                         Some(key.clone()),
                                                         format!("{label} · {links} links · {entities} entities"),
                                                     );
+                                                    source_changed |= response.changed();
                                                 }
                                             });
                                     });
+                                    if source_changed {
+                                        self.sql_snapshot_index = None;
+                                        self.sql_snapshot_filter.clear();
+                                        self.sql_comparison_baseline_id = None;
+                                        self.sql_delta_filter = SnapshotDeltaFilter::All;
+                                        self.sql_delta_search.clear();
+                                    }
                                 }
                                 let source_key = self.sql_snapshot_source.as_deref();
                                 let latest_index = self.case.snapshots.iter().rposition(|snapshot| {
@@ -9622,7 +12723,6 @@ impl eframe::App for App {
                                         Some(snapshot.source_key.as_str()) == source_key
                                     })
                                 }).or(latest_index);
-                                let current_is_latest = selected_index == latest_index;
                                 let current_snapshot = selected_index.and_then(|index|self.case.snapshots.get(index)).cloned();
                                 let prior_snapshots: Vec<(usize, Uuid, String)> = selected_index
                                     .map(|current| {
@@ -9744,6 +12844,28 @@ impl eframe::App for App {
                                                 ui.add(egui::DragValue::new(maximum).range(0..=1_000_000));
                                             }
                                         });
+                                        ui.horizontal(|ui| {
+                                            let mut limit_properties = self
+                                                .automation_maximum_connection_property_changes
+                                                .is_some();
+                                            if ui
+                                                .checkbox(
+                                                    &mut limit_properties,
+                                                    "Limit relationship property changes",
+                                                )
+                                                .changed()
+                                            {
+                                                self.automation_maximum_connection_property_changes =
+                                                    limit_properties.then_some(0);
+                                            }
+                                            if let Some(maximum) = self
+                                                .automation_maximum_connection_property_changes
+                                                .as_mut()
+                                            {
+                                                ui.label("Maximum changed links");
+                                                ui.add(egui::DragValue::new(maximum).range(0..=1_000_000));
+                                            }
+                                        });
                                     });
                                 ui.horizontal(|ui|{if ui.button("Build query from schema").clicked(){self.build_sql_query_from_schema();}if ui.button("Validate query").clicked(){self.start_sql_validation();}if ui.button("Ingest SQL snapshot").clicked(){self.start_sql_ingestion();}});
                                 ui.horizontal(|ui| {
@@ -9763,11 +12885,8 @@ impl eframe::App for App {
                                         self.save_sql_as_automation_job();
                                     }
                                 });
-                                if self.sql_schema_templates.len() > 1 {
-                                    ui.horizontal(|ui| {
-                                        ui.label("Query source table or view");
-                                        self.show_sql_schema_template_picker(ui);
-                                    });
+                                if !self.sql_schema_templates.is_empty() || !self.sql_schema_objects.is_empty() {
+                                    self.show_sql_schema_template_picker(ui);
                                 }
                                 Self::show_sql_validation_preview(
                                     ui,
@@ -9781,12 +12900,28 @@ impl eframe::App for App {
                                     self.automation_maximum_connections,
                                     self.automation_maximum_regressions,
                                     self.automation_maximum_added_connections,
+                                    self.automation_maximum_connection_property_changes,
                                     self.automation_maximum_skipped_rows,
                                     &mut self.sql_validation_preview_regressions_only,
                                 );
                                 if let Some(current)=current_snapshot.clone() {
                                     let chart_source_key = current.source_key.clone();
                                     let chart_database_path = current.database_path.clone();
+                                    let source_job_id = self.case.automation_jobs.iter().find(|job| {
+                                        same_sql_series(
+                                            &job.database_path,
+                                            &job.series,
+                                            &current.database_path,
+                                            &current.series,
+                                            &self.case_path,
+                                        )
+                                    }).map(|job| job.id);
+                                    let source_job_configuration_changed = source_job_id
+                                        .and_then(|job_id| self.case.automation_jobs.iter().find(|job| job.id == job_id))
+                                        .is_some_and(|job| {
+                                            job.query.trim() != current.query.trim()
+                                                || !sql_parameters_match(&job.parameters, &current.parameters)
+                                        });
                                     let capture_label=if selected_index==latest_index{"Latest snapshot"}else{"Selected historical snapshot"};
                                     let skipped = if current.skipped_rows == 0 {
                                         String::new()
@@ -9796,32 +12931,7 @@ impl eframe::App for App {
                                     ui.label(format!("{capture_label} #{}: {} · {} · {} connections{skipped}",selected_index.map(|index|index+1).unwrap_or_default(),current.captured_at,current.series,current.connections.len()));
                                     ui.horizontal(|ui| {
                                         if ui.small_button("Highlight source on chart").clicked() {
-                                            self.sql_source_focus = Some(current.source_key.clone());
-                                            self.chart_focus_group = None;
-                                            self.path_result.clear();
-                                            let mut source_entities: Vec<Uuid> = self
-                                                .case
-                                                .links
-                                                .iter()
-                                                .filter(|link| {
-                                                    link.ingest_source.as_deref()
-                                                        == Some(current.source_key.as_str())
-                                                })
-                                                .flat_map(|link| [link.from, link.to])
-                                                .collect::<HashSet<_>>()
-                                                .into_iter()
-                                                .collect();
-                                            source_entities.sort_unstable();
-                                            if !source_entities.is_empty() {
-                                                self.chart_fit_entities = Some(source_entities);
-                                                self.chart_fit_path = None;
-                                            }
-                                            self.page = WorkspacePage::Chart;
-                                            self.show_timeline = false;
-                                            self.selected = None;
-                                            self.selected_link = None;
-                                            self.chart_focus = None;
-                                            self.chart_focus_link = None;
+                                            self.highlight_sql_source_on_chart(current.source_key.clone());
                                         }
                                         if self.sql_source_focus.as_deref() == Some(current.source_key.as_str()) {
                                             ui.label(egui::RichText::new("Source highlight is active").small().color(cyan));
@@ -9834,6 +12944,24 @@ impl eframe::App for App {
                                             self.connections_for_selected = false;
                                             self.selected = None;
                                             self.selected_link = None;
+                                        }
+                                        if let Some(job_id) = source_job_id {
+                                            if ui.small_button("Open SQL job").on_hover_text(
+                                                if source_job_configuration_changed {
+                                                    "Opens the current saved job. Its SQL query or parameters differ from this capture."
+                                                } else {
+                                                    "Open the saved automation job for this database and series."
+                                                },
+                                            ).clicked() {
+                                                self.edit_automation_job(job_id);
+                                                self.data_mode = DataMode::Automation;
+                                            }
+                                            if source_job_configuration_changed {
+                                                ui.colored_label(
+                                                    egui::Color32::from_rgb(236, 174, 83),
+                                                    "JOB CONFIG DIFFERS FROM CAPTURE",
+                                                );
+                                            }
                                         }
                                     });
                                     egui::CollapsingHeader::new("Captured SQL configuration")
@@ -9858,23 +12986,77 @@ impl eframe::App for App {
                                             ));
                                         });
                                     if let Some(base)=baseline {
+                                        let (query_changed, parameters_changed) =
+                                            snapshot_sql_configuration_changes(&base, &current);
+                                        if query_changed || parameters_changed {
+                                            let changed_parts = [
+                                                query_changed.then_some("query"),
+                                                parameters_changed.then_some("SQL parameters"),
+                                            ]
+                                            .into_iter()
+                                            .flatten()
+                                            .collect::<Vec<_>>()
+                                            .join(" and ");
+                                            ui.colored_label(
+                                                egui::Color32::from_rgb(236, 174, 83),
+                                                format!("SQL CONFIGURATION CHANGED · {changed_parts} differ from the selected baseline"),
+                                            );
+                                            egui::CollapsingHeader::new("Inspect baseline and current SQL inputs")
+                                                .id_salt(("sql_comparison_configuration", base.id, current.id))
+                                                .show(ui, |ui| {
+                                                    if query_changed {
+                                                        ui.label("Baseline query");
+                                                        let mut query = base.query.clone();
+                                                        ui.add(
+                                                            egui::TextEdit::multiline(&mut query)
+                                                                .desired_width(canvas_w - 30.0)
+                                                                .desired_rows(3)
+                                                                .code_editor()
+                                                                .interactive(false),
+                                                        );
+                                                        ui.label("Current query");
+                                                        let mut query = current.query.clone();
+                                                        ui.add(
+                                                            egui::TextEdit::multiline(&mut query)
+                                                                .desired_width(canvas_w - 30.0)
+                                                                .desired_rows(3)
+                                                                .code_editor()
+                                                                .interactive(false),
+                                                        );
+                                                    }
+                                                    if parameters_changed {
+                                                        ui.label(format!(
+                                                            "Baseline parameters: {}",
+                                                            if base.parameters.is_empty() { "(none)".to_owned() } else { format_sql_parameters(&base.parameters) }
+                                                        ));
+                                                        ui.label(format!(
+                                                            "Current parameters: {}",
+                                                            if current.parameters.is_empty() { "(none)".to_owned() } else { format_sql_parameters(&current.parameters) }
+                                                        ));
+                                                    }
+                                                });
+                                        }
                                         let deltas=compare_snapshots(&base,&current);
                                         let count=|kind|deltas.iter().filter(|delta|delta.kinds.contains(&kind)).count();
                                         let removed=count(DeltaKind::Removed);
                                         let declined=count(DeltaKind::ConfidenceDeclined);
                                         let dates=count(DeltaKind::DateChanged);
+                                        let identity_changes=count(DeltaKind::EntityIdentityChanged);
+                                        let property_changes=count(DeltaKind::ConnectionAttributesChanged);
                                         let updated=count(DeltaKind::Updated);
                                         let direction=count(DeltaKind::DirectionChanged);
                                         let evidence=count(DeltaKind::EvidenceChanged);
                                         let source_notes=count(DeltaKind::SourceNotesChanged);
                                         let added=count(DeltaKind::Added);
                                         let increased=count(DeltaKind::ConfidenceIncreased);
-                                        ui.label(egui::RichText::new(format!("Baseline {} → current {} · {removed} removed · {declined} confidence declines · {dates} date changes · {updated} connection detail changes · {direction} direction changes · {evidence} evidence changes · {source_notes} source note changes · {added} added · {increased} confidence increases",base.captured_at,current.captured_at)).strong().color(if removed+declined>0{egui::Color32::from_rgb(238,139,115)}else{cyan}));
+                                        ui.label(egui::RichText::new(format!("Baseline {} → current {} · {removed} removed · {declined} confidence declines · {dates} date changes · {identity_changes} endpoint identity changes · {property_changes} relationship property changes · {updated} connection detail changes · {direction} direction changes · {evidence} evidence changes · {source_notes} source note changes · {added} added · {increased} confidence increases",base.captured_at,current.captured_at)).strong().color(if removed+declined>0{egui::Color32::from_rgb(238,139,115)}else{cyan}));
                                         ui.horizontal(|ui| {
                                             egui::ComboBox::from_id_salt("sql_delta_filter")
                                                 .selected_text(match self.sql_delta_filter {
                                                     SnapshotDeltaFilter::All => "All changes",
                                                     SnapshotDeltaFilter::Regressions => "Regressions",
+                                                    SnapshotDeltaFilter::EntityIdentity => "Entity identity",
+                                                    SnapshotDeltaFilter::ConnectionProperties => "Relationship properties",
                                                     SnapshotDeltaFilter::Direction => "Direction",
                                                     SnapshotDeltaFilter::Evidence => "Evidence",
                                                     SnapshotDeltaFilter::SourceNotes => "Source notes",
@@ -9883,6 +13065,8 @@ impl eframe::App for App {
                                                 .show_ui(ui, |ui| {
                                                     ui.selectable_value(&mut self.sql_delta_filter, SnapshotDeltaFilter::All, "All changes");
                                                     ui.selectable_value(&mut self.sql_delta_filter, SnapshotDeltaFilter::Regressions, "Regressions");
+                                                    ui.selectable_value(&mut self.sql_delta_filter, SnapshotDeltaFilter::EntityIdentity, "Entity identity");
+                                                    ui.selectable_value(&mut self.sql_delta_filter, SnapshotDeltaFilter::ConnectionProperties, "Relationship properties");
                                                     ui.selectable_value(&mut self.sql_delta_filter, SnapshotDeltaFilter::Direction, "Direction");
                                                     ui.selectable_value(&mut self.sql_delta_filter, SnapshotDeltaFilter::Evidence, "Evidence");
                                                     ui.selectable_value(&mut self.sql_delta_filter, SnapshotDeltaFilter::SourceNotes, "Source notes");
@@ -9899,10 +13083,13 @@ impl eframe::App for App {
                                         if ui.button("Export comparison CSV/TSV").clicked() {
                                             self.export_sql_comparison(&base, &current);
                                         }
+                                        if ui.button("Export full series CSV/TSV").clicked() {
+                                            self.export_sql_series(&current.source_key);
+                                        }
                                         egui::ScrollArea::both().show(ui,|ui|egui::Grid::new("sql_regression_table").striped(true).show(ui,|ui|{
-                                            for heading in ["CHANGE","CONNECTION","CONFIDENCE","DATE","EVIDENCE","NOTES","CHART"]{ui.label(egui::RichText::new(heading).small().strong().color(cyan));}ui.end_row();
+                                            for heading in ["CHANGE","CONNECTION","CONFIDENCE","DATE","PROPERTIES","EVIDENCE","NOTES","CHART"]{ui.label(egui::RichText::new(heading).small().strong().color(cyan));}ui.end_row();
                                             for delta in visible_deltas {
-                                                let change=delta.kinds.iter().map(|kind|match kind{DeltaKind::Removed=>"REMOVED",DeltaKind::ConfidenceDeclined=>"CONFIDENCE DOWN",DeltaKind::DateChanged=>"DATE CHANGED",DeltaKind::Updated=>"CONNECTION DETAILS",DeltaKind::DirectionChanged=>"DIRECTION CHANGED",DeltaKind::EvidenceChanged=>"EVIDENCE CHANGED",DeltaKind::SourceNotesChanged=>"SOURCE NOTES CHANGED",DeltaKind::Added=>"ADDED",DeltaKind::ConfidenceIncreased=>"CONFIDENCE UP"}).collect::<Vec<_>>().join(" · ");
+                                                let change=delta.kinds.iter().map(|kind|match kind{DeltaKind::Removed=>"REMOVED",DeltaKind::ConfidenceDeclined=>"CONFIDENCE DOWN",DeltaKind::DateChanged=>"DATE CHANGED",DeltaKind::EntityIdentityChanged=>"ENTITY ID CHANGED",DeltaKind::ConnectionAttributesChanged=>"RELATIONSHIP PROPERTIES CHANGED",DeltaKind::Updated=>"CONNECTION DETAILS",DeltaKind::DirectionChanged=>"DIRECTION CHANGED",DeltaKind::EvidenceChanged=>"EVIDENCE CHANGED",DeltaKind::SourceNotesChanged=>"SOURCE NOTES CHANGED",DeltaKind::Added=>"ADDED",DeltaKind::ConfidenceIncreased=>"CONFIDENCE UP"}).collect::<Vec<_>>().join(" · ");
                                                 let previous=delta.previous_connection.as_ref();
                                                 let current=(!delta.kinds.contains(&DeltaKind::Removed)).then_some(&delta.connection);
                                                 let describe_connection=|fact:&ConnectionFact|format!("{} [{}] — {} — {} [{}] {}",fact.source,fact.source_type,fact.relationship,fact.target,fact.target_type,if fact.directed{"→"}else{"↔"});
@@ -9912,17 +13099,24 @@ impl eframe::App for App {
                                                 let current_evidence=current.map(|fact|fact.source_reference.as_str()).filter(|value|!value.is_empty()).unwrap_or("—");
                                                 let previous_notes=previous.map(|fact|fact.notes.as_str()).filter(|value|!value.is_empty()).unwrap_or("—");
                                                 let current_notes=current.map(|fact|fact.notes.as_str()).filter(|value|!value.is_empty()).unwrap_or("—");
+                                                let previous_attributes=previous.map(|fact|format!("source [{}] · target [{}] · relationship [{}]",format_sql_attributes(&fact.source_attributes),format_sql_attributes(&fact.target_attributes),format_sql_attributes(&fact.attributes))).unwrap_or_else(||"—".into());
+                                                let current_attributes=current.map(|fact|format!("source [{}] · target [{}] · relationship [{}]",format_sql_attributes(&fact.source_attributes),format_sql_attributes(&fact.target_attributes),format_sql_attributes(&fact.attributes))).unwrap_or_else(||"—".into());
                                                 ui.label(change);
                                                 ui.label(format!("{previous_connection} → {current_connection}"));
                                                 ui.label(format!("{} → {}",delta.previous_confidence.map(|value|value.to_string()).unwrap_or_else(||"—".into()),current.map(|fact|fact.confidence.to_string()).unwrap_or_else(||"—".into())));
                                                 ui.label(format!("{} → {}",delta.previous_date.as_deref().unwrap_or("—"),current.map(|fact|fact.date.as_str()).filter(|value|!value.is_empty()).unwrap_or("—")));
                                                 ui.label(format!("{previous_evidence} → {current_evidence}"));
+                                                ui.label(format!("{previous_attributes} → {current_attributes}"));
                                                 ui.label(format!("{previous_notes} → {current_notes}"));
-                                                if current_is_latest
-                                                    && let Some(fact) = current
-                                                    && ui.small_button("Show").clicked()
+                                                if let Some(fact) = current
+                                                    && let Some(index) = snapshot_case_link_index(
+                                                        &self.case,
+                                                        &chart_database_path,
+                                                        &chart_source_key,
+                                                        fact,
+                                                    )
                                                 {
-                                                    if let Some(index) = snapshot_case_link_index(&self.case, &chart_database_path, &chart_source_key, fact) {
+                                                    if ui.small_button("Show").clicked() {
                                                         self.selected = None;
                                                         self.selected_link = Some(index);
                                                         self.chart_focus = None;
@@ -9934,19 +13128,95 @@ impl eframe::App for App {
                                                         self.path_result.clear();
                                                         self.page = WorkspacePage::Chart;
                                                         self.show_timeline = false;
-                                                    } else {
-                                                        self.status = "CURRENT CONNECTION IS NOT PRESENT ON THE CHART".into();
                                                     }
+                                                } else if current.is_some() {
+                                                    ui.label("Not on chart");
                                                 } else {
-                                                    ui.label(if current.is_some() { "Historical" } else { "—" });
+                                                    ui.label("Removed");
                                                 }
                                                 ui.end_row();
                                             }
                                         }));
                                     } else {ui.label(egui::RichText::new("This is the baseline snapshot for its database and series. Ingest the next period with the same series to compare connections.").color(muted));}
                                 } else {ui.label(egui::RichText::new("No SQL snapshots yet. Ingest a baseline result, then ingest a later result using the same database and series label.").color(muted));}
-                                ui.add_space(8.0);ui.label(egui::RichText::new("SNAPSHOT HISTORY · select a capture to compare").small().strong().color(cyan));
-                                for (index,snapshot) in self.case.snapshots.iter().enumerate().rev(){if self.sql_snapshot_source.as_deref()==Some(snapshot.source_key.as_str()){let skipped=if snapshot.skipped_rows==0{String::new()}else{format!(" · {} skipped",snapshot.skipped_rows)};if ui.selectable_label(selected_index==Some(index),format!("Snapshot #{} · {} · {} · {} connections{skipped} · {}",index+1,snapshot.captured_at,snapshot.series,snapshot.connections.len(),snapshot.database_path)).clicked(){self.sql_snapshot_index=Some(index);}}}
+                                ui.add_space(8.0);
+                                ui.label(egui::RichText::new("SNAPSHOT HISTORY · select a capture to compare").small().strong().color(cyan));
+                                ui.horizontal(|ui| {
+                                    ui.add(egui::TextEdit::singleline(&mut self.sql_snapshot_filter)
+                                        .hint_text("Search capture date, ID, query, or parameters")
+                                        .desired_width(300.0));
+                                    if !self.sql_snapshot_filter.is_empty()
+                                        && ui.small_button("Clear search").clicked()
+                                    {
+                                        self.sql_snapshot_filter.clear();
+                                    }
+                                });
+                                let snapshot_filter = self.sql_snapshot_filter.trim().to_lowercase();
+                                let matching_snapshots: Vec<(usize, &ConnectionSnapshot)> = self
+                                    .case
+                                    .snapshots
+                                    .iter()
+                                    .enumerate()
+                                    .rev()
+                                    .filter(|(_, snapshot)| {
+                                        self.sql_snapshot_source.as_deref()
+                                            == Some(snapshot.source_key.as_str())
+                                            && (snapshot_filter.is_empty()
+                                                || format!(
+                                                    "{} {} {} {} {} {} {} {} {}",
+                                                    snapshot.id,
+                                                    snapshot.captured_at,
+                                                    snapshot.series,
+                                                    snapshot.database_path,
+                                                    snapshot.query,
+                                                    format_sql_parameters(&snapshot.parameters),
+                                                    snapshot.connections.len(),
+                                                    snapshot.skipped_rows,
+                                                    snapshot_result_quality(snapshot),
+                                                )
+                                                .to_lowercase()
+                                                .contains(&snapshot_filter))
+                                    })
+                                    .collect();
+                                let source_snapshot_count = self.case.snapshots.iter().filter(|snapshot| {
+                                    self.sql_snapshot_source.as_deref() == Some(snapshot.source_key.as_str())
+                                }).count();
+                                ui.label(egui::RichText::new(format!(
+                                    "{} of {} captures",
+                                    matching_snapshots.len(),
+                                    source_snapshot_count
+                                )).small().color(muted));
+                                if !snapshot_filter.is_empty()
+                                    && selected_index.is_some_and(|selected| {
+                                        matching_snapshots.iter().all(|(index, _)| *index != selected)
+                                    })
+                                {
+                                    ui.label(egui::RichText::new(format!(
+                                        "Comparison above remains on Snapshot #{}; it does not match this search.",
+                                        selected_index.unwrap_or_default() + 1
+                                    )).small().color(muted));
+                                }
+                                for (index, snapshot) in matching_snapshots {
+                                    let skipped = if snapshot.skipped_rows == 0 {
+                                        String::new()
+                                    } else {
+                                        format!(" · {} skipped", snapshot.skipped_rows)
+                                    };
+                                    if ui.selectable_label(
+                                        selected_index == Some(index),
+                                        format!(
+                                            "Snapshot #{} · {} · {} · {} · {} connections{skipped} · {}",
+                                            index + 1,
+                                            snapshot.captured_at,
+                                            snapshot_result_quality_label(snapshot_result_quality(snapshot)),
+                                            snapshot.series,
+                                            snapshot.connections.len(),
+                                            snapshot.database_path
+                                        ),
+                                    ).clicked() {
+                                        self.sql_snapshot_index = Some(index);
+                                    }
+                                }
                                 return;
                             }
                             ui.horizontal(|ui|{ui.add(egui::TextEdit::singleline(&mut self.data_query).hint_text(if self.data_mode==DataMode::Entities{"Filter entities…"}else{"Filter connections…"}).desired_width(240.0));if self.data_mode==DataMode::Relationships{let selected_entity=self.selected.is_some_and(|id|self.case.entities.iter().any(|entity|entity.id==id));ui.add_enabled(selected_entity,egui::Checkbox::new(&mut self.connections_for_selected,"Selected entity connections"));egui::ComboBox::from_id_salt("link_sort").selected_text(match self.link_sort {LinkSort::RecordId=>"Sort: record ID",LinkSort::Source=>"Sort: source",LinkSort::Date=>"Sort: date",LinkSort::Relationship=>"Sort: relationship",LinkSort::Target=>"Sort: target",LinkSort::Confidence=>"Sort: confidence",LinkSort::SourceReference=>"Sort: source reference"}).show_ui(ui,|ui|{ui.selectable_value(&mut self.link_sort,LinkSort::RecordId,"Record ID");ui.selectable_value(&mut self.link_sort,LinkSort::Source,"Source");ui.selectable_value(&mut self.link_sort,LinkSort::Relationship,"Relationship");ui.selectable_value(&mut self.link_sort,LinkSort::Target,"Target");ui.selectable_value(&mut self.link_sort,LinkSort::Date,"Date");ui.selectable_value(&mut self.link_sort,LinkSort::Confidence,"Confidence");ui.selectable_value(&mut self.link_sort,LinkSort::SourceReference,"Source reference");});}});
@@ -9959,23 +13229,23 @@ impl eframe::App for App {
                                     .iter()
                                     .rev()
                                     .find(|snapshot| snapshot.source_key == source_filter);
+                                let has_source_snapshot = source_snapshot.is_some();
                                 let label = source_snapshot
                                     .map(|snapshot| format!("{} · {}", snapshot.series, snapshot.database_path))
                                     .unwrap_or_else(|| source_filter.clone());
                                 ui.horizontal(|ui| {
                                     ui.label(egui::RichText::new(format!("Data source filter · {label}")).small().color(cyan));
-                                    if source_snapshot.is_some()
+                                    if has_source_snapshot
                                         && ui.small_button("Review SQL snapshots").clicked()
                                     {
-                                        self.sql_snapshot_source = Some(source_filter.clone());
-                                        self.sql_snapshot_index = self
+                                        if let Some(index) = self
                                             .case
                                             .snapshots
                                             .iter()
-                                            .rposition(|snapshot| snapshot.source_key == source_filter);
-                                        self.sql_delta_filter = SnapshotDeltaFilter::All;
-                                        self.sql_delta_search.clear();
-                                        self.data_mode = DataMode::SqlRegressions;
+                                            .rposition(|snapshot| snapshot.source_key == source_filter)
+                                        {
+                                            self.open_sql_snapshot_review(index);
+                                        }
                                     }
                                     if ui.small_button("Clear source filter").clicked() {
                                         self.data_source_filter = None;
@@ -9991,16 +13261,23 @@ impl eframe::App for App {
                                         entities.retain(|entity| source_entities.contains(&entity.id));
                                     }
                                     entities.sort_by(|a,b|match self.entity_sort{EntitySort::Name=>a.name.to_lowercase().cmp(&b.name.to_lowercase()),EntitySort::Type=>a.kind.to_lowercase().cmp(&b.kind.to_lowercase()),EntitySort::Connections=>connected_counts.get(&b.id).copied().unwrap_or_default().cmp(&connected_counts.get(&a.id).copied().unwrap_or_default())});
-                                    for entity in entities{if !format!("{} {} {} {:?} {:?}",entity.name,entity.kind,entity.detail,entity.attributes,entity.aliases).to_lowercase().contains(&self.data_query.to_lowercase()){continue;}let selected=self.selected==Some(entity.id);if ui.selectable_label(selected,&entity.name).clicked(){self.selected=Some(entity.id);self.selected_link=None;}ui.label(&entity.kind);ui.label(&entity.detail);let connection_count=connected_counts.get(&entity.id).copied().unwrap_or_default();if ui.selectable_label(false,connection_count.to_string()).on_hover_text("Open this entity's connections").clicked(){self.selected=Some(entity.id);self.selected_link=None;self.connections_for_selected=true;self.data_mode=DataMode::Relationships;}ui.label(entity.aliases.join(" · "));ui.label(entity.merged_records.len().to_string());ui.label(entity.attributes.iter().map(|(k,v)|format!("{k}: {v}")).collect::<Vec<_>>().join(" · "));ui.end_row();}
+                                    for entity in entities{if !entity_matches_search(entity, &self.data_query){continue;}let selected=self.selected==Some(entity.id);if ui.selectable_label(selected,&entity.name).clicked(){self.selected=Some(entity.id);self.selected_link=None;}ui.label(&entity.kind);ui.label(&entity.detail);let connection_count=connected_counts.get(&entity.id).copied().unwrap_or_default();if ui.selectable_label(false,connection_count.to_string()).on_hover_text("Open this entity's connections").clicked(){self.selected=Some(entity.id);self.selected_link=None;self.connections_for_selected=true;self.data_mode=DataMode::Relationships;}ui.label(entity.aliases.join(" · "));ui.label(entity.merged_records.len().to_string());ui.label(entity.attributes.iter().map(|(k,v)|format!("{k}: {v}")).collect::<Vec<_>>().join(" · ")).on_hover_text(entity_attribute_provenance(entity, &self.case.snapshots));ui.end_row();}
                                 }));
                                 return;
                             }
                             if self.connections_for_selected && self.selected.is_none_or(|id|!self.case.entities.iter().any(|entity|entity.id==id)){self.connections_for_selected=false;}
                             let scoped_to=self.connections_for_selected.then_some(self.selected).flatten();
-                            let filter=self.data_query.trim().to_lowercase();
                             let entity_names:HashMap<Uuid,(String,String)>=self.case.entities.iter().map(|entity|(entity.id,(entity.name.clone(),entity.kind.clone()))).collect();
+                            let entity_search_index: HashMap<Uuid, String> = if self.data_query.trim().is_empty() {
+                                HashMap::new()
+                            } else {
+                                self.case.entities.iter()
+                                    .map(|entity| (entity.id, entity_search_text(entity).to_lowercase()))
+                                    .collect()
+                            };
+                            let data_search_terms = chart_search_terms(&self.data_query);
                             let mut indices:Vec<usize>=(0..self.case.links.len()).collect();
-                            indices.retain(|i|{let link=&self.case.links[*i];if scoped_to.is_some_and(|id|link.from!=id&&link.to!=id){return false;}if self.data_source_filter.as_deref().is_some_and(|source|link.ingest_source.as_deref()!=Some(source)){return false;}let endpoint=|id|entity_names.get(&id).map(|(name,kind)|format!("{name} {kind}")).unwrap_or_else(||"(missing)".into());let source=endpoint(link.from);let target=endpoint(link.to);let direction=if link.directed{"directed →"}else{"undirected ↔"};let confidence=link.confidence.to_string();format!("{} {} {} {} {} {} {} {} {} {} {}",link.connection_id,source,link.label,target,link.date,confidence,direction,link.source_reference,link.source_notes,link.notes,link.ingest_source.as_deref().unwrap_or("manual")).to_lowercase().contains(&filter)});
+                            indices.retain(|i|{let link=&self.case.links[*i];if scoped_to.is_some_and(|id|link.from!=id&&link.to!=id){return false;}if self.data_source_filter.as_deref().is_some_and(|source|link.ingest_source.as_deref()!=Some(source)){return false;}link_matches_search(link,&entity_search_index,&data_search_terms)});
                             indices.sort_by(|a,b|{let a=&self.case.links[*a];let b=&self.case.links[*b];let from=|link:&Link|entity_names.get(&link.from).map(|(name,_)|name.to_lowercase()).unwrap_or_default();let to=|link:&Link|entity_names.get(&link.to).map(|(name,_)|name.to_lowercase()).unwrap_or_default();match self.link_sort {LinkSort::RecordId=>a.connection_id.to_lowercase().cmp(&b.connection_id.to_lowercase()),LinkSort::Source=>from(a).cmp(&from(b)),LinkSort::Date=>a.date.cmp(&b.date),LinkSort::Relationship=>a.label.to_lowercase().cmp(&b.label.to_lowercase()),LinkSort::Target=>to(a).cmp(&to(b)),LinkSort::Confidence=>b.confidence.cmp(&a.confidence),LinkSort::SourceReference=>a.source_reference.to_lowercase().cmp(&b.source_reference.to_lowercase())}.then_with(||a.connection_id.cmp(&b.connection_id)).then_with(||a.from.cmp(&b.from)).then_with(||a.to.cmp(&b.to))});
                             ui.horizontal(|ui|{ui.label(format!("{} link records",indices.len()));if let Some(id)=scoped_to{if let Some(entity)=self.case.entities.iter().find(|entity|entity.id==id){ui.label(format!("Connected to {} · {}",entity.name,entity.kind));}}ui.label("Select a row to inspect; use View on chart to locate its endpoints.");});
                             ui.horizontal(|ui|{ui.selectable_value(&mut self.link_table_view,LinkTableView::Connections,"Connections");ui.selectable_value(&mut self.link_table_view,LinkTableView::LinkRecords,"Link records");});
@@ -10030,8 +13307,8 @@ impl eframe::App for App {
                                             let mut relationships:Vec<String>=group.link_indices.iter().filter_map(|index|self.case.links.get(*index).map(|link|link.label.clone())).collect();relationships.sort_by_key(|label|label.to_lowercase());relationships.dedup_by(|a,b|a.eq_ignore_ascii_case(b));
                                             egui::CollapsingHeader::new(format!("{first}  ↔  {second}")).id_salt((group.first,group.second)).show(ui,|ui|{
                                                 egui::Grid::new(("connection_records",group.first,group.second)).striped(true).show(ui,|ui|{
-                                                    for heading in ["RECORD ID","RELATIONSHIP","DATE","CONFIDENCE","DIRECTION","SOURCE REFERENCE","SOURCE NOTES","ANALYST NOTES","INGEST SOURCE"]{ui.label(egui::RichText::new(heading).small().strong().color(cyan));}ui.end_row();
-                                                    for index in &group.link_indices{if let Some(link)=self.case.links.get(*index){let selected=self.selected_link==Some(*index);let confidence=link.confidence.to_string();let ingest_source=link.ingest_source.as_deref().unwrap_or("Manual");let values=[if link.connection_id.is_empty(){"(no ID)"}else{&link.connection_id},&link.label,&link.date,&confidence,if link.directed{"Directed →"}else{"Undirected ↔"},&link.source_reference,&link.source_notes,&link.notes,ingest_source];let mut clicked=false;for value in values{if ui.selectable_label(selected,value).clicked(){clicked=true;}}if clicked{self.selected_link=Some(*index);self.selected=None;self.chart_focus=None;self.chart_focus_link=None;}ui.end_row();}}
+                                                    for heading in ["RECORD ID","RELATIONSHIP","DATE","CONFIDENCE","DIRECTION","PROPERTIES","SOURCE REFERENCE","SOURCE NOTES","ANALYST NOTES","INGEST SOURCE"]{ui.label(egui::RichText::new(heading).small().strong().color(cyan));}ui.end_row();
+                                                    for index in &group.link_indices{if let Some(link)=self.case.links.get(*index){let selected=self.selected_link==Some(*index);let confidence=link.confidence.to_string();let ingest_source=link.ingest_source.as_deref().unwrap_or("Manual");let properties=format_sql_attributes(&link.attributes);let values=[if link.connection_id.is_empty(){"(no ID)"}else{&link.connection_id},&link.label,&link.date,&confidence,if link.directed{"Directed →"}else{"Undirected ↔"},&properties,&link.source_reference,&link.source_notes,&link.notes,ingest_source];let mut clicked=false;for value in values{if ui.selectable_label(selected,value).clicked(){clicked=true;}}if clicked{self.selected_link=Some(*index);self.selected=None;self.chart_focus=None;self.chart_focus_link=None;}ui.end_row();}}
                                                 });
                                             });
                                             ui.label(group.link_indices.len().to_string());ui.label(relationships.join(" · "));ui.end_row();
@@ -10042,8 +13319,8 @@ impl eframe::App for App {
                             }
                             egui::ScrollArea::both().auto_shrink([false,false]).show(ui,|ui|{
                                 egui::Grid::new("links_table").striped(true).min_col_width(72.0).show(ui,|ui|{
-                                    for h in ["RECORD ID","SOURCE ENTITY","RELATIONSHIP","TARGET ENTITY","DATE","CONFIDENCE","DIRECTION","SOURCE REFERENCE","SOURCE NOTES","ANALYST NOTES","INGEST SOURCE"] {ui.label(egui::RichText::new(h).small().strong().color(cyan));}ui.end_row();
-                                    for i in indices {let link=&self.case.links[i];let from_label=entity_names.get(&link.from).map(|(name,kind)|format!("{name} · {kind}")).unwrap_or_else(||"(missing)".into());let to_label=entity_names.get(&link.to).map(|(name,kind)|format!("{name} · {kind}")).unwrap_or_else(||"(missing)".into());let selected=self.selected_link==Some(i);let id_label=if link.connection_id.is_empty(){"(no ID)"}else{&link.connection_id};let cells=[id_label.to_owned(),from_label,link.label.clone(),to_label,link.date.clone(),link.confidence.to_string(),if link.directed{"Directed →".into()}else{"Undirected ↔".into()},link.source_reference.clone(),link.source_notes.clone(),link.notes.clone(),link.ingest_source.clone().unwrap_or_else(||"Manual".into())];let mut row_clicked=false;for (column,value) in cells.iter().enumerate(){let response=ui.selectable_label(selected,value);if response.clicked(){row_clicked=true;}if column==8&&!link.source_notes.is_empty(){response.on_hover_text(&link.source_notes);}else if column==9&&!link.notes.is_empty(){response.on_hover_text(&link.notes);}else if column==10&&link.ingest_source.is_some(){response.on_hover_text(link.ingest_source.as_deref().unwrap_or_default());}}if row_clicked{self.selected_link=Some(i);self.selected=None;self.chart_focus=None;self.chart_focus_link=None;}ui.end_row();}
+                                    for h in ["RECORD ID","SOURCE ENTITY","RELATIONSHIP","TARGET ENTITY","DATE","CONFIDENCE","DIRECTION","PROPERTIES","SOURCE REFERENCE","SOURCE NOTES","ANALYST NOTES","INGEST SOURCE"] {ui.label(egui::RichText::new(h).small().strong().color(cyan));}ui.end_row();
+                                    for i in indices {let link=&self.case.links[i];let from_label=entity_names.get(&link.from).map(|(name,kind)|format!("{name} · {kind}")).unwrap_or_else(||"(missing)".into());let to_label=entity_names.get(&link.to).map(|(name,kind)|format!("{name} · {kind}")).unwrap_or_else(||"(missing)".into());let selected=self.selected_link==Some(i);let id_label=if link.connection_id.is_empty(){"(no ID)"}else{&link.connection_id};let cells=[id_label.to_owned(),from_label,link.label.clone(),to_label,link.date.clone(),link.confidence.to_string(),if link.directed{"Directed →".into()}else{"Undirected ↔".into()},format_sql_attributes(&link.attributes),link.source_reference.clone(),link.source_notes.clone(),link.notes.clone(),link.ingest_source.clone().unwrap_or_else(||"Manual".into())];let mut row_clicked=false;for (column,value) in cells.iter().enumerate(){let response=ui.selectable_label(selected,value);if response.clicked(){row_clicked=true;}if column==9&&!link.source_notes.is_empty(){response.on_hover_text(&link.source_notes);}else if column==10&&!link.notes.is_empty(){response.on_hover_text(&link.notes);}else if column==11&&link.ingest_source.is_some(){response.on_hover_text(link.ingest_source.as_deref().unwrap_or_default());}}if row_clicked{self.selected_link=Some(i);self.selected=None;self.chart_focus=None;self.chart_focus_link=None;}ui.end_row();}
                                 });
                             });
                             return;
@@ -10102,11 +13379,11 @@ impl eframe::App for App {
                             .enumerate()
                             .map(|(index, entity)| (entity.id, index))
                             .collect();
-                        let path_edges: HashSet<(Uuid, Uuid)> = self
-                            .path_result
-                            .windows(2)
-                            .map(|pair| (pair[0], pair[1]))
-                            .collect();
+                        let path_link_indices: HashSet<usize> = if self.path_result.is_empty() {
+                            HashSet::new()
+                        } else {
+                            self.path_link_result.iter().copied().collect()
+                        };
                         let path_entities: HashSet<Uuid> = self.path_result.iter().copied().collect();
                         let focused_source_entities = self
                             .sql_source_focus
@@ -10145,7 +13422,7 @@ impl eframe::App for App {
                             {
                                 let a = &self.case.entities[a_index];
                                 let b = &self.case.entities[b_index];
-                                let ca=center(a);let cb=center(b);let in_path=path_edges.contains(&(link.from,link.to))||(!link.directed&&path_edges.contains(&(link.to,link.from)));let in_source=self.sql_source_focus.as_deref()==link.ingest_source.as_deref();let in_group=self.chart_focus_group.as_ref().is_some_and(|group|group.contains(&link.from)||group.contains(&link.to));let in_time=timeline_range.is_none_or(|(start,end)|parse_iso_date_ordinal(&link.date).is_some_and(|date|(start..=end).contains(&date)));let col=if self.selected_link==Some(link_index){cyan}else if !in_time{egui::Color32::from_rgb(24,35,43)}else if in_path{egui::Color32::from_rgb(236,174,83)}else if in_source{egui::Color32::from_rgb(91,190,178)}else if in_group{egui::Color32::from_rgb(161,132,218)}else if has_source_focus||has_group_focus{egui::Color32::from_rgb(35,52,63)}else{egui::Color32::from_rgb(72,104,120)};
+                                let ca=center(a);let cb=center(b);let in_path=path_link_indices.contains(&link_index);let in_source=self.sql_source_focus.as_deref()==link.ingest_source.as_deref();let in_group=self.chart_focus_group.as_ref().is_some_and(|group|group.contains(&link.from)||group.contains(&link.to));let in_time=timeline_range.is_none_or(|(start,end)|parse_iso_date_ordinal(&link.date).is_some_and(|date|(start..=end).contains(&date)));let col=if self.selected_link==Some(link_index){cyan}else if !in_time{egui::Color32::from_rgb(24,35,43)}else if in_path{egui::Color32::from_rgb(236,174,83)}else if in_source{egui::Color32::from_rgb(91,190,178)}else if in_group{egui::Color32::from_rgb(161,132,218)}else if has_source_focus||has_group_focus{egui::Color32::from_rgb(35,52,63)}else{egui::Color32::from_rgb(72,104,120)};
                                 let points = connection_curve_points(
                                     ca,
                                     cb,
@@ -10393,6 +13670,9 @@ impl eframe::App for App {
                                     {
                                         self.selected = Some(entity.id);
                                         self.selected_link = None;
+                                        if entity.position_locked {
+                                            self.status = "ENTITY POSITION IS LOCKED · unlock it in Data before moving it".into();
+                                        }
                                     } else {
                                         self.selected = None;
                                         self.chart_pan_origin = self.chart_pan;
@@ -10415,7 +13695,7 @@ impl eframe::App for App {
                                         self.timeline_range = Some((anchor.min(day), anchor.max(day)));
                                     }
                                 } else if let Some(id) = self.selected {
-                                    if let Some(entity) = self.case.entities.iter_mut().find(|entity| entity.id == id) {
+                                    if let Some(entity) = self.case.entities.iter_mut().find(|entity| entity.id == id && !entity.position_locked) {
                                         let local = (pos - rect.center() - self.chart_pan) / self.chart_zoom + rect.size() * 0.5;
                                         entity.x = (local.x / rect.width()).clamp(0.05, 0.95);
                                         entity.y = (local.y / rect.height()).clamp(0.08, 0.92);
@@ -10461,7 +13741,10 @@ impl eframe::App for App {
                                     if timeline_date_domain(&self.case.links).is_some() {
                                         "DRAG ACROSS THE AXIS TO FILTER THE CHART".into()
                                     } else {
-                                        "APPROXIMATE ORDER · DATE RANGE FILTER UNAVAILABLE".into()
+                                        format!(
+                                            "APPROXIMATE ORDER · RANGE FILTER NEEDS VALID ISO DATES ON ALL LINKS · {} UNDATED",
+                                            timeline_undated_count(&self.case.links)
+                                        )
                                     }
                                 }),
                                 egui::FontId::proportional(8.0),
@@ -10471,7 +13754,10 @@ impl eframe::App for App {
                             p.text(clear_rect.center(), egui::Align2::CENTER_CENTER, "CLEAR RANGE", egui::FontId::proportional(7.0), if self.timeline_range.is_some() { cyan } else { muted });
                             let y=tr.center().y+5.0;p.line_segment([egui::pos2(tr.left()+25.0,y),egui::pos2(tr.right()-25.0,y)],(1.0,muted));
                             let timeline_events = timeline_event_positions(&self.case.links,tr);
-                            if let Some((first, last)) = timeline_date_bounds(&self.case.links) {
+                            if timeline_date_domain(&self.case.links).is_some()
+                                && let Some((first, last)) =
+                                    timeline_date_bounds(&self.case.links)
+                            {
                                 p.text(egui::pos2(tr.left()+25.0,tr.bottom()-6.0),egui::Align2::LEFT_BOTTOM,first,egui::FontId::proportional(8.0),muted);
                                 p.text(egui::pos2(tr.right()-25.0,tr.bottom()-6.0),egui::Align2::RIGHT_BOTTOM,last,egui::FontId::proportional(8.0),muted);
                             } else {
@@ -10740,19 +14026,491 @@ impl eframe::App for App {
                             });
                             ui.label(egui::RichText::new(if group.len() > 3 { format!("{names} · +{}", group.len() - 3) } else { names }).small().color(muted));
                         }
-                        ui.add_space(16.0);ui.label(egui::RichText::new("SHORTEST PATH").size(9.0).strong().color(cyan));
-                        egui::ComboBox::from_id_salt("path_start").selected_text(self.path_start.and_then(|id|self.case.entities.iter().find(|e|e.id==id).map(|e|format!("{} · {}",e.name,e.kind))).unwrap_or_else(||"Start entity".into())).show_ui(ui,|ui|{for e in &self.case.entities{ui.selectable_value(&mut self.path_start,Some(e.id),format!("{} · {}",e.name,e.kind));}});
-                        egui::ComboBox::from_id_salt("path_end").selected_text(self.path_end.and_then(|id|self.case.entities.iter().find(|e|e.id==id).map(|e|format!("{} · {}",e.name,e.kind))).unwrap_or_else(||"End entity".into())).show_ui(ui,|ui|{for e in &self.case.entities{ui.selectable_value(&mut self.path_end,Some(e.id),format!("{} · {}",e.name,e.kind));}});
-                        if ui.button("Analyze path").clicked(){self.analyze_path();}
-                        if !self.path_result.is_empty(){let labels:Vec<_>=self.path_result.iter().filter_map(|id|self.case.entities.iter().find(|e|e.id==*id).map(|e|format!("{} · {}",e.name,e.kind))).collect();ui.label(egui::RichText::new(labels.join(" → ")).small().color(egui::Color32::from_rgb(236,174,83)));ui.horizontal(|ui|{if ui.small_button("Show path on chart").clicked(){self.chart_fit_path=Some(self.path_result.clone());self.chart_fit_entities=None;self.chart_focus=None;self.chart_focus_link=None;self.chart_focus_group=None;self.page=WorkspacePage::Chart;self.show_timeline=false;self.selected=self.path_result.first().copied();self.selected_link=None;}if ui.small_button("Clear path").clicked(){self.path_result.clear();self.chart_fit_path=None;self.chart_fit_entities=None;}});}
+                        ui.add_space(16.0);
+                        ui.label(egui::RichText::new("NETWORK BRIDGES").size(9.0).strong().color(cyan));
+                        if network_bridges.is_none() {
+                            ui.label(egui::RichText::new("Find entities whose removal would split their connected group.").small().color(muted));
+                            if ui.button("Find network bridges").clicked() {
+                                self.network_bridges = Some(std::sync::Arc::new(
+                                    network_articulation_points(&self.case),
+                                ));
+                            }
+                        }
+                        if let Some(bridges) = network_bridges.as_deref() {
+                            ui.horizontal(|ui| {
+                                ui.label(egui::RichText::new(format!(
+                                    "{} bridge entities · link direction ignored",
+                                    bridges.len()
+                                )).small().color(muted));
+                                if ui.small_button("Refresh").clicked() {
+                                    self.network_bridges = Some(std::sync::Arc::new(
+                                        network_articulation_points(&self.case),
+                                    ));
+                                }
+                            });
+                            for (entity_id, fragment_count) in bridges.iter().take(5) {
+                                let entity_name = self
+                                    .case
+                                    .entities
+                                    .iter()
+                                    .find(|entity| entity.id == *entity_id)
+                                    .map(|entity| format!("{} · {}", entity.name, entity.kind))
+                                    .unwrap_or_else(|| "(missing entity)".into());
+                                ui.horizontal(|ui| {
+                                    ui.label(entity_name);
+                                    ui.label(format!("{fragment_count} fragments if removed"));
+                                    if ui.small_button("Show neighborhood").clicked() {
+                                        let mut neighborhood = vec![*entity_id];
+                                        for link in &self.case.links {
+                                            if link.from == *entity_id {
+                                                neighborhood.push(link.to);
+                                            } else if link.to == *entity_id {
+                                                neighborhood.push(link.from);
+                                            }
+                                        }
+                                        neighborhood.sort_unstable();
+                                        neighborhood.dedup();
+                                        self.chart_fit_entities = Some(neighborhood.clone());
+                                        self.chart_fit_path = None;
+                                        self.chart_focus_group = Some(neighborhood.into_iter().collect());
+                                        self.chart_focus = None;
+                                        self.chart_focus_link = None;
+                                        self.path_result.clear();
+                                        self.sql_source_focus = None;
+                                        self.selected = Some(*entity_id);
+                                        self.selected_link = None;
+                                        self.page = WorkspacePage::Chart;
+                                        self.show_timeline = false;
+                                    }
+                                });
+                                ui.horizontal_wrapped(|ui| {
+                                    if ui.small_button("Use as path start").clicked() {
+                                        self.path_start = Some(*entity_id);
+                                        self.path_result.clear();
+                                    }
+                                    if ui.small_button("Use as path end").clicked() {
+                                        self.path_end = Some(*entity_id);
+                                        self.path_result.clear();
+                                    }
+                                });
+                                egui::CollapsingHeader::new("Inspect connection records")
+                                .id_salt(("network_bridge_records", entity_id))
+                                .show(ui, |ui| {
+                                    let incident_records: Vec<(usize, String, String)> = self
+                                        .case
+                                        .links
+                                        .iter()
+                                        .enumerate()
+                                        .filter(|(_, link)| {
+                                            link.from == *entity_id || link.to == *entity_id
+                                        })
+                                        .map(|(link_index, link)| {
+                                            let endpoint = |id| {
+                                                self.case
+                                                    .entities
+                                                    .iter()
+                                                    .find(|entity| entity.id == id)
+                                                    .map(|entity| format!("{} · {}", entity.name, entity.kind))
+                                                    .unwrap_or_else(|| "(missing entity)".into())
+                                            };
+                                            let (from, to, arrow) = if !link.directed {
+                                                (endpoint(link.from), endpoint(link.to), "↔")
+                                            } else if link.from == *entity_id {
+                                                (endpoint(link.from), endpoint(link.to), "→")
+                                            } else {
+                                                (endpoint(link.from), endpoint(link.to), "←")
+                                            };
+                                            let record_label = format!("{from} {arrow} {} {arrow} {to}", link.label);
+                                            let evidence = if link.source_reference.is_empty() {
+                                                "no evidence reference"
+                                            } else {
+                                                &link.source_reference
+                                            };
+                                            let notes = if link.source_notes.is_empty() {
+                                                "no source notes"
+                                            } else {
+                                                &link.source_notes
+                                            };
+                                            let details = format!(
+                                                "{} · confidence {} · ID {} · evidence {} · {}",
+                                                if link.date.is_empty() { "undated" } else { &link.date },
+                                                link.confidence,
+                                                if link.connection_id.is_empty() { "(none)" } else { &link.connection_id },
+                                                evidence,
+                                                notes,
+                                            );
+                                            (link_index, record_label, details)
+                                        })
+                                        .collect();
+                                    ui.label(egui::RichText::new(format!(
+                                        "{} links touch this entity; direction is shown but ignored for bridge detection.",
+                                        incident_records.len()
+                                    )).small().color(muted));
+                                    egui::ScrollArea::vertical()
+                                        .max_height(120.0)
+                                        .show(ui, |ui| {
+                                            for (link_index, label, details) in &incident_records {
+                                                if ui
+                                                    .selectable_label(
+                                                        self.selected_link == Some(*link_index),
+                                                        label,
+                                                    )
+                                                    .clicked()
+                                                {
+                                                    self.selected = None;
+                                                    self.selected_link = Some(*link_index);
+                                                    self.chart_focus = None;
+                                                    self.chart_focus_link = Some(*link_index);
+                                                    self.chart_focus_group = None;
+                                                    self.chart_fit_entities = None;
+                                                    self.chart_fit_path = None;
+                                                    self.path_result.clear();
+                                                    self.sql_source_focus = None;
+                                                    self.page = WorkspacePage::Chart;
+                                                    self.show_timeline = false;
+                                                }
+                                                ui.label(egui::RichText::new(details).small().color(muted));
+                                            }
+                                        });
+                                });
+                            }
+                        }
+                        ui.add_space(16.0);
+                        ui.label(egui::RichText::new("SHORTEST PATH").size(9.0).strong().color(cyan));
+                        let selected_entity_label = |selected: Option<Uuid>, placeholder: &str| {
+                            selected
+                                .and_then(|id| self.case.entities.iter().find(|entity| entity.id == id))
+                                .map(|entity| format!("{} · {}", entity.name, entity.kind))
+                                .unwrap_or_else(|| placeholder.into())
+                        };
+                        let mut path_endpoints_changed = false;
+                        egui::ComboBox::from_id_salt("path_start")
+                            .selected_text(selected_entity_label(self.path_start, "Start entity"))
+                            .show_ui(ui, |ui| {
+                                for entity in &self.case.entities {
+                                    path_endpoints_changed |= ui
+                                        .selectable_value(
+                                            &mut self.path_start,
+                                            Some(entity.id),
+                                            format!("{} · {}", entity.name, entity.kind),
+                                        )
+                                        .changed();
+                                }
+                            });
+                        egui::ComboBox::from_id_salt("path_end")
+                            .selected_text(selected_entity_label(self.path_end, "End entity"))
+                            .show_ui(ui, |ui| {
+                                for entity in &self.case.entities {
+                                    path_endpoints_changed |= ui
+                                        .selectable_value(
+                                            &mut self.path_end,
+                                            Some(entity.id),
+                                            format!("{} · {}", entity.name, entity.kind),
+                                        )
+                                        .changed();
+                                }
+                            });
+                        if path_endpoints_changed {
+                            self.path_result.clear();
+                            self.chart_fit_path = None;
+                        }
+                        if ui
+                            .checkbox(&mut self.path_follow_directions, "Follow link directions")
+                            .changed()
+                        {
+                            self.path_result.clear();
+                            self.chart_fit_path = None;
+                        }
+                        let time_flow_label = match self.path_time_flow {
+                            PathTimeFlow::Any => "Any date order",
+                            PathTimeFlow::Forward => "Forward in time",
+                            PathTimeFlow::Backward => "Backward in time",
+                        };
+                        let mut selected_time_flow = self.path_time_flow;
+                        egui::ComboBox::from_id_salt("path_time_flow")
+                            .selected_text(time_flow_label)
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(
+                                    &mut selected_time_flow,
+                                    PathTimeFlow::Any,
+                                    "Any date order",
+                                );
+                                ui.selectable_value(
+                                    &mut selected_time_flow,
+                                    PathTimeFlow::Forward,
+                                    "Forward in time",
+                                );
+                                ui.selectable_value(
+                                    &mut selected_time_flow,
+                                    PathTimeFlow::Backward,
+                                    "Backward in time",
+                                );
+                            });
+                        if selected_time_flow != self.path_time_flow {
+                            self.path_time_flow = selected_time_flow;
+                            self.path_result.clear();
+                            self.chart_fit_path = None;
+                        }
+                        let timeline_filter_label = self.timeline_range.and_then(|(start, end)| {
+                            Some((
+                                timeline_date_text(&self.case.links, start)?,
+                                timeline_date_text(&self.case.links, end)?,
+                            ))
+                        });
+                        ui.add_enabled_ui(timeline_filter_label.is_some(), |ui| {
+                            if ui
+                                .checkbox(
+                                    &mut self.path_use_timeline_range,
+                                    "Restrict path to active timeline range",
+                                )
+                                .changed()
+                            {
+                                self.path_result.clear();
+                                self.path_link_result.clear();
+                                self.chart_fit_path = None;
+                            }
+                        });
+                        if let Some((start, end)) = timeline_filter_label {
+                            ui.label(egui::RichText::new(format!(
+                                "Chart timeline range · {start} to {end}{}",
+                                if self.path_use_timeline_range {
+                                    " · applied to next path search"
+                                } else {
+                                    " · display only"
+                                }
+                            )).small().color(muted));
+                        } else {
+                            ui.label(egui::RichText::new(
+                                "No active chart timeline range",
+                            ).small().color(muted));
+                        }
+                        if ui.button("Analyze path").clicked() {
+                            self.analyze_path();
+                        }
+                        ui.horizontal(|ui| {
+                            ui.add(egui::TextEdit::singleline(&mut self.saved_path_name)
+                                .hint_text("Name this investigation path")
+                                .desired_width(190.0));
+                            if ui.button("Save path").clicked() {
+                                self.save_current_path(&self.saved_path_name.clone());
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Package file");
+                            ui.add(egui::TextEdit::singleline(&mut self.saved_path_package_path).hint_text("JSON path used by import and export").desired_width(210.0));
+                            ui.add(egui::TextEdit::singleline(&mut self.saved_path_import_name).hint_text("Imported name (optional)").desired_width(160.0));
+                            if ui.button("Import path").clicked() { self.import_saved_path_package(); }
+                        });
+                        if !self.case.saved_paths.is_empty() {
+                            egui::CollapsingHeader::new(format!("Saved investigation paths · {}", self.case.saved_paths.len()))
+                                .id_salt("saved_investigation_paths")
+                                .show(ui, |ui| {
+                                    ui.label(egui::RichText::new("Opening a saved path recomputes the route from its saved criteria against the current case.").small().color(muted));
+                                    let saved_paths: Vec<(Uuid, String, Uuid, Uuid)> = self.case.saved_paths.iter().map(|saved| (saved.id, saved.name.clone(), saved.start_entity_id, saved.end_entity_id)).collect();
+                                    for (id, name, start_id, end_id) in saved_paths {
+                                        let start_name = self.case.entities.iter().find(|entity| entity.id == start_id).map(|entity| entity.name.clone()).unwrap_or_else(|| "Missing entity".to_owned());
+                                        let end_name = self.case.entities.iter().find(|entity| entity.id == end_id).map(|entity| entity.name.clone()).unwrap_or_else(|| "Missing entity".to_owned());
+                                        ui.horizontal(|ui| {
+                                            ui.label(format!("{} → {}", start_name, end_name));
+                                            if ui.small_button(format!("Open · {name}")).clicked() {
+                                                self.open_saved_path(id);
+                                            }
+                                            if ui.small_button("Export JSON").clicked() {
+                                                self.export_saved_path_package(id);
+                                            }
+                                            if ui.small_button("Delete").clicked() {
+                                                self.delete_saved_path(id);
+                                            }
+                                        });
+                                    }
+                                });
+                        }
+                        let mut path_record_to_focus = None;
+                        if !self.path_result.is_empty() {
+                            let labels: Vec<_> = self
+                                .path_result
+                                .iter()
+                                .filter_map(|id| {
+                                    self.case
+                                        .entities
+                                        .iter()
+                                        .find(|entity| entity.id == *id)
+                                        .map(|entity| format!("{} · {}", entity.name, entity.kind))
+                                })
+                                .collect();
+                            ui.label(
+                                egui::RichText::new(labels.join(" → "))
+                                    .small()
+                                    .color(egui::Color32::from_rgb(236, 174, 83)),
+                            );
+                            ui.horizontal(|ui| {
+                                if ui.small_button("Show path on chart").clicked() {
+                                    self.chart_fit_path = Some(self.path_result.clone());
+                                    self.chart_fit_entities = None;
+                                    self.chart_focus = None;
+                                    self.chart_focus_link = None;
+                                    self.chart_focus_group = None;
+                                    self.page = WorkspacePage::Chart;
+                                    self.show_timeline = false;
+                                    self.selected = self.path_result.first().copied();
+                                    self.selected_link = None;
+                                }
+                                if ui.small_button("Clear path").clicked() {
+                                    self.path_result.clear();
+                                    self.chart_fit_path = None;
+                                    self.chart_fit_entities = None;
+                                }
+                            });
+                            egui::CollapsingHeader::new(format!(
+                                "Connection records for {} path steps",
+                                self.path_result.len().saturating_sub(1)
+                            ))
+                            .id_salt("shortest_path_connection_records")
+                            .show(ui, |ui| {
+                                ui.label(egui::RichText::new(
+                                    "The traversed PATH RECORD is marked for each step. Other parallel records are checked against direction, date range, and time-flow rules, so eligible alternatives are distinguished from excluded evidence. Select any record to focus it on the chart.",
+                                ).small().color(muted));
+                                egui::ScrollArea::vertical()
+                                    .max_height(220.0)
+                                    .show(ui, |ui| {
+                                        for (step, pair) in self.path_result.windows(2).enumerate() {
+                                            let (from, to) = (pair[0], pair[1]);
+                                            let path_step_date = |step: usize| {
+                                                self.path_link_result
+                                                    .get(step)
+                                                    .and_then(|index| self.case.links.get(*index))
+                                                    .and_then(|link| parse_iso_date_ordinal(&link.date))
+                                            };
+                                            let previous_date =
+                                                step.checked_sub(1).and_then(path_step_date);
+                                            let next_date = path_step_date(step + 1);
+                                            let entity_label = |id| {
+                                                self.case.entities.iter()
+                                                    .find(|entity| entity.id == id)
+                                                    .map(|entity| format!("{} · {}", entity.name, entity.kind))
+                                                    .unwrap_or_else(|| "(missing entity)".into())
+                                            };
+                                            let records: Vec<_> = self.case.links.iter()
+                                                .enumerate()
+                                                .filter(|(_, link)| {
+                                                    let endpoints_match =
+                                                        (link.from == from && link.to == to)
+                                                        || (link.from == to && link.to == from);
+                                                    endpoints_match
+                                                })
+                                                .collect();
+                                            ui.label(egui::RichText::new(format!(
+                                                "STEP {} · {} → {} · {} parallel records",
+                                                step + 1,
+                                                entity_label(from),
+                                                entity_label(to),
+                                                records.len(),
+                                            )).strong());
+                                            for (index, link) in records {
+                                                let is_path_record = self
+                                                    .path_link_result
+                                                    .get(step)
+                                                    .is_some_and(|path_index| *path_index == index);
+                                                let exclusion = path_record_exclusion_reason(
+                                                    link,
+                                                    from,
+                                                    to,
+                                                    self.path_follow_directions,
+                                                    self.path_time_flow,
+                                                    self.path_timeline_range,
+                                                    previous_date,
+                                                    next_date,
+                                                );
+                                                let record_label = if is_path_record {
+                                                    "PATH RECORD"
+                                                } else if exclusion.is_some() {
+                                                    "EXCLUDED"
+                                                } else {
+                                                    "ELIGIBLE ALTERNATE"
+                                                };
+                                                let identifier = if link.connection_id.is_empty() {
+                                                    "(no connection ID)"
+                                                } else {
+                                                    &link.connection_id
+                                                };
+                                                let selected = self.selected_link == Some(index);
+                                                let label = format!(
+                                                    "{} · {} · {} · {} · confidence {} · {}",
+                                                    record_label,
+                                                    identifier,
+                                                    link.label,
+                                                    if link.directed { "Directed →" } else { "Undirected ↔" },
+                                                    link.confidence,
+                                                    if link.date.is_empty() { "(no date)" } else { &link.date },
+                                                );
+                                                if ui.selectable_label(selected, label).clicked() {
+                                                    path_record_to_focus = Some(index);
+                                                }
+                                                if let Some(reason) = exclusion {
+                                                    ui.label(egui::RichText::new(format!(
+                                                        "Excluded by path criteria · {reason}"
+                                                    )).small().color(egui::Color32::from_rgb(236, 174, 83)));
+                                                }
+                                                ui.label(egui::RichText::new(format!(
+                                                    "Evidence: {} · Source notes: {} · Analyst notes: {} · Source: {}",
+                                                    if link.source_reference.is_empty() { "(none)" } else { &link.source_reference },
+                                                    if link.source_notes.is_empty() { "(none)" } else { &link.source_notes },
+                                                    if link.notes.is_empty() { "(none)" } else { &link.notes },
+                                                    link.ingest_source.as_deref().unwrap_or("Manual"),
+                                                )).small().color(muted));
+                                            }
+                                        }
+                                    });
+                            });
+                        }
+                        if let Some(index) = path_record_to_focus {
+                            self.selected_link = Some(index);
+                            self.selected = None;
+                            self.chart_focus = None;
+                            self.chart_focus_link = Some(index);
+                            self.chart_focus_group = None;
+                            self.page = WorkspacePage::Chart;
+                            self.show_timeline = false;
+                        }
                         ui.add_space(16.0);ui.label(egui::RichText::new("POSSIBLE DUPLICATES").size(9.0).strong().color(cyan));
                         if ui.button("Find likely matches").clicked(){self.find_duplicates();}
-                        for (a,b) in self.duplicate_candidates.clone().iter().take(5){let an=self.case.entities.iter().find(|e|e.id==*a).map(|e|format!("{} · {}",e.name,e.kind)).unwrap_or_else(||"(missing)".into());let bn=self.case.entities.iter().find(|e|e.id==*b).map(|e|format!("{} · {}",e.name,e.kind)).unwrap_or_else(||"(missing)".into());if ui.selectable_label(self.merge_candidate==Some((*a,*b)),format!("{an}  ↔  {bn}")).clicked(){self.merge_candidate=Some((*a,*b));}}
-                        if let Some((keep,remove))=self.merge_candidate{let keep_name=self.case.entities.iter().find(|e|e.id==keep).map(|e|format!("{} · {}",e.name,e.kind)).unwrap_or_else(||"(missing)".into());let remove_name=self.case.entities.iter().find(|e|e.id==remove).map(|e|format!("{} · {}",e.name,e.kind)).unwrap_or_else(||"(missing)".into());ui.label(egui::RichText::new(format!("Keep {keep_name}; merge {remove_name} into it. Aliases, notes, attributes, and links will be retained.")).small().color(muted));if ui.button(format!("Merge {remove_name} into {keep_name}")).clicked(){self.merge_candidate_into_first();}}
+                        ui.label(egui::RichText::new(format!(
+                            "{} candidates · showing the five strongest",
+                            self.duplicate_candidates.len()
+                        )).small().color(muted));
+                        for (a, b) in self.duplicate_candidates.clone().iter().take(5) {
+                            let Some(first) = self.case.entities.iter().find(|entity| entity.id == *a) else { continue; };
+                            let Some(second) = self.case.entities.iter().find(|entity| entity.id == *b) else { continue; };
+                            ui.vertical(|ui| {
+                                if ui.selectable_label(
+                                    self.merge_candidate == Some((*a, *b)),
+                                    format!("{} · {}  ↔  {} · {}", first.name, first.kind, second.name, second.kind),
+                                ).clicked() {
+                                    self.merge_candidate = Some((*a, *b));
+                                }
+                                ui.label(egui::RichText::new(duplicate_match_basis(first, second)).small().color(muted));
+                            });
+                        }
+                        if let Some((keep, remove)) = self.merge_candidate {
+                            let keep_entity = self.case.entities.iter().find(|entity| entity.id == keep);
+                            let remove_entity = self.case.entities.iter().find(|entity| entity.id == remove);
+                            if let (Some(keep_entity), Some(remove_entity)) = (keep_entity, remove_entity) {
+                                let keep_name = format!("{} · {}", keep_entity.name, keep_entity.kind);
+                                let remove_name = format!("{} · {}", remove_entity.name, remove_entity.kind);
+                                ui.label(egui::RichText::new(format!(
+                                    "{} · different IDs from the same source are excluded. Merge preserves aliases, source IDs, attributes, record history, and links.",
+                                    duplicate_match_basis(keep_entity, remove_entity)
+                                )).small().color(muted));
+                                if ui.button(format!("Merge {remove_name} into {keep_name}")).clicked() {
+                                    self.merge_candidate_into_first();
+                                }
+                            }
+                        }
                         ui.add_space(20.0);ui.label(egui::RichText::new("SELECTED ITEM").size(9.0).strong().color(cyan));ui.add_space(5.0);
                         let mut focus_linked_entity = None;
                         let mut focus_linked_record = None;
                         let mut review_link_source = None;
+                        let mut path_criteria_changed = false;
                         if let Some(id) = self.selected {
                             let linked_entities = linked_entities_for(&self.case, id);
                             if let Some(entity) = self.case.entities.iter().find(|entity| entity.id == id) {
@@ -10829,18 +14587,49 @@ impl eframe::App for App {
                                 for (index, (key, value)) in
                                     entity.attributes.iter_mut().enumerate()
                                 {
+                                    let owners: Vec<String> = entity
+                                        .sql_attribute_values
+                                        .iter()
+                                        .filter(|(_, attribute, _)| {
+                                            attribute.eq_ignore_ascii_case(key)
+                                        })
+                                        .map(|(source, _, _)| {
+                                            sql_attribute_source_label(source, &self.case.snapshots)
+                                        })
+                                        .collect();
+                                    let controlled_by_sql = !owners.is_empty();
+                                    let owner_hint = format!(
+                                        "Managed by SQL source{}: {}",
+                                        if owners.len() == 1 { "" } else { "s" },
+                                        owners.join(", ")
+                                    );
                                     ui.horizontal(|ui| {
                                         ui.add(
                                             egui::TextEdit::singleline(key)
                                                 .hint_text("Attribute")
-                                                .desired_width(90.0),
+                                                .desired_width(90.0)
+                                                .interactive(!controlled_by_sql),
                                         );
                                         ui.add(
                                             egui::TextEdit::singleline(value)
                                                 .hint_text("Value")
-                                                .desired_width(100.0),
-                                        );
-                                        if ui.small_button("×").clicked() {
+                                                .desired_width(100.0)
+                                                .interactive(!controlled_by_sql),
+                                        )
+                                        .on_hover_text(if controlled_by_sql {
+                                            owner_hint.clone()
+                                        } else {
+                                            "Analyst-managed attribute".to_owned()
+                                        });
+                                        if ui
+                                            .add_enabled(!controlled_by_sql, egui::Button::new("×"))
+                                            .on_hover_text(if controlled_by_sql {
+                                                owner_hint
+                                            } else {
+                                                "Remove attribute".to_owned()
+                                            })
+                                            .clicked()
+                                        {
                                             remove_attribute = Some(index);
                                         }
                                     });
@@ -10923,6 +14712,17 @@ impl eframe::App for App {
                                     });
                             });
                         } else if let Some(index) = self.selected_link {
+                            let sql_owned_attributes = self
+                                .case
+                                .links
+                                .get(index)
+                                .and_then(|link| link.ingest_source.as_deref())
+                                .is_some_and(|source_key| {
+                                    self.case
+                                        .snapshots
+                                        .iter()
+                                        .any(|snapshot| snapshot.source_key == source_key)
+                                });
                             if let Some(link) = self.case.links.get_mut(index) {
                                 let ingest_source = link.ingest_source.clone();
                                 ui.label(
@@ -10957,16 +14757,18 @@ impl eframe::App for App {
                                 ui.add(egui::TextEdit::singleline(&mut link.label));
                                 ui.horizontal(|ui| {
                                     ui.label("Date");
-                                    ui.add(
+                                    path_criteria_changed |= ui.add(
                                         egui::TextEdit::singleline(&mut link.date)
                                             .desired_width(100.0),
-                                    );
+                                    ).changed();
                                 });
                                 ui.add(
                                     egui::Slider::new(&mut link.confidence, 1..=3)
                                         .text("Confidence"),
                                 );
-                                ui.checkbox(&mut link.directed, "Directed relationship");
+                                path_criteria_changed |= ui
+                                    .checkbox(&mut link.directed, "Directed relationship")
+                                    .changed();
                                 if let Some(source_key) = ingest_source.as_deref() {
                                     if let Some(snapshot) = self
                                         .case
@@ -11011,6 +14813,44 @@ impl eframe::App for App {
                                 ui.add(
                                     egui::TextEdit::multiline(&mut link.notes).desired_rows(4),
                                 );
+                                ui.label("Connection attributes");
+                                if sql_owned_attributes {
+                                    ui.label(
+                                        egui::RichText::new(format_sql_attributes(&link.attributes))
+                                            .small()
+                                            .color(muted),
+                                    )
+                                    .on_hover_text(
+                                        "SQL properties are refreshed from the read-only source query.",
+                                    );
+                                } else {
+                                    let mut remove_attribute = None;
+                                    for (attribute_index, (name, value)) in
+                                        link.attributes.iter_mut().enumerate()
+                                    {
+                                        ui.horizontal(|ui| {
+                                            ui.add(
+                                                egui::TextEdit::singleline(name)
+                                                    .hint_text("Property")
+                                                    .desired_width(110.0),
+                                            );
+                                            ui.add(
+                                                egui::TextEdit::singleline(value)
+                                                    .hint_text("Value")
+                                                    .desired_width(140.0),
+                                            );
+                                            if ui.small_button("×").clicked() {
+                                                remove_attribute = Some(attribute_index);
+                                            }
+                                        });
+                                    }
+                                    if let Some(attribute_index) = remove_attribute {
+                                        link.attributes.remove(attribute_index);
+                                    }
+                                    if ui.small_button("＋ Connection attribute").clicked() {
+                                        link.attributes.push((String::new(), String::new()));
+                                    }
+                                }
                             }
                         } else {
                             ui.label(
@@ -11020,6 +14860,11 @@ impl eframe::App for App {
                                 .small()
                                 .color(muted),
                             );
+                        }
+                        if path_criteria_changed {
+                            self.path_result.clear();
+                            self.path_link_result.clear();
+                            self.chart_fit_path = None;
                         }
                         if let Some(counterpart_id) = focus_linked_entity {
                             self.selected = Some(counterpart_id);
@@ -11045,17 +14890,14 @@ impl eframe::App for App {
                             self.show_timeline = false;
                         }
                         if let Some(source_key) = review_link_source {
-                            self.sql_snapshot_index = self
+                            if let Some(index) = self
                                 .case
                                 .snapshots
                                 .iter()
-                                .rposition(|snapshot| snapshot.source_key == source_key);
-                            self.sql_snapshot_source = Some(source_key);
-                            self.sql_delta_filter = SnapshotDeltaFilter::All;
-                            self.sql_delta_search.clear();
-                            self.data_mode = DataMode::SqlRegressions;
-                            self.page = WorkspacePage::Data;
-                            self.show_timeline = false;
+                                .rposition(|snapshot| snapshot.source_key == source_key)
+                            {
+                                self.open_sql_snapshot_review(index);
+                            }
                         }
                         ui.add_space(20.0);ui.label(egui::RichText::new("LEGEND").size(9.0).strong().color(cyan));ui.label(egui::RichText::new("Solid link  ·  corroborated").small().color(muted));ui.label(egui::RichText::new("Dashed link  ·  unverified").small().color(muted));
                     });
@@ -11093,12 +14935,22 @@ impl eframe::App for App {
                             &self.import_column_mapping,
                             &delimited_header_signature(&self.import_headers),
                         )
+                        && missing_import_mapping_columns(
+                            &self.import_column_mapping,
+                            &self.import_headers,
+                        )
+                        .is_empty()
                         && import_row_filters_valid(
                             &self.import_column_mapping.row_filters,
                             &self.import_headers,
                         )
                         && import_value_transforms_valid(
                             &self.import_column_mapping.value_transforms,
+                            &self.import_headers,
+                        );
+                    let design_ready = design_ready
+                        && import_connection_attribute_mappings_valid(
+                            &self.import_column_mapping.connection_attributes,
                             &self.import_headers,
                         );
                     ui.horizontal(|ui| {
@@ -11161,8 +15013,8 @@ impl eframe::App for App {
                             export_import_design = true;
                         }
                     });
-                    egui::CollapsingHeader::new("Preview first rows")
-                        .default_open(false)
+                    egui::CollapsingHeader::new("Preview mapped output")
+                        .default_open(true)
                         .show(ui, |ui| {
                             ui.horizontal_wrapped(|ui| {
                                 for header in &self.import_headers {
@@ -11174,6 +15026,8 @@ impl eframe::App for App {
                                 self.import_headers.iter().map(String::as_str),
                                 &self.import_column_mapping.value_transforms,
                             );
+                            let mut preview_merged_records_by_entity: HashMap<Uuid, String> =
+                                HashMap::new();
                             for row in &self.import_preview {
                                 let mut normalized_values: Vec<String> = row
                                     .iter()
@@ -11229,8 +15083,201 @@ impl eframe::App for App {
                                             )
                                         })
                                     });
+                                let source = import_preview_cell(
+                                    &self.import_column_mapping.source,
+                                    &["source", "from", "entity_a"],
+                                    &self.import_headers,
+                                    &normalized_values,
+                                );
+                                let target = import_preview_cell(
+                                    &self.import_column_mapping.target,
+                                    &["target", "to", "entity_b"],
+                                    &self.import_headers,
+                                    &normalized_values,
+                                );
+                                let relationship = import_preview_cell(
+                                    &self.import_column_mapping.relationship,
+                                    &["relationship", "link", "type"],
+                                    &self.import_headers,
+                                    &normalized_values,
+                                );
+                                let record_type = import_preview_cell(
+                                    &self.import_column_mapping.record_type,
+                                    &["record_type"],
+                                    &self.import_headers,
+                                    &normalized_values,
+                                );
+                                let connection_id = import_preview_cell(
+                                    &self.import_column_mapping.connection_id,
+                                    &["connection_id", "link_id", "relationship_id", "record_id", "id"],
+                                    &self.import_headers,
+                                    &normalized_values,
+                                );
+                                let relationship_properties_valid =
+                                    import_connection_attribute_mappings_valid(
+                                        &self.import_column_mapping.connection_attributes,
+                                        &self.import_headers,
+                                    );
+                                let mut mapped_relationship_properties = Vec::new();
+                                for (column_index, header) in
+                                    self.import_headers.iter().enumerate()
+                                {
+                                    let header = header.trim();
+                                    if header
+                                        .get(..21)
+                                        .is_some_and(|prefix| {
+                                            prefix.eq_ignore_ascii_case("connection_attribute:")
+                                        })
+                                    {
+                                        let key = header.get(21..).unwrap_or_default().trim();
+                                        let value = normalized_values
+                                            .get(column_index)
+                                            .map(String::as_str)
+                                            .unwrap_or_default()
+                                            .trim();
+                                        if !key.is_empty() && !value.is_empty() {
+                                            mapped_relationship_properties
+                                                .push((key.to_owned(), value.to_owned()));
+                                        }
+                                    }
+                                }
+                                for attribute in
+                                    &self.import_column_mapping.connection_attributes
+                                {
+                                    let index = self.import_headers.iter().position(|header| {
+                                        header.eq_ignore_ascii_case(attribute.column.trim())
+                                    });
+                                    if let Some(index) = index {
+                                        let value = normalized_values
+                                            .get(index)
+                                            .map(String::as_str)
+                                            .unwrap_or_default()
+                                            .trim();
+                                        if !attribute.key.trim().is_empty() && !value.is_empty() {
+                                            mapped_relationship_properties.push((
+                                                attribute.key.trim().to_owned(),
+                                                value.to_owned(),
+                                            ));
+                                        }
+                                    }
+                                }
+                                let source_id = import_preview_cell(
+                                    &self.import_column_mapping.source_entity_id,
+                                    &["source_entity_id"],
+                                    &self.import_headers,
+                                    &normalized_values,
+                                );
+                                let target_id = import_preview_cell(
+                                    &self.import_column_mapping.target_entity_id,
+                                    &["target_entity_id"],
+                                    &self.import_headers,
+                                    &normalized_values,
+                                );
+                                let date = import_preview_cell(
+                                    &self.import_column_mapping.date,
+                                    &["date", "datetime"],
+                                    &self.import_headers,
+                                    &normalized_values,
+                                );
+                                let source_merged_records = import_preview_cell(
+                                    &self.import_column_mapping.source_merged_records,
+                                    &["source_merged_records_json"],
+                                    &self.import_headers,
+                                    &normalized_values,
+                                );
+                                let target_merged_records = import_preview_cell(
+                                    &self.import_column_mapping.target_merged_records,
+                                    &["target_merged_records_json"],
+                                    &self.import_headers,
+                                    &normalized_values,
+                                );
+                                let has_source_merged_records_column =
+                                    if self.import_column_mapping.source_merged_records.trim().is_empty() {
+                                        self.import_headers.iter().any(|header| header.eq_ignore_ascii_case("source_merged_records_json"))
+                                    } else {
+                                        self.import_headers.iter().any(|header| header.eq_ignore_ascii_case(self.import_column_mapping.source_merged_records.trim()))
+                                    };
+                                let has_target_merged_records_column =
+                                    if self.import_column_mapping.target_merged_records.trim().is_empty() {
+                                        self.import_headers.iter().any(|header| header.eq_ignore_ascii_case("target_merged_records_json"))
+                                    } else {
+                                        self.import_headers.iter().any(|header| header.eq_ignore_ascii_case(self.import_column_mapping.target_merged_records.trim()))
+                                    };
+                                let mut merged_records_issue = None;
+                                for (side, has_column, entity_id, encoded) in [
+                                    ("source", has_source_merged_records_column, source_id, source_merged_records),
+                                    ("target", has_target_merged_records_column, target_id, target_merged_records),
+                                ] {
+                                    if !has_column || encoded.trim().is_empty() || encoded == "—" {
+                                        continue;
+                                    }
+                                    let records = match serde_json::from_str::<Vec<MergedEntityRecord>>(encoded) {
+                                        Ok(records) => records,
+                                        Err(error) => {
+                                            merged_records_issue = Some(format!("{side} merged-record JSON is invalid: {error}"));
+                                            break;
+                                        }
+                                    };
+                                    if let Ok(entity_id) = Uuid::parse_str(entity_id) {
+                                        let canonical = serde_json::to_string(&records).unwrap_or_default();
+                                        if preview_merged_records_by_entity
+                                            .get(&entity_id)
+                                            .is_some_and(|previous| previous != &canonical)
+                                        {
+                                            merged_records_issue = Some(format!(
+                                                "merged-record history conflicts across preview rows for entity {entity_id}"
+                                            ));
+                                            break;
+                                        }
+                                        preview_merged_records_by_entity.insert(entity_id, canonical);
+                                    }
+                                }
+                                let merged_count = |has_column: bool, encoded: &str| {
+                                    if !has_column {
+                                        "not mapped".to_owned()
+                                    } else if encoded.trim().is_empty() {
+                                        "unchanged".to_owned()
+                                    } else {
+                                        serde_json::from_str::<Vec<MergedEntityRecord>>(encoded)
+                                            .map(|records| records.len().to_string())
+                                            .unwrap_or_else(|_| "invalid".into())
+                                    }
+                                };
+                                let source_merged_count = merged_count(
+                                    has_source_merged_records_column,
+                                    source_merged_records,
+                                );
+                                let target_merged_count = merged_count(
+                                    has_target_merged_records_column,
+                                    target_merged_records,
+                                );
                                 ui.horizontal_wrapped(|ui| {
-                                    let (status, color, tooltip) = if !preview_transforms_valid {
+                                    ui.label(egui::RichText::new(if record_type.eq_ignore_ascii_case("entity") {
+                                        format!("ENTITY · {source} · source ID {source_id} · {source_merged_count} merged originals")
+                                    } else {
+                                        format!("LINK · {source} → {target} · {relationship} · connection {connection_id} · endpoint IDs {source_id} / {target_id} · merged originals {source_merged_count} / {target_merged_count} · {date}")
+                                    }).small().strong().color(cyan));
+                                });
+                                if !record_type.eq_ignore_ascii_case("entity")
+                                    && !mapped_relationship_properties.is_empty()
+                                {
+                                    ui.label(egui::RichText::new(format!(
+                                        "LINK PROPERTIES · {}",
+                                        mapped_relationship_properties
+                                            .iter()
+                                            .map(|(key, value)| format!("{key}={value}"))
+                                            .collect::<Vec<_>>()
+                                            .join(" · ")
+                                    )).small().color(muted));
+                                }
+                                ui.horizontal_wrapped(|ui| {
+                                    let (status, color, tooltip) = if let Some(issue) = merged_records_issue.as_deref() {
+                                        (
+                                            "MERGE HISTORY NEEDS REVIEW",
+                                            egui::Color32::from_rgb(236, 174, 83),
+                                            issue,
+                                        )
+                                    } else if !preview_transforms_valid {
                                         (
                                             "TRANSFORM NEEDS REVIEW",
                                             egui::Color32::from_rgb(236, 174, 83),
@@ -11241,6 +15288,12 @@ impl eframe::App for App {
                                             "FILTER NEEDS REVIEW",
                                             egui::Color32::from_rgb(236, 174, 83),
                                             "A saved row filter refers to a column that is not in this file.",
+                                        )
+                                    } else if !relationship_properties_valid {
+                                        (
+                                            "LINK PROPERTY MAPPING NEEDS REVIEW",
+                                            egui::Color32::from_rgb(236, 174, 83),
+                                            "Choose a source column and property name for every mapping, and avoid duplicate property names.",
                                         )
                                     } else if included {
                                         (
@@ -11272,7 +15325,7 @@ impl eframe::App for App {
                             }
                         });
                     egui::ScrollArea::vertical().max_height(440.0).show(ui, |ui| {
-                        let fields: [(&str, &mut String); 30] = [
+                        let fields: [(&str, &mut String); 32] = [
                             ("Source entity", &mut self.import_column_mapping.source),
                             ("Source entity ID", &mut self.import_column_mapping.source_entity_id),
                             ("Target entity", &mut self.import_column_mapping.target),
@@ -11293,6 +15346,8 @@ impl eframe::App for App {
                             ("Target detail JSON", &mut self.import_column_mapping.target_detail),
                             ("Source aliases JSON", &mut self.import_column_mapping.source_aliases),
                             ("Target aliases JSON", &mut self.import_column_mapping.target_aliases),
+                            ("Source merged records JSON", &mut self.import_column_mapping.source_merged_records),
+                            ("Target merged records JSON", &mut self.import_column_mapping.target_merged_records),
                             ("Source external IDs JSON", &mut self.import_column_mapping.source_external_ids),
                             ("Target external IDs JSON", &mut self.import_column_mapping.target_external_ids),
                             ("Source color", &mut self.import_column_mapping.source_color),
@@ -11357,6 +15412,39 @@ impl eframe::App for App {
                                 key: String::new(),
                                 source: true,
                             });
+                        }
+                        ui.separator();
+                        ui.label(egui::RichText::new("RELATIONSHIP PROPERTY MAPPINGS").strong());
+                        ui.label(egui::RichText::new("Map any source column to a property on each imported link. Prefixed connection_attribute:<key> columns are imported automatically.").small().color(muted));
+                        let mut remove_connection_attribute = None;
+                        for (index, attribute) in self
+                            .import_column_mapping
+                            .connection_attributes
+                            .iter_mut()
+                            .enumerate()
+                        {
+                            ui.horizontal(|ui| {
+                                egui::ComboBox::from_id_salt(("connection_attribute_column", index))
+                                    .selected_text(if attribute.column.is_empty() { "Choose column" } else { &attribute.column })
+                                    .show_ui(ui, |ui| {
+                                        ui.selectable_value(&mut attribute.column, String::new(), "Choose column");
+                                        for header in &self.import_headers {
+                                            ui.selectable_value(&mut attribute.column, header.clone(), header);
+                                        }
+                                    });
+                                ui.add(egui::TextEdit::singleline(&mut attribute.key).hint_text("Property name").desired_width(150.0));
+                                if ui.small_button("×").clicked() {
+                                    remove_connection_attribute = Some(index);
+                                }
+                            });
+                        }
+                        if let Some(index) = remove_connection_attribute {
+                            self.import_column_mapping.connection_attributes.remove(index);
+                        }
+                        if ui.small_button("＋ Relationship property mapping").clicked() {
+                            self.import_column_mapping.connection_attributes.push(
+                                ImportConnectionAttributeMapping::default(),
+                            );
                         }
                         ui.separator();
                         ui.label(egui::RichText::new("INCLUDE ROWS WHERE ALL RULES MATCH").strong());
@@ -11464,10 +15552,14 @@ impl eframe::App for App {
                     });
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
-                        let import_mapping_valid = import_endpoint_columns_valid(
+                        let missing_mappings = missing_import_mapping_columns(
                             &self.import_column_mapping,
                             &self.import_headers,
                         );
+                        let import_mapping_valid = import_endpoint_columns_valid(
+                            &self.import_column_mapping,
+                            &self.import_headers,
+                        ) && missing_mappings.is_empty();
                         let import_rules_valid = import_mapping_valid
                             && import_row_filters_valid(
                             &self.import_column_mapping.row_filters,
@@ -11477,10 +15569,24 @@ impl eframe::App for App {
                             &self.import_headers,
                         );
                         if !import_mapping_valid {
-                            ui.colored_label(
+                            let warning = if missing_mappings.is_empty() {
+                                "Choose a source column and a target column or record type."
+                                    .to_owned()
+                            } else {
+                                format!(
+                                    "Saved mapping needs review · {} columns missing",
+                                    missing_mappings.len()
+                                )
+                            };
+                            let response = ui.colored_label(
                                 egui::Color32::from_rgb(236, 174, 83),
-                                "Choose a source column and a target column or record type.",
+                                warning.clone(),
                             );
+                            response.on_hover_text(if missing_mappings.is_empty() {
+                                warning
+                            } else {
+                                format!("{warning}: {}", missing_mappings.join(", "))
+                            });
                         }
                         if ui
                             .add_enabled(import_rules_valid, egui::Button::new("Import into chart"))
@@ -11697,23 +15803,161 @@ fn timeline_event_positions(links: &[Link], rect: egui::Rect) -> Vec<(usize, egu
         .collect()
 }
 
-fn timeline_date_bounds(links: &[Link]) -> Option<(&str, &str)> {
-    let mut dated: Vec<(&str, i64)> = links
-        .iter()
-        .filter_map(|link| {
-            parse_iso_date_ordinal(&link.date).map(|ordinal| (link.date.as_str(), ordinal))
-        })
-        .collect();
-    dated.sort_by_key(|(_, ordinal)| *ordinal);
-    Some((dated.first()?.0, dated.last()?.0))
-}
-
 fn timeline_date_domain(links: &[Link]) -> Option<(i64, i64)> {
     let ordinals: Vec<i64> = links
         .iter()
         .map(|link| parse_iso_date_ordinal(&link.date))
         .collect::<Option<_>>()?;
     Some((*ordinals.iter().min()?, *ordinals.iter().max()?))
+}
+
+fn timeline_date_bounds(links: &[Link]) -> Option<(&str, &str)> {
+    let (first_ordinal, last_ordinal) = timeline_date_domain(links)?;
+    let first = links
+        .iter()
+        .find(|link| parse_iso_date_ordinal(&link.date) == Some(first_ordinal))?;
+    let last = links
+        .iter()
+        .find(|link| parse_iso_date_ordinal(&link.date) == Some(last_ordinal))?;
+    Some((&first.date, &last.date))
+}
+
+fn timeline_undated_count(links: &[Link]) -> usize {
+    links
+        .iter()
+        .filter(|link| parse_iso_date_ordinal(&link.date).is_none())
+        .count()
+}
+
+fn chart_search_terms(query: &str) -> Vec<String> {
+    query.split_whitespace().map(str::to_lowercase).collect()
+}
+
+fn chart_search_text_matches(searchable: &str, terms: &[String]) -> bool {
+    terms.iter().all(|term| searchable.contains(term.as_str()))
+}
+
+fn entity_search_text(entity: &Entity) -> String {
+    let mut searchable = format!(
+        "{} {} {} {}",
+        entity.id, entity.name, entity.kind, entity.detail
+    );
+    for (key, value) in &entity.attributes {
+        searchable.push_str(" ");
+        searchable.push_str(key);
+        searchable.push_str(" ");
+        searchable.push_str(value);
+    }
+    for alias in &entity.aliases {
+        searchable.push_str(" ");
+        searchable.push_str(alias);
+    }
+    for (source, external_id) in &entity.external_ids {
+        searchable.push_str(" ");
+        searchable.push_str(source);
+        searchable.push_str(" ");
+        searchable.push_str(external_id);
+    }
+    for record in &entity.merged_records {
+        searchable.push_str(" ");
+        searchable.push_str(&record.id.to_string());
+        searchable.push_str(" ");
+        searchable.push_str(&record.name);
+        searchable.push_str(" ");
+        searchable.push_str(&record.kind);
+        searchable.push_str(" ");
+        searchable.push_str(&record.detail);
+        for (key, value) in &record.attributes {
+            searchable.push_str(" ");
+            searchable.push_str(key);
+            searchable.push_str(" ");
+            searchable.push_str(value);
+        }
+    }
+    searchable
+}
+
+fn entity_matches_search(entity: &Entity, query: &str) -> bool {
+    let terms = chart_search_terms(query);
+    if terms.is_empty() {
+        return true;
+    }
+    chart_search_text_matches(&entity_search_text(entity).to_lowercase(), &terms)
+}
+
+fn chart_search_rank(primary: &str, searchable: &str, query: &str, terms: &[String]) -> usize {
+    let mut score = if primary == query {
+        10_000
+    } else if !query.is_empty() && primary.contains(query) {
+        2_000
+    } else {
+        0
+    };
+    for term in terms {
+        if primary.contains(term) {
+            score += 100;
+        } else if searchable.contains(term) {
+            score += 10;
+        }
+    }
+    score
+}
+
+fn link_matches_search(
+    link: &Link,
+    entity_search_index: &HashMap<Uuid, String>,
+    terms: &[String],
+) -> bool {
+    if terms.is_empty() {
+        return false;
+    }
+    chart_search_text_matches(&link_search_text_indexed(link, entity_search_index), &terms)
+}
+
+fn link_search_text_indexed(link: &Link, entity_search_index: &HashMap<Uuid, String>) -> String {
+    let direction = if link.directed {
+        "directed"
+    } else {
+        "undirected"
+    };
+    let mut searchable = format!(
+        "{} {} {} {} {} {} {} {} {} {} {} {}",
+        link.connection_id,
+        link.label,
+        link.date,
+        link.confidence,
+        direction,
+        link.notes,
+        link.source_notes,
+        link.source_reference,
+        link.ingest_source.as_deref().unwrap_or("manual"),
+        format_sql_attributes(&link.attributes),
+        link.from,
+        link.to
+    )
+    .to_lowercase();
+    for entity_id in [link.from, link.to] {
+        if let Some(entity_text) = entity_search_index.get(&entity_id) {
+            searchable.push(' ');
+            searchable.push_str(entity_text);
+        }
+    }
+    searchable
+}
+
+fn link_search_fields_indexed(
+    link: &Link,
+    entity_search_index: &HashMap<Uuid, String>,
+    entity_names: &HashMap<Uuid, String>,
+) -> (String, String) {
+    let searchable = link_search_text_indexed(link, entity_search_index);
+    let source_name = entity_names
+        .get(&link.from)
+        .map(String::as_str)
+        .unwrap_or("");
+    let target_name = entity_names.get(&link.to).map(String::as_str).unwrap_or("");
+    let primary = format!("{} {source_name} {target_name}", link.label).to_lowercase();
+    (primary, searchable)
 }
 
 fn timeline_date_x(links: &[Link], rect: egui::Rect, ordinal: i64) -> Option<f32> {
@@ -11834,12 +16078,84 @@ fn delimited_text_delimiter(path: &str) -> u8 {
     }
 }
 
+fn detect_import_delimiter(path: &Path) -> Result<u8, String> {
+    let extension = path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if matches!(extension.as_str(), "tsv" | "tab") {
+        return Ok(b'\t');
+    }
+    let file =
+        fs::File::open(path).map_err(|error| format!("cannot open delimited file: {error}"))?;
+    let mut first_record = Vec::new();
+    BufReader::new(file)
+        .read_until(b'\n', &mut first_record)
+        .map_err(|error| format!("cannot read delimited header: {error}"))?;
+    if first_record.is_empty() {
+        return Err("delimited file is empty".into());
+    }
+    let known_headers = [
+        "source",
+        "from",
+        "entity_a",
+        "source_name",
+        "target",
+        "to",
+        "entity_b",
+        "target_name",
+        "relationship",
+        "link",
+        "link_type",
+        "date",
+        "event_date",
+        "connection_id",
+        "record_id",
+        "source_type",
+        "target_type",
+        "confidence",
+        "directed",
+        "source_reference",
+        "evidence",
+        "notes",
+        "record_type",
+    ];
+    let score_candidate = |delimiter: u8| {
+        let mut reader = csv::ReaderBuilder::new()
+            .delimiter(delimiter)
+            .has_headers(false)
+            .from_reader(first_record.as_slice());
+        let Some(Ok(record)) = reader.records().next() else {
+            return (0, 0);
+        };
+        let headers = normalize_delimited_headers(record.iter().map(str::to_owned).collect());
+        let recognized = headers
+            .iter()
+            .filter(|header| {
+                known_headers
+                    .iter()
+                    .any(|known| header.trim().eq_ignore_ascii_case(known))
+            })
+            .count();
+        (recognized, headers.len())
+    };
+    let mut selected = (b',', score_candidate(b','));
+    for candidate in [b';', b'\t', b'|'] {
+        let score = score_candidate(candidate);
+        if score > selected.1 {
+            selected = (candidate, score);
+        }
+    }
+    Ok(selected.0)
+}
+
 fn inspect_delimited_file(
     path: &Path,
     cancel: &AtomicBool,
     progress: &std::sync::atomic::AtomicUsize,
 ) -> Result<DelimitedImportInspection, String> {
-    let delimiter = delimited_text_delimiter(&path.to_string_lossy());
+    let delimiter = detect_import_delimiter(path)?;
     let mut reader = csv::ReaderBuilder::new()
         .delimiter(delimiter)
         .from_path(path)
@@ -11848,6 +16164,7 @@ fn inspect_delimited_file(
         .headers()
         .map(|headers| headers.iter().map(str::to_owned).collect::<Vec<String>>())
         .map_err(|error| error.to_string())?;
+    let headers = normalize_delimited_headers(headers);
     validate_delimited_headers(headers.iter())?;
     let mut preview = Vec::new();
     let mut record_count = 0;
@@ -11888,6 +16205,15 @@ where
     Ok(())
 }
 
+fn normalize_delimited_headers(mut headers: Vec<String>) -> Vec<String> {
+    if let Some(first) = headers.first_mut()
+        && let Some(without_bom) = first.strip_prefix('\u{feff}')
+    {
+        *first = without_bom.to_owned();
+    }
+    headers
+}
+
 fn import_endpoint_columns_valid(mapping: &ImportColumnMapping, headers: &[String]) -> bool {
     let column_present = |selected: &str, aliases: &[&str]| {
         if selected.is_empty() {
@@ -11905,6 +16231,120 @@ fn import_endpoint_columns_valid(mapping: &ImportColumnMapping, headers: &[Strin
             || column_present(&mapping.record_type, &["record_type"]))
 }
 
+fn import_preview_cell<'a>(
+    selected: &str,
+    aliases: &[&str],
+    headers: &[String],
+    values: &'a [String],
+) -> &'a str {
+    let index = if selected.trim().is_empty() {
+        headers.iter().position(|header| {
+            aliases
+                .iter()
+                .any(|alias| header.trim().eq_ignore_ascii_case(alias))
+        })
+    } else {
+        headers
+            .iter()
+            .position(|header| header.trim().eq_ignore_ascii_case(selected.trim()))
+    };
+    index
+        .and_then(|index| values.get(index))
+        .map(String::as_str)
+        .unwrap_or("—")
+}
+
+fn missing_import_mapping_columns(
+    mapping: &ImportColumnMapping,
+    headers: &[String],
+) -> Vec<String> {
+    let mut mappings = vec![
+        ("Source entity", mapping.source.as_str()),
+        ("Target entity", mapping.target.as_str()),
+        ("Source type", mapping.source_type.as_str()),
+        ("Target type", mapping.target_type.as_str()),
+        ("Relationship", mapping.relationship.as_str()),
+        ("Date", mapping.date.as_str()),
+        ("Confidence", mapping.confidence.as_str()),
+        ("Direction", mapping.direction.as_str()),
+        ("Connection ID", mapping.connection_id.as_str()),
+        ("Analyst notes", mapping.notes.as_str()),
+        ("Source notes", mapping.source_notes.as_str()),
+        ("Evidence reference", mapping.source_reference.as_str()),
+        ("Ingest source", mapping.ingest_source.as_str()),
+        ("Record type", mapping.record_type.as_str()),
+        ("Source entity ID", mapping.source_entity_id.as_str()),
+        ("Target entity ID", mapping.target_entity_id.as_str()),
+        ("Source external IDs", mapping.source_external_ids.as_str()),
+        ("Target external IDs", mapping.target_external_ids.as_str()),
+        ("Source detail", mapping.source_detail.as_str()),
+        ("Target detail", mapping.target_detail.as_str()),
+        ("Source aliases", mapping.source_aliases.as_str()),
+        ("Target aliases", mapping.target_aliases.as_str()),
+        (
+            "Source merged records",
+            mapping.source_merged_records.as_str(),
+        ),
+        (
+            "Target merged records",
+            mapping.target_merged_records.as_str(),
+        ),
+        ("Source color", mapping.source_color.as_str()),
+        ("Target color", mapping.target_color.as_str()),
+        ("Source chart X", mapping.source_x.as_str()),
+        ("Source chart Y", mapping.source_y.as_str()),
+        ("Target chart X", mapping.target_x.as_str()),
+        ("Target chart Y", mapping.target_y.as_str()),
+        (
+            "Source position lock",
+            mapping.source_position_locked.as_str(),
+        ),
+        (
+            "Target position lock",
+            mapping.target_position_locked.as_str(),
+        ),
+    ];
+    mappings.extend(
+        mapping
+            .entity_attributes
+            .iter()
+            .map(|attribute| ("Entity attribute", attribute.column.as_str())),
+    );
+    mappings.extend(
+        mapping
+            .connection_attributes
+            .iter()
+            .map(|attribute| ("Relationship property", attribute.column.as_str())),
+    );
+    mappings.extend(
+        mapping
+            .row_filters
+            .iter()
+            .map(|filter| ("Row filter", filter.column.as_str())),
+    );
+    mappings.extend(
+        mapping
+            .value_transforms
+            .iter()
+            .map(|transform| ("Value transform", transform.column.as_str())),
+    );
+    let mut missing = Vec::new();
+    for (field, selected) in mappings {
+        if selected.trim().is_empty()
+            || headers
+                .iter()
+                .any(|header| header.trim().eq_ignore_ascii_case(selected.trim()))
+        {
+            continue;
+        }
+        let message = format!("{field}: {}", selected.trim());
+        if !missing.contains(&message) {
+            missing.push(message);
+        }
+    }
+    missing
+}
+
 fn import_row_filters_valid(filters: &[ImportRowFilter], headers: &[String]) -> bool {
     filters.iter().all(|filter| {
         (filter.column.is_empty() && filter.value.is_empty())
@@ -11916,6 +16356,36 @@ fn import_row_filters_valid(filters: &[ImportRowFilter], headers: &[String]) -> 
 
 fn import_value_transforms_valid(transforms: &[ImportValueTransform], headers: &[String]) -> bool {
     compile_import_value_transforms(headers.iter().map(String::as_str), transforms).is_ok()
+}
+
+fn import_connection_attribute_mappings_valid(
+    mappings: &[ImportConnectionAttributeMapping],
+    headers: &[String],
+) -> bool {
+    let mut keys = HashSet::new();
+    for header in headers {
+        let header = header.trim();
+        if header
+            .get(..21)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("connection_attribute:"))
+        {
+            let key = header.get(21..).unwrap_or_default().trim();
+            if key.is_empty() || !keys.insert(key.to_ascii_lowercase()) {
+                return false;
+            }
+        }
+    }
+    mappings.iter().all(|mapping| {
+        if mapping.column.is_empty() && mapping.key.trim().is_empty() {
+            return true;
+        }
+        !mapping.column.trim().is_empty()
+            && !mapping.key.trim().is_empty()
+            && headers
+                .iter()
+                .any(|header| header.eq_ignore_ascii_case(mapping.column.trim()))
+            && keys.insert(mapping.key.trim().to_ascii_lowercase())
+    })
 }
 
 type CompiledImportValueTransform = (usize, ImportTransformOperation, String, String);
@@ -12019,6 +16489,8 @@ fn remap_import_mapping_headers(mapping: &mut ImportColumnMapping, headers: &[St
         &mut mapping.target_detail,
         &mut mapping.source_aliases,
         &mut mapping.target_aliases,
+        &mut mapping.source_merged_records,
+        &mut mapping.target_merged_records,
         &mut mapping.source_color,
         &mut mapping.target_color,
         &mut mapping.source_x,
@@ -12032,6 +16504,9 @@ fn remap_import_mapping_headers(mapping: &mut ImportColumnMapping, headers: &[St
         remap_import_column(column, headers);
     }
     for attribute in &mut mapping.entity_attributes {
+        remap_import_column(&mut attribute.column, headers);
+    }
+    for attribute in &mut mapping.connection_attributes {
         remap_import_column(&mut attribute.column, headers);
     }
     for filter in &mut mapping.row_filters {
@@ -12173,9 +16648,12 @@ fn parse_graphml(path: &str) -> Result<GraphMlDocument, String> {
     let decoder = reader.decoder();
     let mut document = GraphMlDocument::default();
     let mut keys: HashMap<String, (String, String)> = HashMap::new();
+    let mut key_defaults = Vec::<(String, String)>::new();
     let mut nodes: Vec<GraphMlRecord> = Vec::new();
     let mut edge: Option<GraphMlRecord> = None;
     let mut active_data: Option<(GraphMlScope, String, String)> = None;
+    let mut active_key_id: Option<String> = None;
+    let mut active_default: Option<(String, String)> = None;
     let mut root_seen = false;
     let mut graph_count = 0;
     let mut graphs: Vec<GraphMlGraphContext> = Vec::new();
@@ -12189,6 +16667,7 @@ fn parse_graphml(path: &str) -> Result<GraphMlDocument, String> {
                 b"graphml" => root_seen = true,
                 b"key" => {
                     let attributes = graphml_xml_attributes(&start, decoder)?;
+                    active_key_id = attributes.get("id").cloned();
                     if let Some(id) = attributes.get("id") {
                         keys.insert(
                             id.clone(),
@@ -12200,6 +16679,11 @@ fn parse_graphml(path: &str) -> Result<GraphMlDocument, String> {
                                     .unwrap_or_else(|| id.clone()),
                             ),
                         );
+                    }
+                }
+                b"default" => {
+                    if let Some(key_id) = active_key_id.as_ref() {
+                        active_default = Some((key_id.clone(), String::new()));
                     }
                 }
                 b"graph" => {
@@ -12309,6 +16793,11 @@ fn parse_graphml(path: &str) -> Result<GraphMlDocument, String> {
                         );
                     }
                 }
+                b"default" => {
+                    if let Some(key_id) = active_key_id.as_ref() {
+                        key_defaults.push((key_id.clone(), String::new()));
+                    }
+                }
                 b"graph" => {
                     let attributes = graphml_xml_attributes(&start, decoder)?;
                     let default_directed = match attributes
@@ -12393,24 +16882,39 @@ fn parse_graphml(path: &str) -> Result<GraphMlDocument, String> {
                 _ => {}
             },
             XmlEvent::Text(text) => {
-                if let Some((_, _, value)) = active_data.as_mut() {
+                if let Some((_, value)) = active_default.as_mut() {
+                    let decoded = text.decode().map_err(|error| error.to_string())?;
+                    value.push_str(&decoded);
+                } else if let Some((_, _, value)) = active_data.as_mut() {
                     let decoded = text.decode().map_err(|error| error.to_string())?;
                     value.push_str(&decoded);
                 }
             }
             XmlEvent::CData(text) => {
-                if let Some((_, _, value)) = active_data.as_mut() {
+                if let Some((_, value)) = active_default.as_mut() {
+                    value.push_str(&text.decode().map_err(|error| error.to_string())?);
+                } else if let Some((_, _, value)) = active_data.as_mut() {
                     value.push_str(&text.decode().map_err(|error| error.to_string())?);
                 }
             }
             XmlEvent::GeneralRef(reference) => {
-                if let Some((_, _, value)) = active_data.as_mut() {
+                if let Some((_, value)) = active_default.as_mut() {
+                    value.push_str(&resolve_graphml_reference(
+                        &reference.decode().map_err(|error| error.to_string())?,
+                    )?);
+                } else if let Some((_, _, value)) = active_data.as_mut() {
                     value.push_str(&resolve_graphml_reference(
                         &reference.decode().map_err(|error| error.to_string())?,
                     )?);
                 }
             }
             XmlEvent::End(end) => match end.local_name().as_ref() {
+                b"default" => {
+                    if let Some((key_id, value)) = active_default.take() {
+                        key_defaults.push((key_id, value));
+                    }
+                }
+                b"key" => active_key_id = None,
                 b"data" => {
                     let Some((scope, key, value)) = active_data.take() else {
                         return Err("GraphML data end tag has no matching start".into());
@@ -12450,6 +16954,30 @@ fn parse_graphml(path: &str) -> Result<GraphMlDocument, String> {
     }
     if !graphs.is_empty() || !nodes.is_empty() || edge.is_some() || active_data.is_some() {
         return Err("GraphML document ended inside an element".into());
+    }
+    for (key_id, value) in key_defaults {
+        let Some((scope, property)) = keys.get(&key_id) else {
+            continue;
+        };
+        let targets: Vec<&mut GraphMlRecord> = match scope.as_str() {
+            "node" => document.nodes.iter_mut().collect(),
+            "edge" => document.edges.iter_mut().collect(),
+            "all" => document
+                .nodes
+                .iter_mut()
+                .chain(document.edges.iter_mut())
+                .collect(),
+            _ => continue,
+        };
+        for record in targets {
+            if !record
+                .data
+                .keys()
+                .any(|existing| existing.eq_ignore_ascii_case(property))
+            {
+                record.data.insert(property.clone(), value.clone());
+            }
+        }
     }
     Ok(document)
 }
@@ -12711,6 +17239,7 @@ fn graphml_import_payload(path: &str) -> Result<GraphMlImportPayload, String> {
         "source_type",
         "source_detail_json",
         "source_aliases_json",
+        "source_merged_records_json",
         "source_color",
         "source_x",
         "source_y",
@@ -12722,6 +17251,7 @@ fn graphml_import_payload(path: &str) -> Result<GraphMlImportPayload, String> {
         "target_type",
         "target_detail_json",
         "target_aliases_json",
+        "target_merged_records_json",
         "target_color",
         "target_x",
         "target_y",
@@ -12737,6 +17267,17 @@ fn graphml_import_payload(path: &str) -> Result<GraphMlImportPayload, String> {
     .into_iter()
     .map(str::to_owned)
     .collect::<Vec<_>>();
+    let mut entity_attributes_by_id = HashMap::with_capacity(document.nodes.len());
+    for node in &document.nodes {
+        let attributes = graphml_property(node, &["attributes_json"])
+            .map(serde_json::from_str::<Vec<(String, String)>>)
+            .transpose()
+            .map_err(|error| format!("GraphML node {} has invalid attributes: {error}", node.id))?
+            .unwrap_or_default();
+        validate_entity_attributes(&attributes)
+            .map_err(|error| format!("GraphML node {} has invalid attributes: {error}", node.id))?;
+        entity_attributes_by_id.insert(node.id.clone(), attributes);
+    }
     let mut attribute_keys = document
         .nodes
         .iter()
@@ -12768,15 +17309,75 @@ fn graphml_import_payload(path: &str) -> Result<GraphMlImportPayload, String> {
             .any(|reserved| key.eq_ignore_ascii_case(reserved))
         })
         .cloned()
+        .chain(
+            entity_attributes_by_id
+                .values()
+                .flat_map(|attributes| attributes.iter().map(|(key, _)| key.clone())),
+        )
         .collect::<Vec<_>>();
-    attribute_keys.push("merged_records_json".to_owned());
-    attribute_keys.sort_by_key(|key| key.to_ascii_lowercase());
+    attribute_keys.sort_by(|first, second| {
+        first
+            .to_ascii_lowercase()
+            .cmp(&second.to_ascii_lowercase())
+            .then_with(|| first.cmp(second))
+    });
     attribute_keys.dedup_by(|first, second| first.eq_ignore_ascii_case(second));
     for key in &attribute_keys {
         headers.push(format!("source_attribute:{key}"));
     }
     for key in &attribute_keys {
         headers.push(format!("target_attribute:{key}"));
+    }
+    for edge in &document.edges {
+        let Some(encoded) = graphml_property(edge, &["attributes_json"]) else {
+            continue;
+        };
+        let attributes = serde_json::from_str::<Vec<(String, String)>>(encoded)
+            .map_err(|error| format!("GraphML edge {} has invalid attributes: {error}", edge.id))?;
+        validate_connection_attributes(&attributes)
+            .map_err(|error| format!("GraphML edge {} has invalid attributes: {error}", edge.id))?;
+    }
+    let mut connection_attribute_keys = document
+        .edges
+        .iter()
+        .flat_map(|edge| {
+            let encoded = graphml_property(edge, &["attributes_json"])
+                .and_then(|value| serde_json::from_str::<Vec<(String, String)>>(value).ok())
+                .unwrap_or_default();
+            encoded
+                .into_iter()
+                .map(|(key, _)| key)
+                .chain(edge.data.keys().filter_map(|key| {
+                    (![
+                        "connection_id",
+                        "label",
+                        "relationship",
+                        "date",
+                        "confidence",
+                        "directed",
+                        "source_reference",
+                        "evidence",
+                        "notes",
+                        "analyst_notes",
+                        "source_notes",
+                        "ingest_source",
+                        "attributes_json",
+                    ]
+                    .iter()
+                    .any(|reserved| key.eq_ignore_ascii_case(reserved)))
+                    .then_some(key.clone())
+                }))
+        })
+        .collect::<Vec<_>>();
+    connection_attribute_keys.sort_by(|first, second| {
+        first
+            .to_ascii_lowercase()
+            .cmp(&second.to_ascii_lowercase())
+            .then_with(|| first.cmp(second))
+    });
+    connection_attribute_keys.dedup_by(|first, second| first.eq_ignore_ascii_case(second));
+    for key in &connection_attribute_keys {
+        headers.push(format!("connection_attribute:{key}"));
     }
 
     let mut writer = csv::WriterBuilder::new().from_writer(Vec::new());
@@ -12821,6 +17422,10 @@ fn graphml_import_payload(path: &str) -> Result<GraphMlImportPayload, String> {
             ("source_detail_json", source_detail.as_str()),
             ("source_aliases_json", source_aliases.as_str()),
             (
+                "source_merged_records_json",
+                graphml_property(node, &["merged_records_json", "merged_records"]).unwrap_or(""),
+            ),
+            (
                 "source_color",
                 graphml_property(node, &["color"]).unwrap_or(""),
             ),
@@ -12840,10 +17445,8 @@ fn graphml_import_payload(path: &str) -> Result<GraphMlImportPayload, String> {
         if let Some(index) = headers.iter().position(|header| header == "source_y") {
             row[index] = coordinate(graphml_property(node, &["y", "y_coord", "ycoordinate"]), 1);
         }
-        let attributes = graphml_property(node, &["attributes_json"])
-            .and_then(|value| serde_json::from_str::<Vec<(String, String)>>(value).ok())
-            .unwrap_or_default();
-        for (key, value) in &attributes {
+        let attributes = &entity_attributes_by_id[&node.id];
+        for (key, value) in attributes {
             if let Some(index) = headers
                 .iter()
                 .position(|header| header == &format!("source_attribute:{key}"))
@@ -12852,13 +17455,12 @@ fn graphml_import_payload(path: &str) -> Result<GraphMlImportPayload, String> {
             }
         }
         for key in &attribute_keys {
-            let value = node
-                .data
+            let value = attributes
                 .iter()
                 .find(|(name, _)| name.eq_ignore_ascii_case(key))
                 .map(|(_, value)| value.clone())
                 .or_else(|| {
-                    attributes
+                    node.data
                         .iter()
                         .find(|(name, _)| name.eq_ignore_ascii_case(key))
                         .map(|(_, value)| value.clone())
@@ -12935,6 +17537,13 @@ fn graphml_import_payload(path: &str) -> Result<GraphMlImportPayload, String> {
             );
             put(
                 &mut row,
+                &format!("{side}_merged_records_json"),
+                graphml_property(record, &["merged_records_json", "merged_records"])
+                    .unwrap_or("")
+                    .to_owned(),
+            );
+            put(
+                &mut row,
                 &format!("{side}_color"),
                 graphml_property(record, &["color"])
                     .unwrap_or("")
@@ -12964,16 +17573,23 @@ fn graphml_import_payload(path: &str) -> Result<GraphMlImportPayload, String> {
                     .to_owned(),
             );
             let attributes = graphml_property(record, &["attributes_json"])
-                .and_then(|value| serde_json::from_str::<Vec<(String, String)>>(value).ok())
+                .map(serde_json::from_str::<Vec<(String, String)>>)
+                .transpose()
+                .map_err(|error| {
+                    format!("GraphML node {} has invalid attributes: {error}", record.id)
+                })?
                 .unwrap_or_default();
+            validate_entity_attributes(&attributes).map_err(|error| {
+                format!("GraphML node {} has invalid attributes: {error}", record.id)
+            })?;
             for key in &attribute_keys {
-                let value = record
-                    .data
+                let value = attributes
                     .iter()
                     .find(|(name, _)| name.eq_ignore_ascii_case(key))
                     .map(|(_, value)| value.clone())
                     .or_else(|| {
-                        attributes
+                        record
+                            .data
                             .iter()
                             .find(|(name, _)| name.eq_ignore_ascii_case(key))
                             .map(|(_, value)| value.clone())
@@ -12981,6 +17597,25 @@ fn graphml_import_payload(path: &str) -> Result<GraphMlImportPayload, String> {
                     .unwrap_or_default();
                 put(&mut row, &format!("{side}_attribute:{key}"), value);
             }
+        }
+        let connection_attributes = graphml_property(edge, &["attributes_json"])
+            .map(serde_json::from_str::<Vec<(String, String)>>)
+            .transpose()
+            .map_err(|error| format!("GraphML edge {} has invalid attributes: {error}", edge.id))?
+            .unwrap_or_default();
+        for key in &connection_attribute_keys {
+            let value = connection_attributes
+                .iter()
+                .find(|(name, _)| name.eq_ignore_ascii_case(key))
+                .map(|(_, value)| value.clone())
+                .or_else(|| {
+                    edge.data
+                        .iter()
+                        .find(|(name, _)| name.eq_ignore_ascii_case(key))
+                        .map(|(_, value)| value.clone())
+                })
+                .unwrap_or_default();
+            put(&mut row, &format!("connection_attribute:{key}"), value);
         }
         put(&mut row, "record_type", "connection".into());
         put(
@@ -13317,6 +17952,18 @@ fn normalize_snapshot_database_paths(case: &mut CaseFile, case_path: &str) {
                 *source = rewritten.clone();
             }
         }
+        for (source_key, _, _) in &mut entity.sql_attribute_values {
+            if let Some(rewritten) = source_key_rewrites.get(source_key) {
+                *source_key = rewritten.clone();
+            }
+        }
+        for record in &mut entity.merged_records {
+            for (source_key, _, _) in &mut record.sql_attribute_values {
+                if let Some(rewritten) = source_key_rewrites.get(source_key) {
+                    *source_key = rewritten.clone();
+                }
+            }
+        }
     }
     for link in &mut case.links {
         if let Some(source_key) = link.ingest_source.as_mut() {
@@ -13387,13 +18034,109 @@ fn normalize_snapshot_database_paths(case: &mut CaseFile, case_path: &str) {
     }
 }
 
+fn automation_batch_configuration_fingerprint(jobs: &[AutomationJob]) -> Result<String, String> {
+    let mut normalized_jobs = jobs.to_vec();
+    for job in &mut normalized_jobs {
+        job.parameters.sort_by(|left, right| left.0.cmp(&right.0));
+    }
+    let configuration = serde_json::to_vec(&normalized_jobs).map_err(|error| error.to_string())?;
+    Ok(format!("sha256-v1:{}", sha256_hex(&configuration)))
+}
+
+fn sha256_hex(input: &[u8]) -> String {
+    const INITIAL: [u32; 8] = [
+        0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
+        0x5be0cd19,
+    ];
+    const ROUND: [u32; 64] = [
+        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
+        0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
+        0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f,
+        0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+        0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc,
+        0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+        0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116,
+        0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7,
+        0xc67178f2,
+    ];
+    let bit_length = (input.len() as u64).wrapping_mul(8);
+    let mut padded = input.to_vec();
+    padded.push(0x80);
+    while padded.len() % 64 != 56 {
+        padded.push(0);
+    }
+    padded.extend_from_slice(&bit_length.to_be_bytes());
+    let mut state = INITIAL;
+    for chunk in padded.chunks_exact(64) {
+        let mut words = [0_u32; 64];
+        for (index, bytes) in chunk.chunks_exact(4).enumerate() {
+            words[index] = u32::from_be_bytes(bytes.try_into().expect("four-byte word"));
+        }
+        for index in 16..64 {
+            let x = words[index - 15];
+            let y = words[index - 2];
+            let s0 = x.rotate_right(7) ^ x.rotate_right(18) ^ (x >> 3);
+            let s1 = y.rotate_right(17) ^ y.rotate_right(19) ^ (y >> 10);
+            words[index] = words[index - 16]
+                .wrapping_add(s0)
+                .wrapping_add(words[index - 7])
+                .wrapping_add(s1);
+        }
+        let [mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut h] = state;
+        for index in 0..64 {
+            let sum1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
+            let choice = (e & f) ^ (!e & g);
+            let t1 = h
+                .wrapping_add(sum1)
+                .wrapping_add(choice)
+                .wrapping_add(ROUND[index])
+                .wrapping_add(words[index]);
+            let sum0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
+            let majority = (a & b) ^ (a & c) ^ (b & c);
+            let t2 = sum0.wrapping_add(majority);
+            [h, g, f, e, d, c, b, a] = [g, f, e, d.wrapping_add(t1), c, b, a, t1.wrapping_add(t2)];
+        }
+        for (value, update) in state.iter_mut().zip([a, b, c, d, e, f, g, h]) {
+            *value = value.wrapping_add(update);
+        }
+    }
+    state.iter().map(|word| format!("{word:08x}")).collect()
+}
+
+fn sql_parameters_match(left: &[(String, String)], right: &[(String, String)]) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+    let mut left = left.to_vec();
+    let mut right = right.to_vec();
+    left.sort_by(|a, b| a.0.cmp(&b.0));
+    right.sort_by(|a, b| a.0.cmp(&b.0));
+    left == right
+}
+
+fn automation_run_matches_job(run: &AutomationRun, job: &AutomationJob) -> bool {
+    run.configuration_recorded
+        && run.database_path == job.database_path
+        && run.series == job.series
+        && run.query == job.query
+        && sql_parameters_match(&run.parameters, &job.parameters)
+        && run.minimum_connections == job.minimum_connections
+        && run.minimum_confidence == job.minimum_confidence
+        && run.maximum_connections == job.maximum_connections
+        && run.maximum_regressions == job.maximum_regressions
+        && run.maximum_added_connections == job.maximum_added_connections
+        && run.maximum_connection_property_changes == job.maximum_connection_property_changes
+        && run.maximum_skipped_rows == job.maximum_skipped_rows
+}
+
 fn run_automation_cli(
     case_path: &str,
     job_name: Option<&str>,
     selected_jobs: Option<&[String]>,
     parameter_overrides: &[(String, String)],
     scoped_parameter_overrides: &[(String, String, String)],
-    skip_recent_success: bool,
+    resume_batch_id: Option<Uuid>,
     json_output: bool,
 ) -> Result<bool, String> {
     let _case_lock = lock_automation_case(Path::new(case_path))?;
@@ -13401,7 +18144,69 @@ fn run_automation_cli(
         fs::read_to_string(case_path).map_err(|error| format!("cannot read case: {error}"))?;
     let case = serde_json::from_str::<CaseFile>(&content)
         .map_err(|error| format!("cannot parse case: {error}"))?;
-    let mut jobs: Vec<AutomationJob> = if let Some(name) = job_name {
+    let resume_manifest = resume_batch_id.and_then(|resume_id| {
+        case.automation_batches
+            .iter()
+            .find(|batch| batch.batch_id == resume_id)
+    });
+    let mut jobs: Vec<AutomationJob> = if let Some(batch) =
+        resume_manifest.filter(|batch| !batch.effective_jobs.is_empty())
+    {
+        let recorded_ids: HashSet<Uuid> = batch
+            .selected_jobs
+            .iter()
+            .map(|selection| selection.job_id)
+            .collect();
+        let effective_ids: HashSet<Uuid> = batch.effective_jobs.iter().map(|job| job.id).collect();
+        if recorded_ids.len() != batch.selected_jobs.len()
+            || effective_ids.len() != batch.effective_jobs.len()
+            || recorded_ids != effective_ids
+        {
+            return Err(format!(
+                "automation batch {} has an inconsistent saved job selection",
+                batch.batch_id
+            ));
+        }
+        let recorded_fingerprint =
+            automation_batch_configuration_fingerprint(&batch.effective_jobs)?;
+        if recorded_fingerprint != batch.configuration_fingerprint {
+            return Err(format!(
+                "automation batch {} has an inconsistent saved configuration fingerprint",
+                batch.batch_id
+            ));
+        }
+        let requested_selectors: Vec<&str> = job_name
+            .into_iter()
+            .chain(selected_jobs.into_iter().flatten().map(String::as_str))
+            .collect();
+        if !requested_selectors.is_empty() {
+            let mut requested_ids = HashSet::new();
+            for selector in requested_selectors {
+                let matches: Vec<Uuid> = batch
+                    .selected_jobs
+                    .iter()
+                    .filter(|selection| {
+                        selection.job_name.eq_ignore_ascii_case(selector)
+                            || selection.job_id.to_string().eq_ignore_ascii_case(selector)
+                    })
+                    .map(|selection| selection.job_id)
+                    .collect();
+                if matches.len() != 1 || !requested_ids.insert(matches[0]) {
+                    return Err(format!(
+                        "job selector does not identify one unique job in automation batch {}: {selector}",
+                        batch.batch_id
+                    ));
+                }
+            }
+            if requested_ids != recorded_ids {
+                return Err(format!(
+                    "selected jobs differ from automation batch {}",
+                    batch.batch_id
+                ));
+            }
+        }
+        batch.effective_jobs.clone()
+    } else if let Some(name) = job_name {
         let matches: Vec<AutomationJob> = case
             .automation_jobs
             .iter()
@@ -13432,42 +18237,128 @@ fn run_automation_cli(
         return Err("case contains no enabled automation jobs".into());
     }
     apply_sql_parameter_overrides(&mut jobs, parameter_overrides, scoped_parameter_overrides)?;
+    let batch_configuration_fingerprint = automation_batch_configuration_fingerprint(&jobs)?;
+    let batch_id = resume_batch_id.unwrap_or_else(Uuid::new_v4);
+    if let Some(resume_batch_id) = resume_batch_id {
+        if let Some(batch) = case
+            .automation_batches
+            .iter()
+            .find(|batch| batch.batch_id == resume_batch_id)
+        {
+            if batch.configuration_fingerprint != batch_configuration_fingerprint {
+                return Err(format!(
+                    "selected jobs or effective SQL configuration differ from batch {resume_batch_id}; start a new run"
+                ));
+            }
+        } else {
+            let matching_runs: Vec<&AutomationRun> = case
+                .automation_runs
+                .iter()
+                .filter(|run| run.batch_id == Some(resume_batch_id))
+                .collect();
+            if matching_runs.is_empty() {
+                return Err(format!("automation batch not found: {resume_batch_id}"));
+            }
+            if matching_runs.iter().any(|run| {
+                run.batch_configuration_fingerprint.as_deref()
+                    != Some(batch_configuration_fingerprint.as_str())
+            }) {
+                return Err(format!(
+                    "selected jobs or effective SQL configuration differ from batch {resume_batch_id}; start a new run"
+                ));
+            }
+        }
+    }
+    eprintln!("AUTOMATION BATCH ID · {batch_id}");
     let mut app = App::automation_context(case, case_path);
     normalize_snapshot_database_paths(&mut app.case, &app.case_path);
+    let completed_jobs = app
+        .case
+        .automation_batches
+        .iter()
+        .find(|batch| batch.batch_id == batch_id)
+        .map(|batch| batch.completed_jobs.clone())
+        .unwrap_or_else(|| {
+            jobs.iter()
+                .filter_map(|job| {
+                    app.case
+                        .automation_runs
+                        .iter()
+                        .rev()
+                        .find(|run| run.batch_id == Some(batch_id) && run.job_id == job.id)
+                        .filter(|run| automation_run_matches_job(run, job))
+                        .and_then(|run| {
+                            let snapshot_id = run.snapshot_id.or_else(|| {
+                                run.snapshot_index
+                                    .and_then(|index| app.case.snapshots.get(index))
+                                    .map(|snapshot| snapshot.id)
+                            });
+                            (run.success || snapshot_id.is_some()).then(|| {
+                                AutomationJobCheckpoint {
+                                    job_id: run.job_id,
+                                    run_id: run.id,
+                                    finished_at: run.finished_at.clone(),
+                                    success: run.success,
+                                    message: run.message.clone(),
+                                    duration_ms: run.duration_ms,
+                                    sqlite_lock_retries: run.sqlite_lock_retries,
+                                    snapshot_id,
+                                }
+                            })
+                        })
+                })
+                .collect()
+        });
+    app.case
+        .automation_batches
+        .retain(|batch| batch.batch_id != batch_id);
+    app.case.automation_batches.push(AutomationBatchCheckpoint {
+        batch_id,
+        configuration_fingerprint: batch_configuration_fingerprint.clone(),
+        selected_jobs: jobs
+            .iter()
+            .map(|job| AutomationBatchJobSelection {
+                job_id: job.id,
+                job_name: job.name.clone(),
+            })
+            .collect(),
+        effective_jobs: jobs.clone(),
+        completed_jobs,
+    });
+    if app.case.automation_batches.len() > 200 {
+        app.case
+            .automation_batches
+            .drain(..app.case.automation_batches.len() - 200);
+    }
     let mut failures = 0;
     let mut skipped = Vec::new();
     let mut outcomes = Vec::new();
     for job in jobs.iter_mut() {
-        let latest_job_run = skip_recent_success
-            .then(|| {
-                app.case
-                    .automation_runs
-                    .iter()
-                    .rev()
-                    .find(|run| run.job_id == job.id)
-            })
-            .flatten();
-        let latest_run_matches_current_job = latest_job_run.is_some_and(|run| {
-            run.configuration_recorded
-                && run.database_path == job.database_path
-                && run.series == job.series
-                && run.query == job.query
-                && run.parameters == job.parameters
-                && run.minimum_connections == job.minimum_connections
-                && run.minimum_confidence == job.minimum_confidence
-                && run.maximum_connections == job.maximum_connections
-                && run.maximum_regressions == job.maximum_regressions
-                && run.maximum_added_connections == job.maximum_added_connections
-                && run.maximum_skipped_rows == job.maximum_skipped_rows
+        let checkpoint = resume_batch_id.and_then(|resume_batch_id| {
+            app.case
+                .automation_batches
+                .iter()
+                .find(|batch| batch.batch_id == resume_batch_id)
+                .and_then(|batch| {
+                    batch
+                        .completed_jobs
+                        .iter()
+                        .find(|checkpoint| checkpoint.job_id == job.id)
+                })
+                .cloned()
         });
-        if let Some(run) =
-            latest_job_run.filter(|run| latest_run_matches_current_job && run.success)
-        {
+        if let Some(checkpoint) = checkpoint {
             skipped.push(serde_json::json!({
                 "job_id": job.id,
                 "job": job.name,
                 "status": "SKIPPED",
-                "reason": "latest run for this configuration succeeded",
+                "reason": if checkpoint.success {
+                    "job succeeded in this batch with the same configuration"
+                } else {
+                    "capture completed in this batch but failed configured limits"
+                },
+                "prior_status": if checkpoint.success { "PASS" } else { "FAIL" },
+                "prior_message": checkpoint.message.clone(),
                 "database_path": job.database_path,
                 "series": job.series,
                 "query": job.query,
@@ -13477,17 +18368,28 @@ fn run_automation_cli(
                 "maximum_connections": job.maximum_connections,
                 "maximum_regressions": job.maximum_regressions,
                 "maximum_added_connections": job.maximum_added_connections,
+                "maximum_connection_property_changes": job.maximum_connection_property_changes,
                 "maximum_skipped_rows": job.maximum_skipped_rows,
-                "run_id": run.id,
-                "finished_at": run.finished_at,
-                "duration_ms": run.duration_ms,
-                "sqlite_lock_retries": run.sqlite_lock_retries,
-                "snapshot_id": run.snapshot_id,
+                "run_id": checkpoint.run_id,
+                "finished_at": checkpoint.finished_at,
+                "duration_ms": checkpoint.duration_ms,
+                "sqlite_lock_retries": checkpoint.sqlite_lock_retries,
+                "snapshot_id": checkpoint.snapshot_id,
+                "batch_id": batch_id,
             }));
+            if !checkpoint.success {
+                failures += 1;
+            }
             if !json_output {
                 println!(
-                    "SKIP · {} · latest run for this configuration succeeded",
-                    job.name
+                    "SKIP · {} · prior capture {} · {}",
+                    job.name,
+                    if checkpoint.success {
+                        "passed"
+                    } else {
+                        "failed"
+                    },
+                    checkpoint.message
                 );
             }
             continue;
@@ -13500,16 +18402,43 @@ fn run_automation_cli(
         let (success, message) = app.run_automation_job_cli(&job);
         if let Some(run) = app.case.automation_runs.last_mut() {
             run.parameter_overrides = Some(explicit_parameter_overrides);
+            run.batch_id = Some(batch_id);
+            run.batch_configuration_fingerprint = Some(batch_configuration_fingerprint.clone());
         }
         if !success {
             failures += 1;
         }
         let run = app.case.automation_runs.last();
         let run_id = run.map(|run| run.id);
+        let finished_at = run.map(|run| run.finished_at.clone());
         let duration_ms = run.and_then(|run| run.duration_ms);
         let sqlite_lock_retries = run.map(|run| run.sqlite_lock_retries).unwrap_or_default();
         let parameter_overrides = run.and_then(|run| run.parameter_overrides.clone());
         let snapshot_id = run.and_then(|run| run.snapshot_id);
+        if success || snapshot_id.is_some() {
+            if let (Some(run_id), Some(finished_at)) = (run_id, finished_at) {
+                if let Some(batch) = app
+                    .case
+                    .automation_batches
+                    .iter_mut()
+                    .find(|batch| batch.batch_id == batch_id)
+                {
+                    batch
+                        .completed_jobs
+                        .retain(|checkpoint| checkpoint.job_id != job.id);
+                    batch.completed_jobs.push(AutomationJobCheckpoint {
+                        job_id: job.id,
+                        run_id,
+                        finished_at,
+                        success,
+                        message: message.clone(),
+                        duration_ms,
+                        sqlite_lock_retries,
+                        snapshot_id,
+                    });
+                }
+            }
+        }
         let trigger = run.map(|run| run.trigger.as_str()).unwrap_or("cli");
         let snapshot =
             snapshot_id.and_then(|id| app.case.snapshots.iter().find(|snapshot| snapshot.id == id));
@@ -13537,6 +18466,7 @@ fn run_automation_cli(
                 outcome["duration_ms"] = serde_json::json!(duration_ms);
                 outcome["trigger"] = serde_json::json!(trigger);
                 outcome["parameter_overrides"] = serde_json::json!(parameter_overrides);
+                outcome["batch_id"] = serde_json::json!(batch_id);
             }
         } else {
             println!(
@@ -13550,12 +18480,24 @@ fn run_automation_cli(
     }
     if outcomes.is_empty() && !skipped.is_empty() {
         if json_output {
-            println!("{}", serde_json::to_string_pretty(&serde_json::json!({"schema_version":1,"ok":true,"saved":false,"case":case_path,"passed":0,"failed":0,"skipped":skipped.len(),"outcomes":outcomes,"skipped_jobs":skipped})).map_err(|error|error.to_string())?);
+            let passed = skipped
+                .iter()
+                .filter(|outcome| outcome["prior_status"] == "PASS")
+                .count();
+            println!("{}", serde_json::to_string_pretty(&serde_json::json!({"schema_version":1,"ok":failures==0,"saved":false,"case":case_path,"batch_id":batch_id,"passed":passed,"failed":failures,"skipped":skipped.len(),"outcomes":outcomes,"skipped_jobs":skipped})).map_err(|error|error.to_string())?);
         }
-        return Ok(true);
+        return Ok(failures == 0);
     }
     if json_output {
-        println!("{}", serde_json::to_string_pretty(&serde_json::json!({"schema_version":1,"ok":failures==0,"saved":!outcomes.is_empty(),"case":case_path,"passed":outcomes.iter().filter(|outcome|outcome["status"]=="PASS").count(),"failed":failures,"skipped":skipped.len(),"outcomes":outcomes,"skipped_jobs":skipped})).map_err(|error|error.to_string())?);
+        let passed = outcomes
+            .iter()
+            .filter(|outcome| outcome["status"] == "PASS")
+            .count()
+            + skipped
+                .iter()
+                .filter(|outcome| outcome["prior_status"] == "PASS")
+                .count();
+        println!("{}", serde_json::to_string_pretty(&serde_json::json!({"schema_version":1,"ok":failures==0,"saved":!outcomes.is_empty(),"case":case_path,"batch_id":batch_id,"passed":passed,"failed":failures,"skipped":skipped.len(),"outcomes":outcomes,"skipped_jobs":skipped})).map_err(|error|error.to_string())?);
     }
     Ok(failures == 0)
 }
@@ -13654,6 +18596,7 @@ fn automation_job_from_run(prior_run: &AutomationRun) -> Result<AutomationJob, S
         maximum_connections: prior_run.maximum_connections,
         maximum_regressions: prior_run.maximum_regressions,
         maximum_added_connections: prior_run.maximum_added_connections,
+        maximum_connection_property_changes: prior_run.maximum_connection_property_changes,
         maximum_skipped_rows: prior_run.maximum_skipped_rows,
     })
 }
@@ -13683,6 +18626,7 @@ fn validate_saved_automation_configuration_cli(
     app.automation_minimum_connections = job.minimum_connections;
     app.automation_maximum_regressions = job.maximum_regressions;
     app.automation_maximum_added_connections = job.maximum_added_connections;
+    app.automation_maximum_connection_property_changes = job.maximum_connection_property_changes;
     app.automation_maximum_skipped_rows = job.maximum_skipped_rows;
     let started = Instant::now();
     let snapshot_count_before = app.case.snapshots.len();
@@ -13851,6 +18795,176 @@ fn select_enabled_automation_jobs(
         .collect())
 }
 
+fn entity_geographic_coordinates(entity: &Entity) -> Option<(f64, f64)> {
+    let attribute_value = |aliases: &[&str]| {
+        entity
+            .attributes
+            .iter()
+            .find(|(key, _)| {
+                aliases
+                    .iter()
+                    .any(|alias| key.trim().eq_ignore_ascii_case(alias))
+            })
+            .and_then(|(_, value)| value.trim().parse::<f64>().ok())
+            .filter(|value| value.is_finite())
+    };
+    let latitude = attribute_value(&["latitude", "lat", "geo:lat"])?;
+    let longitude = attribute_value(&["longitude", "lon", "lng", "long", "geo:lon"])?;
+    ((-90.0..=90.0).contains(&latitude) && (-180.0..=180.0).contains(&longitude))
+        .then_some((latitude, longitude))
+}
+
+fn kml_data(name: &str, value: &str, output: &mut String) {
+    output.push_str("<Data name=\"");
+    output.push_str(&escape_xml_text(name));
+    output.push_str("\"><value>");
+    output.push_str(&escape_xml_text(value));
+    output.push_str("</value></Data>");
+}
+
+fn write_case_kml(
+    case: &CaseFile,
+    case_path: &str,
+    output_path: &str,
+) -> Result<(usize, usize, usize), String> {
+    if output_path.trim().is_empty() {
+        return Err("export path cannot be empty".into());
+    }
+    if paths_refer_to_same_file(case_path, output_path) {
+        return Err("KML export cannot replace its case file".into());
+    }
+    ensure_case_export_path_is_not_sql_source(case, case_path, output_path)?;
+    for (index, link) in case.links.iter().enumerate() {
+        validate_connection_attributes(&link.attributes)
+            .map_err(|error| format!("cannot export relationship {}: {error}", index + 1))?;
+    }
+    let coordinates: HashMap<Uuid, (f64, f64)> = case
+        .entities
+        .iter()
+        .filter_map(|entity| entity_geographic_coordinates(entity).map(|point| (entity.id, point)))
+        .collect();
+    if coordinates.is_empty() {
+        return Err(
+            "no entities have valid latitude/longitude attributes; import them as latitude/longitude entity properties first".into(),
+        );
+    }
+    let mut kml = String::from(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<kml xmlns=\"http://www.opengis.net/kml/2.2\"><Document><name>",
+    );
+    kml.push_str(&escape_xml_text(&case.title));
+    kml.push_str("</name><Folder><name>Entities</name>");
+    for entity in &case.entities {
+        let Some((latitude, longitude)) = coordinates.get(&entity.id) else {
+            continue;
+        };
+        kml.push_str("<Placemark><name>");
+        kml.push_str(&escape_xml_text(&entity.name));
+        kml.push_str("</name><description>");
+        kml.push_str(&escape_xml_text(&entity.detail));
+        kml.push_str("</description><ExtendedData>");
+        kml_data("entity_id", &entity.id.to_string(), &mut kml);
+        kml_data("entity_type", &entity.kind, &mut kml);
+        for (key, value) in &entity.attributes {
+            kml_data(&format!("attribute:{key}"), value, &mut kml);
+        }
+        for (source, external_id) in &entity.external_ids {
+            kml_data(&format!("external_id:{source}"), external_id, &mut kml);
+        }
+        kml.push_str("</ExtendedData><Point><coordinates>");
+        kml.push_str(&format!("{longitude:.8},{latitude:.8},0"));
+        kml.push_str("</coordinates></Point></Placemark>");
+    }
+    kml.push_str("</Folder><Folder><name>Relationships</name>");
+    let mut exported_relationships = 0usize;
+    for link in &case.links {
+        let (Some((from_latitude, from_longitude)), Some((to_latitude, to_longitude))) =
+            (coordinates.get(&link.from), coordinates.get(&link.to))
+        else {
+            continue;
+        };
+        let from_name = case
+            .entities
+            .iter()
+            .find(|entity| entity.id == link.from)
+            .map(|entity| entity.name.as_str())
+            .unwrap_or("Unknown source");
+        let to_name = case
+            .entities
+            .iter()
+            .find(|entity| entity.id == link.to)
+            .map(|entity| entity.name.as_str())
+            .unwrap_or("Unknown target");
+        kml.push_str("<Placemark><name>");
+        kml.push_str(&escape_xml_text(&format!(
+            "{}: {from_name} → {to_name}",
+            link.label
+        )));
+        kml.push_str("</name><ExtendedData>");
+        kml_data("connection_id", &link.connection_id, &mut kml);
+        kml_data("date", &link.date, &mut kml);
+        kml_data("confidence", &link.confidence.to_string(), &mut kml);
+        kml_data("directed", &link.directed.to_string(), &mut kml);
+        kml_data("source_reference", &link.source_reference, &mut kml);
+        kml_data("notes", &link.notes, &mut kml);
+        kml_data("source_notes", &link.source_notes, &mut kml);
+        for (key, value) in &link.attributes {
+            kml_data(&format!("connection_attribute:{key}"), value, &mut kml);
+        }
+        if let Some(source) = &link.ingest_source {
+            kml_data("ingest_source", source, &mut kml);
+        }
+        kml.push_str("</ExtendedData><LineString><tessellate>1</tessellate><coordinates>");
+        kml.push_str(&format!(
+            "{from_longitude:.8},{from_latitude:.8},0 {to_longitude:.8},{to_latitude:.8},0"
+        ));
+        kml.push_str("</coordinates></LineString></Placemark>");
+        exported_relationships += 1;
+    }
+    kml.push_str("</Folder></Document></kml>\n");
+    write_file_atomically(Path::new(output_path), kml.as_bytes())?;
+    Ok((
+        coordinates.len(),
+        exported_relationships,
+        case.links.len().saturating_sub(exported_relationships),
+    ))
+}
+
+fn export_kml_cli(case_path: &str, output_path: &str, json_output: bool) -> Result<(), String> {
+    if output_path.trim().is_empty() {
+        return Err("export path cannot be empty".into());
+    }
+    if paths_refer_to_same_file(case_path, output_path) {
+        return Err("KML export cannot replace its case file".into());
+    }
+    let content =
+        fs::read_to_string(case_path).map_err(|error| format!("cannot read case: {error}"))?;
+    let case = serde_json::from_str::<CaseFile>(&content)
+        .map_err(|error| format!("cannot parse case: {error}"))?;
+    ensure_case_export_path_is_not_sql_source(&case, case_path, output_path)?;
+    let (entity_count, relationship_count, skipped_relationships) =
+        write_case_kml(&case, case_path, output_path)?;
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "schema_version": 1,
+                "ok": true,
+                "case": case_path,
+                "output": output_path,
+                "entities": entity_count,
+                "relationships": relationship_count,
+                "relationships_without_coordinates": skipped_relationships,
+            }))
+            .map_err(|error| error.to_string())?
+        );
+    } else {
+        println!(
+            "KML EXPORTED · {entity_count} MAPPED ENTITIES · {relationship_count} RELATIONSHIPS · {output_path}"
+        );
+    }
+    Ok(())
+}
+
 fn export_graphml_cli(case_path: &str, output_path: &str, json_output: bool) -> Result<(), String> {
     let content =
         fs::read_to_string(case_path).map_err(|error| format!("cannot read case: {error}"))?;
@@ -13943,28 +19057,31 @@ fn read_sqlite_schema(database_path: &str) -> Result<Vec<serde_json::Value>, Str
     };
     let mut schema = Vec::with_capacity(objects.len());
     for (object_type, name) in objects {
-        let columns = if object_type == "view" {
+        let (columns, inspection_error) = if object_type == "view" {
             let query = format!("SELECT * FROM {} LIMIT 0", quote_sql_identifier(&name));
-            let statement = connection
-                .prepare(&query)
-                .map_err(|error| format!("cannot inspect SQLite view {name}: {error}"))?;
-            statement
-                .column_names()
-                .map(|column| {
-                    serde_json::json!({
-                        "name": column,
-                        "type": "",
-                        "not_null": false,
-                        "primary_key_order": 0,
-                    })
-                })
-                .collect::<Vec<_>>()
+            match connection.prepare(&query) {
+                Ok(statement) => (
+                    statement
+                        .column_names()
+                        .map(|column| {
+                            serde_json::json!({
+                                "name": column,
+                                "type": "",
+                                "not_null": false,
+                                "primary_key_order": 0,
+                            })
+                        })
+                        .collect::<Vec<_>>(),
+                    None,
+                ),
+                Err(error) => (Vec::new(), Some(error.to_string())),
+            }
         } else {
             let pragma = format!("PRAGMA table_info({})", quote_sql_identifier(&name));
             let mut statement = connection
                 .prepare(&pragma)
                 .map_err(|error| error.to_string())?;
-            statement
+            let columns = statement
                 .query_map([], |row| {
                     Ok(serde_json::json!({
                         "name": row.get::<_, String>(1)?,
@@ -13975,7 +19092,8 @@ fn read_sqlite_schema(database_path: &str) -> Result<Vec<serde_json::Value>, Str
                 })
                 .map_err(|error| error.to_string())?
                 .collect::<rusqlite::Result<Vec<_>>>()
-                .map_err(|error| error.to_string())?
+                .map_err(|error| error.to_string())?;
+            (columns, None)
         };
         let foreign_key_pragma =
             format!("PRAGMA foreign_key_list({})", quote_sql_identifier(&name));
@@ -13998,18 +19116,48 @@ fn read_sqlite_schema(database_path: &str) -> Result<Vec<serde_json::Value>, Str
             .map_err(|error| error.to_string())?
             .collect::<rusqlite::Result<Vec<_>>>()
             .map_err(|error| error.to_string())?;
-        schema.push(serde_json::json!({
+        let mut object = serde_json::json!({
             "type": object_type,
             "name": name,
             "columns": columns,
             "foreign_keys": foreign_keys,
-        }));
+        });
+        if let Some(error) = inspection_error {
+            object["inspection_error"] = serde_json::json!(error);
+        }
+        schema.push(object);
     }
     Ok(schema)
 }
 
 fn quote_sql_identifier(identifier: &str) -> String {
     format!("\"{}\"", identifier.replace('"', "\"\""))
+}
+
+fn quote_sql_string_literal(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
+}
+
+fn sqlite_scoped_identity_expression(namespace: &str, components: &[String]) -> Option<String> {
+    if components.is_empty() {
+        return None;
+    }
+    let null_check = components
+        .iter()
+        .map(|component| format!("{component} IS NULL"))
+        .collect::<Vec<_>>()
+        .join(" OR ");
+    let encoded = components
+        .iter()
+        .map(|component| {
+            format!("typeof({component}) || ':' || coalesce(hex(CAST({component} AS BLOB)), '')")
+        })
+        .collect::<Vec<_>>()
+        .join(" || '|' || ");
+    Some(format!(
+        "CASE WHEN {null_check} THEN NULL ELSE {} || ':' || ({encoded}) END",
+        quote_sql_string_literal(namespace)
+    ))
 }
 
 fn schema_column<'a>(object: &'a serde_json::Value, aliases: &[&str]) -> Option<&'a str> {
@@ -14020,6 +19168,41 @@ fn schema_column<'a>(object: &'a serde_json::Value, aliases: &[&str]) -> Option<
             name.trim().eq_ignore_ascii_case(alias).then_some(name)
         })
     })
+}
+
+fn sqlite_display_expression(object: &serde_json::Value, table_alias: &str) -> Option<String> {
+    let display_aliases = [
+        "name",
+        "entity_name",
+        "person_name",
+        "organization_name",
+        "display_name",
+        "display",
+        "full_name",
+        "label",
+        "title",
+        "username",
+        "user_name",
+        "account_name",
+        "screen_name",
+        "handle",
+        "email",
+        "email_address",
+        "subject",
+        "caption",
+        "value",
+    ];
+    let table_alias = quote_sql_identifier(table_alias);
+    if let Some(column) = schema_column(object, &display_aliases) {
+        return Some(format!("{table_alias}.{}", quote_sql_identifier(column)));
+    }
+    let first_name = schema_column(object, &["first_name", "given_name"])?;
+    let last_name = schema_column(object, &["last_name", "family_name"])?;
+    Some(format!(
+        "trim(coalesce({table_alias}.{first_name}, '') || ' ' || coalesce({table_alias}.{last_name}, ''))",
+        first_name = quote_sql_identifier(first_name),
+        last_name = quote_sql_identifier(last_name),
+    ))
 }
 
 fn sqlite_inferred_endpoint(
@@ -14049,30 +19232,16 @@ fn sqlite_inferred_endpoint(
             continue;
         }
         let key_column = primary_keys[0];
-        let Some(name_column) = schema_column(
-            object,
-            &[
-                "name",
-                "entity_name",
-                "person_name",
-                "organization_name",
-                "display_name",
-                "display",
-                "full_name",
-                "label",
-                "title",
-                "value",
-            ],
-        ) else {
+        if sqlite_display_expression(object, "entity_candidate").is_none() {
             continue;
-        };
+        }
         let normalized_table_name = table_name.trim().to_ascii_lowercase();
         let priority = match normalized_table_name.as_str() {
             "entity" | "entities" | "node" | "nodes" => 2,
             "person" | "persons" | "people" | "organization" | "organizations" => 1,
             _ => 0,
         };
-        candidates.push((priority, table_name, key_column, name_column, object));
+        candidates.push((priority, table_name, key_column, object));
     }
     let best_priority = candidates.iter().map(|candidate| candidate.0).max()?;
     let mut best: Vec<_> = candidates
@@ -14082,7 +19251,7 @@ fn sqlite_inferred_endpoint(
     if best.len() != 1 {
         return None;
     }
-    let (_, table_name, key_column, name_column, object) = best.pop()?;
+    let (_, table_name, key_column, object) = best.pop()?;
     let link_alias = quote_sql_identifier("link_row");
     let entity_alias = quote_sql_identifier(join_alias);
     let join = format!(
@@ -14091,10 +19260,13 @@ fn sqlite_inferred_endpoint(
         quote_sql_identifier(key_column),
         quote_sql_identifier(id_column),
     );
-    let expression = format!("{entity_alias}.{}", quote_sql_identifier(name_column));
+    let expression = sqlite_display_expression(object, join_alias)?;
     let type_expression = schema_column(object, &["entity_type", "type", "kind"])
         .map(|column| format!("{entity_alias}.{}", quote_sql_identifier(column)));
-    let identity_expression = format!("{link_alias}.{}", quote_sql_identifier(id_column));
+    let identity_expression = sqlite_scoped_identity_expression(
+        table_name,
+        &[format!("{link_alias}.{}", quote_sql_identifier(id_column))],
+    )?;
     Some((expression, join, type_expression, identity_expression))
 }
 
@@ -14185,21 +19357,6 @@ fn sqlite_declared_endpoint(
     if target_keys.len() != foreign_key_group.len() {
         return None;
     }
-    let name_column = schema_column(
-        target_object,
-        &[
-            "name",
-            "entity_name",
-            "person_name",
-            "organization_name",
-            "display_name",
-            "display",
-            "full_name",
-            "label",
-            "title",
-            "value",
-        ],
-    )?;
     let link_alias = quote_sql_identifier("link_row");
     let entity_alias = quote_sql_identifier(join_alias);
     let join_conditions = foreign_key_group
@@ -14219,25 +19376,19 @@ fn sqlite_declared_endpoint(
         quote_sql_identifier(target_table),
         join_conditions.join(" AND "),
     );
-    let expression = format!("{entity_alias}.{}", quote_sql_identifier(name_column));
     let type_expression = schema_column(target_object, &["entity_type", "type", "kind"])
         .map(|column| format!("{entity_alias}.{}", quote_sql_identifier(column)));
-    let identity_expression = if foreign_key_group.len() == 1 {
-        format!("{link_alias}.{}", quote_sql_identifier(link_column))
-    } else {
-        let encoded = foreign_key_group
-            .iter()
-            .map(|key| {
-                let column = key["from"].as_str()?;
-                let value = format!("{link_alias}.{}", quote_sql_identifier(column));
-                Some(format!(
-                    "typeof({value}) || ':' || coalesce(hex(CAST({value} AS BLOB)), '')"
-                ))
-            })
-            .collect::<Option<Vec<_>>>()?
-            .join(" || '|' || ");
-        format!("({encoded})")
-    };
+    let identity_components = foreign_key_group
+        .iter()
+        .map(|key| {
+            let column = key["from"].as_str()?;
+            Some(format!("{link_alias}.{}", quote_sql_identifier(column)))
+        })
+        .collect::<Option<Vec<_>>>()?;
+    let identity_expression =
+        sqlite_scoped_identity_expression(target_table, &identity_components)?;
+    let expression = sqlite_display_expression(target_object, join_alias)
+        .unwrap_or_else(|| identity_expression.clone());
     Some((expression, join, type_expression, identity_expression))
 }
 
@@ -14318,6 +19469,16 @@ fn sqlite_endpoint_expression(
         ));
     }
     raw_endpoint()
+}
+
+fn sqlite_query_projection(query: &str, alias: &str) -> Option<String> {
+    let suffix = format!(" AS \"{alias}\"");
+    query.lines().find_map(|line| {
+        let line = line.trim().trim_end_matches(',');
+        let expression = line.strip_suffix(&suffix)?.trim();
+        let expression = expression.strip_prefix("SELECT ").unwrap_or(expression);
+        Some(expression.to_owned())
+    })
 }
 
 fn sqlite_query_templates(schema: &[serde_json::Value]) -> Vec<(String, String)> {
@@ -14428,8 +19589,10 @@ fn sqlite_query_templates(schema: &[serde_json::Value]) -> Vec<(String, String)>
             continue;
         };
         let source_id_is_identity = schema_column(object, &["source_id"]).is_some_and(|column| {
-            source_identity.as_deref()
-                == Some(format!("\"link_row\".{}", quote_sql_identifier(column)).as_str())
+            let expression = format!("\"link_row\".{}", quote_sql_identifier(column));
+            source_identity
+                .as_deref()
+                .is_some_and(|identity| identity.contains(&expression))
         });
         let mut selected = vec![
             format!("{source_expression} AS \"source\""),
@@ -14452,6 +19615,35 @@ fn sqlite_query_templates(schema: &[serde_json::Value]) -> Vec<(String, String)>
                 selected.push(format!(
                     "\"link_row\".{} AS \"{canonical}\"",
                     quote_sql_identifier(column)
+                ));
+            }
+        }
+        if let Some(columns) = object["columns"].as_array() {
+            let mut template_attribute_names = HashSet::new();
+            for column in columns {
+                let Some(name) = column["name"].as_str() else {
+                    continue;
+                };
+                let attribute = name
+                    .get(..21)
+                    .filter(|prefix| prefix.eq_ignore_ascii_case("connection_attribute_"))
+                    .and_then(|_| name.get(21..))
+                    .or_else(|| {
+                        name.get(..15)
+                            .filter(|prefix| prefix.eq_ignore_ascii_case("link_attribute_"))
+                            .and_then(|_| name.get(15..))
+                    })
+                    .filter(|name| !name.trim().is_empty());
+                let Some(attribute) = attribute else {
+                    continue;
+                };
+                if !template_attribute_names.insert(attribute.to_ascii_lowercase()) {
+                    continue;
+                }
+                selected.push(format!(
+                    "\"link_row\".{} AS {}",
+                    quote_sql_identifier(name),
+                    quote_sql_identifier(&format!("connection_attribute:{attribute}"))
                 ));
             }
         }
@@ -14529,6 +19721,9 @@ fn inspect_sqlite_schema_cli(database_path: &str, json_output: bool) -> Result<(
                 let object_type = object["type"].as_str().unwrap_or("object");
                 let name = object["name"].as_str().unwrap_or("");
                 println!("{object_type} {name}");
+                if let Some(error) = object["inspection_error"].as_str() {
+                    println!("  unavailable · {error}");
+                }
                 for column in object["columns"].as_array().into_iter().flatten() {
                     println!(
                         "  {} · {}{}",
@@ -14553,12 +19748,12 @@ fn inspect_sqlite_schema_cli(database_path: &str, json_output: bool) -> Result<(
                 }
             }
         }
-        match query_template {
-            Some((table, sql)) => println!("Suggested query from {table}:\n{sql}"),
-            None if !schema.is_empty() => {
-                println!("No table or view has recognizable source and target columns.");
+        if !query_templates.is_empty() {
+            for (index, (table, sql)) in query_templates.iter().enumerate() {
+                println!("Suggested query {} from {table}:\n{sql}", index + 1);
             }
-            None => {}
+        } else if !schema.is_empty() {
+            println!("No table or view has recognizable source and target columns.");
         }
     }
     Ok(())
@@ -14622,36 +19817,14 @@ fn export_sql_comparison_cli(
     Ok(())
 }
 
-fn export_sql_snapshot_cli(
-    case_path: &str,
-    snapshot_id: Uuid,
+fn write_sql_snapshots_csv<W: Write>(
     output_path: &str,
-    json_output: bool,
-) -> Result<(), String> {
-    let case_file = Path::new(case_path);
-    let _case_lock = lock_automation_case(case_file)?;
-    let content =
-        fs::read_to_string(case_file).map_err(|error| format!("cannot read case: {error}"))?;
-    let case = serde_json::from_str::<CaseFile>(&content)
-        .map_err(|error| format!("cannot parse case: {error}"))?;
-    let snapshot = case
-        .snapshots
-        .iter()
-        .find(|snapshot| snapshot.id == snapshot_id)
-        .cloned()
-        .ok_or_else(|| format!("snapshot not found: {snapshot_id}"))?;
-    if output_path.trim().is_empty() {
-        return Err("export path cannot be empty".into());
-    }
-    if paths_refer_to_same_file(case_path, output_path) {
-        return Err("snapshot export cannot replace its case file".into());
-    }
-    let app = App::automation_context(case, case_path);
-    app.ensure_path_is_not_sql_source(output_path)?;
-
+    snapshots: &[&ConnectionSnapshot],
+    output: W,
+) -> Result<W, String> {
     let mut writer = csv::WriterBuilder::new()
         .delimiter(delimited_text_delimiter(output_path))
-        .from_writer(Vec::new());
+        .from_writer(output);
     writer
         .write_record([
             "snapshot_id",
@@ -14670,48 +19843,386 @@ fn export_sql_snapshot_cli(
             "source_type",
             "target",
             "target_type",
+            "source_attributes_json",
+            "target_attributes_json",
+            "connection_attributes_json",
             "relationship",
             "date",
             "confidence",
             "directed",
             "source_reference",
-            "notes",
+            "source_notes",
         ])
         .map_err(|error| error.to_string())?;
-    let parameters_json = serde_json::to_string(&snapshot.parameters)
-        .map_err(|error| format!("could not encode snapshot parameters: {error}"))?;
-    for connection in &snapshot.connections {
+    for snapshot in snapshots {
+        let parameters_json = serde_json::to_string(&snapshot.parameters)
+            .map_err(|error| format!("could not encode snapshot parameters: {error}"))?;
+        for connection in &snapshot.connections {
+            let source_attributes = serde_json::to_string(&connection.source_attributes)
+                .map_err(|error| format!("could not encode source attributes: {error}"))?;
+            let target_attributes = serde_json::to_string(&connection.target_attributes)
+                .map_err(|error| format!("could not encode target attributes: {error}"))?;
+            let connection_attributes = serde_json::to_string(&connection.attributes)
+                .map_err(|error| format!("could not encode connection attributes: {error}"))?;
+            writer
+                .write_record([
+                    snapshot.id.to_string(),
+                    snapshot.source_key.clone(),
+                    snapshot.database_path.clone(),
+                    snapshot.configured_database_path.clone(),
+                    snapshot.series.clone(),
+                    snapshot.query.clone(),
+                    parameters_json.clone(),
+                    snapshot.captured_at.clone(),
+                    snapshot.skipped_rows.to_string(),
+                    connection.connection_id.clone(),
+                    connection.source_entity_id.clone(),
+                    connection.target_entity_id.clone(),
+                    connection.source.clone(),
+                    connection.source_type.clone(),
+                    connection.target.clone(),
+                    connection.target_type.clone(),
+                    source_attributes,
+                    target_attributes,
+                    connection_attributes,
+                    connection.relationship.clone(),
+                    connection.date.clone(),
+                    connection.confidence.to_string(),
+                    connection.directed.to_string(),
+                    connection.source_reference.clone(),
+                    connection.notes.clone(),
+                ])
+                .map_err(|error| error.to_string())?;
+        }
+    }
+    writer.flush().map_err(|error| error.to_string())?;
+    writer
+        .into_inner()
+        .map_err(|error| format!("could not finish snapshot export: {}", error.error()))
+}
+
+fn write_sql_snapshots_csv_atomically(
+    output_path: &str,
+    snapshots: &[&ConnectionSnapshot],
+) -> Result<(), String> {
+    let path = Path::new(output_path);
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| format!("invalid output path: {}", path.display()))?;
+    let mut temporary_name = file_name.to_os_string();
+    temporary_name.push(format!(".tmp-{}-{}", std::process::id(), Uuid::new_v4()));
+    let temporary_path = parent.join(temporary_name);
+
+    use std::fs::OpenOptions;
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let file = options.open(&temporary_path).map_err(|error| {
+        format!(
+            "cannot create temporary export {}: {error}",
+            temporary_path.display()
+        )
+    })?;
+    let result = (|| -> Result<(), String> {
+        let file = write_sql_snapshots_csv(output_path, snapshots, file)?;
+        file.sync_all()
+            .map_err(|error| format!("cannot sync temporary export: {error}"))?;
+        drop(file);
+        fs::rename(&temporary_path, path)
+            .map_err(|error| format!("cannot replace export {}: {error}", path.display()))
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(temporary_path);
+    }
+    result
+}
+
+fn write_automation_runs_csv_atomically(
+    output_path: &str,
+    case: &CaseFile,
+    runs: &[&AutomationRun],
+) -> Result<(), String> {
+    let path = Path::new(output_path);
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| format!("invalid output path: {}", path.display()))?;
+    let mut temporary_name = file_name.to_os_string();
+    temporary_name.push(format!(".tmp-{}-{}", std::process::id(), Uuid::new_v4()));
+    let temporary_path = parent.join(temporary_name);
+
+    use std::fs::OpenOptions;
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let file = options.open(&temporary_path).map_err(|error| {
+        format!(
+            "cannot create temporary export {}: {error}",
+            temporary_path.display()
+        )
+    })?;
+    let result = (|| -> Result<(), String> {
+        let mut writer = csv::WriterBuilder::new()
+            .delimiter(delimited_text_delimiter(output_path))
+            .from_writer(file);
         writer
             .write_record([
-                snapshot.id.to_string(),
-                snapshot.source_key.clone(),
-                snapshot.database_path.clone(),
-                snapshot.configured_database_path.clone(),
-                snapshot.series.clone(),
-                snapshot.query.clone(),
-                parameters_json.clone(),
-                snapshot.captured_at.clone(),
-                snapshot.skipped_rows.to_string(),
-                connection.connection_id.clone(),
-                connection.source_entity_id.clone(),
-                connection.target_entity_id.clone(),
-                connection.source.clone(),
-                connection.source_type.clone(),
-                connection.target.clone(),
-                connection.target_type.clone(),
-                connection.relationship.clone(),
-                connection.date.clone(),
-                connection.confidence.to_string(),
-                connection.directed.to_string(),
-                connection.source_reference.clone(),
-                connection.notes.clone(),
+                "run_id",
+                "batch_id",
+                "job_id",
+                "job_name",
+                "trigger",
+                "success",
+                "schema_adaptation_required",
+                "schema_adaptation_kind",
+                "started_at",
+                "finished_at",
+                "duration_ms",
+                "message",
+                "analyst_note",
+                "regressions_reviewed",
+                "rerun_of",
+                "sqlite_lock_retries",
+                "configuration_recorded",
+                "database_path",
+                "canonical_database_path",
+                "configured_database_path",
+                "series",
+                "query",
+                "parameters_json",
+                "parameter_overrides_json",
+                "minimum_connections",
+                "minimum_confidence",
+                "maximum_connections",
+                "maximum_regressions",
+                "maximum_added_connections",
+                "maximum_connection_property_changes",
+                "maximum_skipped_rows",
+                "snapshot_id",
+                "source_key",
+                "captured_at",
+                "result_quality",
+                "configuration_changed",
+                "query_changed",
+                "parameters_changed",
+                "connection_count",
+                "skipped_rows",
+                "removed_connections",
+                "confidence_declines",
+                "relationship_property_changes",
+                "added_connections",
+                "delta_json",
             ])
             .map_err(|error| error.to_string())?;
+
+        for run in runs {
+            let schema_adaptation_kind = sql_schema_adaptation_kind(&run.message);
+            let snapshot_index = run
+                .snapshot_id
+                .and_then(|id| case.snapshots.iter().position(|snapshot| snapshot.id == id))
+                .or_else(|| {
+                    run.snapshot_index
+                        .filter(|index| *index < case.snapshots.len())
+                });
+            let snapshot = snapshot_index.and_then(|index| case.snapshots.get(index));
+            let previous = snapshot_index
+                .and_then(|index| previous_snapshot_index(case, index))
+                .and_then(|index| case.snapshots.get(index));
+            let delta = snapshot.map(|snapshot| snapshot_delta_json(snapshot, previous));
+            let count = |key: &str| {
+                delta
+                    .as_ref()
+                    .and_then(|delta| delta.pointer(&format!("/counts/{key}")))
+                    .and_then(serde_json::Value::as_u64)
+                    .map(|value| value.to_string())
+                    .unwrap_or_default()
+            };
+            let configuration_flag = |key: &str| {
+                delta
+                    .as_ref()
+                    .and_then(|delta| delta.pointer(key))
+                    .and_then(serde_json::Value::as_bool)
+                    .map(|value| value.to_string())
+                    .unwrap_or_default()
+            };
+            let parameters = serde_json::to_string(&run.parameters)
+                .map_err(|error| format!("cannot serialize run parameters: {error}"))?;
+            let overrides = serde_json::to_string(&run.parameter_overrides)
+                .map_err(|error| format!("cannot serialize parameter overrides: {error}"))?;
+            let delta_json = delta
+                .as_ref()
+                .map(serde_json::to_string)
+                .transpose()
+                .map_err(|error| format!("cannot serialize snapshot delta: {error}"))?
+                .unwrap_or_default();
+            writer
+                .write_record([
+                    run.id.to_string(),
+                    run.batch_id.map(|id| id.to_string()).unwrap_or_default(),
+                    run.job_id.to_string(),
+                    run.job_name.clone(),
+                    automation_run_trigger_label(&run.trigger).to_owned(),
+                    run.success.to_string(),
+                    (!run.success && schema_adaptation_kind.is_some()).to_string(),
+                    schema_adaptation_kind.unwrap_or_default().to_owned(),
+                    run.started_at.clone(),
+                    run.finished_at.clone(),
+                    run.duration_ms
+                        .map(|value| value.to_string())
+                        .unwrap_or_default(),
+                    run.message.clone(),
+                    run.analyst_note.clone(),
+                    run.regressions_reviewed
+                        .map(|value| value.to_string())
+                        .unwrap_or_default(),
+                    run.rerun_of.map(|id| id.to_string()).unwrap_or_default(),
+                    run.sqlite_lock_retries.to_string(),
+                    run.configuration_recorded.to_string(),
+                    run.database_path.clone(),
+                    snapshot
+                        .map(|snapshot| snapshot.database_path.clone())
+                        .unwrap_or_default(),
+                    snapshot
+                        .map(|snapshot| snapshot.configured_database_path.clone())
+                        .unwrap_or_default(),
+                    run.series.clone(),
+                    run.query.clone(),
+                    parameters,
+                    overrides,
+                    run.minimum_connections.to_string(),
+                    run.minimum_confidence
+                        .map(|value| value.to_string())
+                        .unwrap_or_default(),
+                    run.maximum_connections
+                        .map(|value| value.to_string())
+                        .unwrap_or_default(),
+                    run.maximum_regressions
+                        .map(|value| value.to_string())
+                        .unwrap_or_default(),
+                    run.maximum_added_connections
+                        .map(|value| value.to_string())
+                        .unwrap_or_default(),
+                    run.maximum_connection_property_changes
+                        .map(|value| value.to_string())
+                        .unwrap_or_default(),
+                    run.maximum_skipped_rows
+                        .map(|value| value.to_string())
+                        .unwrap_or_default(),
+                    run.snapshot_id
+                        .or_else(|| snapshot.map(|snapshot| snapshot.id))
+                        .map(|id| id.to_string())
+                        .unwrap_or_default(),
+                    snapshot
+                        .map(|snapshot| snapshot.source_key.clone())
+                        .unwrap_or_default(),
+                    snapshot
+                        .map(|snapshot| snapshot.captured_at.clone())
+                        .unwrap_or_default(),
+                    snapshot
+                        .map(snapshot_result_quality)
+                        .map(snapshot_result_quality_label)
+                        .unwrap_or("NO SNAPSHOT")
+                        .to_owned(),
+                    configuration_flag("/configuration_changed"),
+                    configuration_flag("/configuration_changes/query"),
+                    configuration_flag("/configuration_changes/parameters"),
+                    snapshot
+                        .map(|snapshot| snapshot.connections.len().to_string())
+                        .unwrap_or_default(),
+                    snapshot
+                        .map(|snapshot| snapshot.skipped_rows.to_string())
+                        .unwrap_or_default(),
+                    count("removed"),
+                    count("confidence_declined"),
+                    count("connection_properties_changed"),
+                    count("added"),
+                    delta_json,
+                ])
+                .map_err(|error| error.to_string())?;
+        }
+        writer.flush().map_err(|error| error.to_string())?;
+        let file = writer
+            .into_inner()
+            .map_err(|error| format!("could not finish run history export: {}", error.error()))?;
+        file.sync_all()
+            .map_err(|error| format!("cannot sync temporary export: {error}"))?;
+        drop(file);
+        fs::rename(&temporary_path, path)
+            .map_err(|error| format!("cannot replace export {}: {error}", path.display()))
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(temporary_path);
     }
-    let contents = writer
-        .into_inner()
-        .map_err(|error| format!("could not finish snapshot export: {}", error.error()))?;
-    write_file_atomically(Path::new(output_path), &contents)?;
+    result
+}
+
+fn ensure_case_export_path_is_not_sql_source(
+    case: &CaseFile,
+    case_path: &str,
+    output_path: &str,
+) -> Result<(), String> {
+    let output_path = Path::new(output_path);
+    let is_sql_source = case.snapshots.iter().any(|snapshot| {
+        paths_refer_to_same_file(
+            output_path.to_string_lossy().as_ref(),
+            &snapshot.database_path,
+        )
+    }) || case.automation_jobs.iter().any(|job| {
+        resolve_sqlite_database_path(&job.database_path, case_path).is_ok_and(|source_path| {
+            paths_refer_to_same_file(
+                output_path.to_string_lossy().as_ref(),
+                &source_path.to_string_lossy(),
+            )
+        })
+    });
+    if is_sql_source {
+        Err("export path matches an SQLite source database".into())
+    } else {
+        Ok(())
+    }
+}
+
+fn export_sql_snapshot_cli(
+    case_path: &str,
+    snapshot_id: Uuid,
+    output_path: &str,
+    json_output: bool,
+) -> Result<(), String> {
+    let case_file = Path::new(case_path);
+    let _case_lock = lock_automation_case(case_file)?;
+    let content =
+        fs::read_to_string(case_file).map_err(|error| format!("cannot read case: {error}"))?;
+    let case = serde_json::from_str::<CaseFile>(&content)
+        .map_err(|error| format!("cannot parse case: {error}"))?;
+    let snapshot = case
+        .snapshots
+        .iter()
+        .find(|snapshot| snapshot.id == snapshot_id)
+        .ok_or_else(|| format!("snapshot not found: {snapshot_id}"))?;
+    if output_path.trim().is_empty() {
+        return Err("export path cannot be empty".into());
+    }
+    if paths_refer_to_same_file(case_path, output_path) {
+        return Err("snapshot export cannot replace its case file".into());
+    }
+    ensure_case_export_path_is_not_sql_source(&case, case_path, output_path)?;
+
+    write_sql_snapshots_csv_atomically(output_path, &[snapshot])?;
     if json_output {
         println!(
             "{}",
@@ -14739,6 +20250,87 @@ fn export_sql_snapshot_cli(
             "SQL SNAPSHOT EXPORTED · {} CONNECTIONS · {}",
             snapshot.connections.len(),
             output_path
+        );
+    }
+    Ok(())
+}
+
+fn export_sql_series_cli(
+    case_path: &str,
+    snapshot_id: Uuid,
+    output_path: &str,
+    json_output: bool,
+) -> Result<(), String> {
+    let case_file = Path::new(case_path);
+    let _case_lock = lock_automation_case(case_file)?;
+    let content =
+        fs::read_to_string(case_file).map_err(|error| format!("cannot read case: {error}"))?;
+    let case = serde_json::from_str::<CaseFile>(&content)
+        .map_err(|error| format!("cannot parse case: {error}"))?;
+    let selected = case
+        .snapshots
+        .iter()
+        .find(|snapshot| snapshot.id == snapshot_id)
+        .ok_or_else(|| format!("snapshot not found: {snapshot_id}"))?;
+    let snapshots: Vec<&ConnectionSnapshot> = case
+        .snapshots
+        .iter()
+        .filter(|snapshot| snapshot.source_key == selected.source_key)
+        .collect();
+    if output_path.trim().is_empty() {
+        return Err("export path cannot be empty".into());
+    }
+    if paths_refer_to_same_file(case_path, output_path) {
+        return Err("series export cannot replace its case file".into());
+    }
+    ensure_case_export_path_is_not_sql_source(&case, case_path, output_path)?;
+    write_sql_snapshots_csv_atomically(output_path, &snapshots)?;
+    let connection_count: usize = snapshots
+        .iter()
+        .map(|snapshot| snapshot.connections.len())
+        .sum();
+    let skipped_rows: usize = snapshots.iter().map(|snapshot| snapshot.skipped_rows).sum();
+    if json_output {
+        let capture_details: Vec<serde_json::Value> = snapshots
+            .iter()
+            .map(|snapshot| {
+                serde_json::json!({
+                    "snapshot_id": snapshot.id,
+                    "source_key": snapshot.source_key,
+                    "database_path": snapshot.database_path,
+                    "configured_database_path": snapshot.configured_database_path,
+                    "series": snapshot.series,
+                    "query": snapshot.query,
+                    "captured_at": snapshot.captured_at,
+                    "connections": snapshot.connections.len(),
+                    "skipped_rows": snapshot.skipped_rows,
+                    "parameters": snapshot.parameters,
+                })
+            })
+            .collect();
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "schema_version": 1,
+                "ok": true,
+                "case": case_path,
+                "output": output_path,
+                "format": delimited_text_format(output_path),
+                "source_key": selected.source_key,
+                "database_path": selected.database_path,
+                "configured_database_path": selected.configured_database_path,
+                "series": selected.series,
+                "capture_count": snapshots.len(),
+                "connections": connection_count,
+                "skipped_rows": skipped_rows,
+                "snapshots": capture_details,
+            }))
+            .map_err(|error| error.to_string())?
+        );
+    } else {
+        println!(
+            "SQL SERIES EXPORTED · {} CAPTURES · {connection_count} CONNECTIONS · {output_path}",
+            snapshots.len()
         );
     }
     Ok(())
@@ -14878,6 +20470,7 @@ fn validate_automation_job_cli(
     app.automation_maximum_connections = job.maximum_connections;
     app.automation_maximum_regressions = job.maximum_regressions;
     app.automation_maximum_added_connections = job.maximum_added_connections;
+    app.automation_maximum_connection_property_changes = job.maximum_connection_property_changes;
     app.automation_maximum_skipped_rows = job.maximum_skipped_rows;
     let snapshot_index = app.case.snapshots.len();
     let limits_pass = app.validate_sql_query_for_batch();
@@ -14948,6 +20541,120 @@ fn validate_automation_job_cli(
         );
     }
     Ok(success)
+}
+
+fn inspect_sql_query_plan(
+    configured_database_path: &str,
+    case_path: &str,
+    query: &str,
+    parameters: &[(String, String)],
+) -> Result<(PathBuf, Vec<SqlPlanStep>), String> {
+    let database_path = resolve_sqlite_database_path(configured_database_path, case_path)?;
+    let connection = Connection::open_with_flags(&database_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map_err(|error| format!("cannot open SQLite database read-only: {error}"))?;
+    connection
+        .busy_timeout(Duration::from_secs(5))
+        .map_err(|error| error.to_string())?;
+    let source_statement = connection
+        .prepare(query)
+        .map_err(|error| format!("cannot prepare saved SQL query: {error}"))?;
+    if !source_statement.readonly() {
+        return Err("SQL query must be read-only".into());
+    }
+    let parameter_values = sql_parameter_values(&source_statement, parameters)?;
+    let explain_query = format!("EXPLAIN QUERY PLAN {}", query.trim().trim_end_matches(';'));
+    let mut statement = connection
+        .prepare(&explain_query)
+        .map_err(|error| format!("cannot explain saved SQL query: {error}"))?;
+    let steps = statement
+        .query_map(params_from_iter(parameter_values.iter()), |row| {
+            Ok(SqlPlanStep {
+                id: row.get(0)?,
+                parent: row.get(1)?,
+                detail: row.get(3)?,
+            })
+        })
+        .map_err(|error| format!("cannot read SQL query plan: {error}"))?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|error| format!("cannot read SQL query plan: {error}"))?;
+    Ok((database_path, steps))
+}
+
+fn explain_automation_job_cli(
+    case_path: &str,
+    selector: &str,
+    parameter_overrides: &[(String, String)],
+    json_output: bool,
+) -> Result<(), String> {
+    let _case_lock = lock_automation_case(Path::new(case_path))?;
+    let content =
+        fs::read_to_string(case_path).map_err(|error| format!("cannot read case: {error}"))?;
+    let mut case = serde_json::from_str::<CaseFile>(&content)
+        .map_err(|error| format!("cannot parse case: {error}"))?;
+    normalize_snapshot_database_paths(&mut case, case_path);
+    let matches: Vec<AutomationJob> = case
+        .automation_jobs
+        .iter()
+        .filter(|job| {
+            job.name.eq_ignore_ascii_case(selector)
+                || job.id.to_string().eq_ignore_ascii_case(selector)
+        })
+        .cloned()
+        .collect();
+    if matches.len() > 1 {
+        return Err(format!("job selector is ambiguous: {selector}"));
+    }
+    let mut job = matches
+        .into_iter()
+        .next()
+        .ok_or_else(|| format!("automation job not found: {selector}"))?;
+    apply_sql_parameter_overrides(std::slice::from_mut(&mut job), parameter_overrides, &[])?;
+    if let Some(error) = automation_job_configuration_error(&job) {
+        return Err(format!("SQL job configuration invalid: {error}"));
+    }
+    let (database_path, steps) =
+        inspect_sql_query_plan(&job.database_path, case_path, &job.query, &job.parameters)?;
+    let depths = sql_plan_step_depths(&steps);
+    let scan_step_count = steps
+        .iter()
+        .filter(|step| step.detail.to_ascii_uppercase().contains("SCAN "))
+        .count();
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "schema_version": 1,
+                "ok": true,
+                "mode": "query_plan",
+                "saved": false,
+                "case": case_path,
+                "job_id": job.id,
+                "job": job.name,
+                "database": database_path,
+                "series": job.series,
+                "query": job.query,
+                "parameters": job.parameters,
+                "scan_steps": scan_step_count,
+                "steps": steps.iter().zip(&depths).map(|(step, depth)| serde_json::json!({
+                    "id": step.id,
+                    "parent": step.parent,
+                    "depth": depth,
+                    "detail": step.detail,
+                })).collect::<Vec<_>>(),
+            }))
+            .map_err(|error| error.to_string())?
+        );
+    } else {
+        println!("SQL QUERY PLAN · {} · {}", job.name, job.database_path);
+        for (step, depth) in steps.iter().zip(depths) {
+            println!("  {}{}", "  ".repeat(depth), step.detail);
+        }
+        println!(
+            "{} scan steps · planner output only; query rows were not read",
+            scan_step_count
+        );
+    }
+    Ok(())
 }
 
 fn validate_enabled_automation_jobs_cli(
@@ -15032,6 +20739,8 @@ fn validate_enabled_automation_jobs_cli(
         app.automation_maximum_connections = job.maximum_connections;
         app.automation_maximum_regressions = job.maximum_regressions;
         app.automation_maximum_added_connections = job.maximum_added_connections;
+        app.automation_maximum_connection_property_changes =
+            job.maximum_connection_property_changes;
         app.automation_maximum_skipped_rows = job.maximum_skipped_rows;
         let snapshot_count_before = app.case.snapshots.len();
         let limits_pass = app.validate_sql_query_for_batch();
@@ -15153,6 +20862,7 @@ fn list_automation_jobs_cli(
                 "maximum_connections": job.maximum_connections,
                 "maximum_regressions": job.maximum_regressions,
                 "maximum_added_connections": job.maximum_added_connections,
+                "maximum_connection_property_changes": job.maximum_connection_property_changes,
                 "maximum_skipped_rows": job.maximum_skipped_rows,
                 "latest_run": latest_run,
             })
@@ -15196,6 +20906,7 @@ fn automation_job_package(job: &AutomationJob) -> AutomationJobPackage {
             maximum_connections: job.maximum_connections,
             maximum_regressions: job.maximum_regressions,
             maximum_added_connections: job.maximum_added_connections,
+            maximum_connection_property_changes: job.maximum_connection_property_changes,
             maximum_skipped_rows: job.maximum_skipped_rows,
         },
     }
@@ -15277,7 +20988,7 @@ fn job_from_automation_package(
             existing.name
         ));
     }
-    Ok(AutomationJob {
+    let job = AutomationJob {
         id: Uuid::new_v4(),
         name: definition.name.trim().to_owned(),
         database_path: definition.database_path.trim().to_owned(),
@@ -15290,8 +21001,13 @@ fn job_from_automation_package(
         maximum_connections: definition.maximum_connections,
         maximum_regressions: definition.maximum_regressions,
         maximum_added_connections: definition.maximum_added_connections,
+        maximum_connection_property_changes: definition.maximum_connection_property_changes,
         maximum_skipped_rows: definition.maximum_skipped_rows,
-    })
+    };
+    if let Some(error) = automation_job_configuration_error(&job) {
+        return Err(format!("job package configuration is invalid: {error}"));
+    }
+    Ok(job)
 }
 
 fn write_automation_job_package(
@@ -15381,6 +21097,15 @@ fn import_design_from_package(
             "import design package mapping refers to a column outside its header signature".into(),
         );
     }
+    if !import_connection_attribute_mappings_valid(
+        &definition.mapping.connection_attributes,
+        &header_signature,
+    ) {
+        return Err(
+            "import design package contains invalid or duplicate relationship property mappings"
+                .into(),
+        );
+    }
     Ok(ImportSpecification {
         id: Uuid::new_v4(),
         name: definition.name,
@@ -15439,6 +21164,8 @@ fn import_design_mapping_matches_header_signature(
         mapping.target_detail.as_str(),
         mapping.source_aliases.as_str(),
         mapping.target_aliases.as_str(),
+        mapping.source_merged_records.as_str(),
+        mapping.target_merged_records.as_str(),
         mapping.source_color.as_str(),
         mapping.target_color.as_str(),
         mapping.source_x.as_str(),
@@ -15451,6 +21178,12 @@ fn import_design_mapping_matches_header_signature(
     mapped_columns.extend(
         mapping
             .entity_attributes
+            .iter()
+            .map(|attribute| attribute.column.as_str()),
+    );
+    mapped_columns.extend(
+        mapping
+            .connection_attributes
             .iter()
             .map(|attribute| attribute.column.as_str()),
     );
@@ -15595,6 +21328,201 @@ fn import_import_design_cli(
     Ok(())
 }
 
+fn saved_path_package_for_case(
+    case: &CaseFile,
+    path: &SavedPath,
+) -> Result<SavedPathPackage, String> {
+    let endpoint = |id| {
+        case.entities
+            .iter()
+            .find(|entity| entity.id == id)
+            .map(|entity| SavedPathEndpoint {
+                id,
+                name: entity.name.clone(),
+                kind: entity.kind.clone(),
+            })
+            .ok_or_else(|| format!("saved path endpoint is missing: {id}"))
+    };
+    Ok(SavedPathPackage {
+        format: "arch-notebook-saved-path".into(),
+        schema_version: 1,
+        path: SavedPathPackageDefinition {
+            name: path.name.clone(),
+            start: endpoint(path.start_entity_id)?,
+            end: endpoint(path.end_entity_id)?,
+            follow_directions: path.follow_directions,
+            time_flow: path.time_flow,
+            use_timeline_range: path.use_timeline_range,
+        },
+    })
+}
+
+fn write_saved_path_package(
+    case: &CaseFile,
+    case_path: &str,
+    output_path: &str,
+    package: &SavedPathPackage,
+) -> Result<String, String> {
+    if output_path.trim().is_empty() {
+        return Err("saved path package output path cannot be empty".into());
+    }
+    if paths_refer_to_same_file(case_path, output_path) {
+        return Err("saved path package cannot replace its case file".into());
+    }
+    let lock_path = automation_lock_path(Path::new(case_path))?;
+    if paths_refer_to_same_file(&lock_path.to_string_lossy(), output_path) {
+        return Err("saved path package cannot replace the case automation lock".into());
+    }
+    ensure_case_export_path_is_not_sql_source(case, case_path, output_path)?;
+    let contents = serde_json::to_vec_pretty(package).map_err(|error| error.to_string())?;
+    write_file_atomically(Path::new(output_path), &contents)?;
+    Ok(package.path.name.clone())
+}
+
+fn read_saved_path_package(input_path: &str) -> Result<SavedPathPackage, String> {
+    let content = fs::read_to_string(input_path)
+        .map_err(|error| format!("cannot read saved path package: {error}"))?;
+    let package = serde_json::from_str::<SavedPathPackage>(&content)
+        .map_err(|error| format!("cannot parse saved path package: {error}"))?;
+    if package.format != "arch-notebook-saved-path" {
+        return Err("input is not an Arch Notebook saved path package".into());
+    }
+    if package.schema_version != 1 {
+        return Err(format!(
+            "unsupported saved path package schema version: {}",
+            package.schema_version
+        ));
+    }
+    Ok(package)
+}
+
+fn resolve_saved_path_endpoint(
+    case: &CaseFile,
+    endpoint: &SavedPathEndpoint,
+) -> Result<Uuid, String> {
+    if case.entities.iter().any(|entity| entity.id == endpoint.id) {
+        return Ok(endpoint.id);
+    }
+    let matches: Vec<&Entity> = case
+        .entities
+        .iter()
+        .filter(|entity| {
+            entity.name.eq_ignore_ascii_case(&endpoint.name)
+                && entity.kind.eq_ignore_ascii_case(&endpoint.kind)
+        })
+        .collect();
+    match matches.as_slice() {
+        [entity] => Ok(entity.id),
+        [] => Err(format!(
+            "saved path endpoint not found: {} · {}",
+            endpoint.name, endpoint.kind
+        )),
+        _ => Err(format!(
+            "saved path endpoint is ambiguous: {} · {}",
+            endpoint.name, endpoint.kind
+        )),
+    }
+}
+
+fn import_saved_path_definition(
+    definition: SavedPathPackageDefinition,
+    case: &CaseFile,
+    name_override: Option<&str>,
+) -> Result<SavedPath, String> {
+    let name = name_override
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or(&definition.name)
+        .trim();
+    if name.is_empty() {
+        return Err("saved path package must include a name".into());
+    }
+    if case
+        .saved_paths
+        .iter()
+        .any(|saved| saved.name.eq_ignore_ascii_case(name))
+    {
+        return Err(format!("saved path name already exists in case: {name}"));
+    }
+    let start_entity_id = resolve_saved_path_endpoint(case, &definition.start)?;
+    let end_entity_id = resolve_saved_path_endpoint(case, &definition.end)?;
+    if start_entity_id == end_entity_id {
+        return Err("saved path endpoints resolve to the same entity".into());
+    }
+    Ok(SavedPath {
+        id: Uuid::new_v4(),
+        name: name.to_owned(),
+        start_entity_id,
+        end_entity_id,
+        follow_directions: definition.follow_directions,
+        time_flow: definition.time_flow,
+        use_timeline_range: definition.use_timeline_range,
+    })
+}
+
+fn export_saved_path_cli(
+    case_path: &str,
+    selector: &str,
+    output_path: &str,
+    json_output: bool,
+) -> Result<(), String> {
+    let case_file = Path::new(case_path);
+    let _case_lock = lock_automation_case(case_file)?;
+    let content =
+        fs::read_to_string(case_file).map_err(|error| format!("cannot read case: {error}"))?;
+    let case = serde_json::from_str::<CaseFile>(&content)
+        .map_err(|error| format!("cannot parse case: {error}"))?;
+    let matches: Vec<&SavedPath> = case
+        .saved_paths
+        .iter()
+        .filter(|path| {
+            path.name.eq_ignore_ascii_case(selector)
+                || path.id.to_string().eq_ignore_ascii_case(selector)
+        })
+        .collect();
+    if matches.len() > 1 {
+        return Err(format!("saved path selector is ambiguous: {selector}"));
+    }
+    let path = matches
+        .first()
+        .ok_or_else(|| format!("saved path not found: {selector}"))?;
+    let package = saved_path_package_for_case(&case, path)?;
+    write_saved_path_package(&case, case_path, output_path, &package)?;
+    if json_output {
+        println!("{}", serde_json::to_string_pretty(&serde_json::json!({"schema_version":1,"ok":true,"case":case_path,"output":output_path,"path_id":path.id,"path":path.name})).map_err(|error| error.to_string())?);
+    } else {
+        println!("SAVED PATH EXPORTED · {} · {output_path}", path.name);
+    }
+    Ok(())
+}
+
+fn import_saved_path_cli(
+    case_path: &str,
+    input_path: &str,
+    name_override: Option<&str>,
+    json_output: bool,
+) -> Result<(), String> {
+    let case_file = Path::new(case_path);
+    let _case_lock = lock_automation_case(case_file)?;
+    let package = read_saved_path_package(input_path)?;
+    let content =
+        fs::read_to_string(case_file).map_err(|error| format!("cannot read case: {error}"))?;
+    let mut case = serde_json::from_str::<CaseFile>(&content)
+        .map_err(|error| format!("cannot parse case: {error}"))?;
+    let saved = import_saved_path_definition(package.path, &case, name_override)?;
+    let name = saved.name.clone();
+    let start = saved.start_entity_id;
+    let end = saved.end_entity_id;
+    let saved_id = saved.id;
+    case.saved_paths.push(saved);
+    save_case_atomically(case_file, &case)?;
+    if json_output {
+        println!("{}", serde_json::to_string_pretty(&serde_json::json!({"schema_version":1,"ok":true,"saved":true,"case":case_path,"input":input_path,"path_id":saved_id,"path":name,"start_entity_id":start,"end_entity_id":end})).map_err(|error| error.to_string())?);
+    } else {
+        println!("SAVED PATH IMPORTED · {name}");
+    }
+    Ok(())
+}
+
 fn write_file_atomically(path: &Path, contents: &[u8]) -> Result<(), String> {
     use std::fs::OpenOptions;
     let parent = path
@@ -15675,12 +21603,80 @@ fn export_automation_job_cli(
     Ok(())
 }
 
+fn export_automation_runs_cli(
+    case_path: &str,
+    output_path: &str,
+    job_filter: Option<&str>,
+    trigger_filter: Option<&str>,
+    schema_adaptation_needed: bool,
+    offset: usize,
+    limit: Option<usize>,
+    json_output: bool,
+) -> Result<(), String> {
+    let case_file = Path::new(case_path);
+    let _case_lock = lock_automation_case(case_file)?;
+    let content =
+        fs::read_to_string(case_file).map_err(|error| format!("cannot read case: {error}"))?;
+    let case = serde_json::from_str::<CaseFile>(&content)
+        .map_err(|error| format!("cannot parse case: {error}"))?;
+    if output_path.trim().is_empty() {
+        return Err("export path cannot be empty".into());
+    }
+    if paths_refer_to_same_file(case_path, output_path) {
+        return Err("run history export cannot replace its case file".into());
+    }
+    let lock_path = automation_lock_path(case_file)?;
+    if paths_refer_to_same_file(&lock_path.to_string_lossy(), output_path) {
+        return Err("run history export cannot replace the case automation lock".into());
+    }
+    ensure_case_export_path_is_not_sql_source(&case, case_path, output_path)?;
+    let matching_runs: Vec<&AutomationRun> = case
+        .automation_runs
+        .iter()
+        .rev()
+        .filter(|run| {
+            job_filter.is_none_or(|filter| {
+                run.job_name.eq_ignore_ascii_case(filter)
+                    || run.job_id.to_string().eq_ignore_ascii_case(filter)
+            }) && trigger_filter.is_none_or(|filter| run.trigger.eq_ignore_ascii_case(filter))
+                && (!schema_adaptation_needed
+                    || (!run.success && sql_schema_adaptation_kind(&run.message).is_some()))
+        })
+        .skip(offset)
+        .take(limit.unwrap_or(usize::MAX))
+        .collect();
+    write_automation_runs_csv_atomically(output_path, &case, &matching_runs)?;
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "schema_version": 1,
+                "ok": true,
+                "case": case_path,
+                "output": output_path,
+                "format": delimited_text_format(output_path),
+                "filters": {"job": job_filter, "trigger": trigger_filter, "schema_adaptation_needed": schema_adaptation_needed, "offset": offset, "limit": limit},
+                "exported": matching_runs.len(),
+            }))
+            .map_err(|error| error.to_string())?
+        );
+    } else {
+        println!(
+            "AUTOMATION RUN HISTORY EXPORTED · {} RUNS · {}",
+            matching_runs.len(),
+            output_path
+        );
+    }
+    Ok(())
+}
+
 fn import_automation_job_cli(
     case_path: &str,
     input_path: &str,
     name_override: Option<&str>,
     database_path_override: Option<&str>,
     series_override: Option<&str>,
+    parameter_overrides: &[(String, String)],
     json_output: bool,
 ) -> Result<(), String> {
     let case_file = Path::new(case_path);
@@ -15690,7 +21686,7 @@ fn import_automation_job_cli(
         fs::read_to_string(case_file).map_err(|error| format!("cannot read case: {error}"))?;
     let mut case = serde_json::from_str::<CaseFile>(&content)
         .map_err(|error| format!("cannot parse case: {error}"))?;
-    let job = job_from_automation_package(
+    let mut job = job_from_automation_package(
         package.job,
         &case,
         case_path,
@@ -15698,6 +21694,12 @@ fn import_automation_job_cli(
         database_path_override,
         series_override,
     )?;
+    let override_values = AutomationParameterOverrides {
+        global: parameter_overrides.to_vec(),
+        scoped: Vec::new(),
+    };
+    validate_automation_parameter_override_values(&override_values)?;
+    apply_sql_parameter_overrides(std::slice::from_mut(&mut job), parameter_overrides, &[])?;
     let job_id = job.id;
     let job_name = job.name.clone();
     case.automation_jobs.push(job);
@@ -15716,6 +21718,7 @@ fn import_automation_job_cli(
                 "database_path": case.automation_jobs.last().map(|job|job.database_path.as_str()),
                 "series": case.automation_jobs.last().map(|job|job.series.as_str()),
                 "enabled": false,
+                "parameters": case.automation_jobs.last().map(|job|&job.parameters),
             }))
             .map_err(|error| error.to_string())?
         );
@@ -15730,6 +21733,7 @@ fn list_automation_runs_cli(
     json_output: bool,
     job_filter: Option<&str>,
     trigger_filter: Option<&str>,
+    schema_adaptation_needed: bool,
     offset: usize,
     limit: Option<usize>,
 ) -> Result<(), String> {
@@ -15751,6 +21755,8 @@ fn list_automation_runs_cli(
                 run.job_name.eq_ignore_ascii_case(filter)
                     || run.job_id.to_string().eq_ignore_ascii_case(filter)
             }) && trigger_filter.is_none_or(|filter| run.trigger.eq_ignore_ascii_case(filter))
+                && (!schema_adaptation_needed
+                    || (!run.success && sql_schema_adaptation_kind(&run.message).is_some()))
         })
         .collect();
     let total = matching_runs.len();
@@ -15789,6 +21795,7 @@ fn list_automation_runs_cli(
                 maximum_connections: run.maximum_connections,
                 maximum_regressions: run.maximum_regressions,
                 maximum_added_connections: run.maximum_added_connections,
+                maximum_connection_property_changes: run.maximum_connection_property_changes,
                 maximum_skipped_rows: run.maximum_skipped_rows,
             };
             let mut outcome = automation_outcome_json(
@@ -15801,6 +21808,7 @@ fn list_automation_runs_cli(
                 previous,
             );
             outcome["id"] = serde_json::json!(run.id);
+            outcome["batch_id"] = serde_json::json!(run.batch_id);
             outcome["started_at"] = serde_json::json!(run.started_at);
             outcome["finished_at"] = serde_json::json!(run.finished_at);
             outcome["duration_ms"] = serde_json::json!(run.duration_ms);
@@ -15833,7 +21841,7 @@ fn list_automation_runs_cli(
             serde_json::to_string_pretty(&serde_json::json!({
                 "schema_version":1,
                 "case":case_path,
-                "filter":{"job":job_filter,"trigger":trigger_filter,"offset":offset,"limit":limit},
+                "filter":{"job":job_filter,"trigger":trigger_filter,"schema_adaptation_needed":schema_adaptation_needed,"offset":offset,"limit":limit},
                 "total":total,
                 "returned":runs.len(),
                 "next_offset":(offset.saturating_add(runs.len()) < total)
@@ -15855,10 +21863,15 @@ fn list_automation_runs_cli(
                 .unwrap_or_else(|| "skips unknown".into());
             let removed = run["delta"]["counts"]["removed"].as_u64();
             let declined = run["delta"]["counts"]["confidence_declined"].as_u64();
+            let property_changes = run["delta"]["counts"]["connection_properties_changed"]
+                .as_u64()
+                .unwrap_or(0);
             let delta_summary = match (run["delta"]["baseline"].as_bool(), removed, declined) {
                 (Some(true), _, _) => "baseline".into(),
                 (_, Some(removed), Some(declined)) => {
-                    format!("{removed} removed · {declined} confidence declines")
+                    format!(
+                        "{removed} removed · {declined} confidence declines · {property_changes} relationship property changes"
+                    )
                 }
                 _ => "no comparison".into(),
             };
@@ -15866,11 +21879,16 @@ fn list_automation_runs_cli(
                 .as_u64()
                 .map(|duration| format!("{duration} ms"))
                 .unwrap_or_else(|| "duration unknown".into());
+            let schema_adaptation = run["schema_adaptation"]["kind"]
+                .as_str()
+                .map(|kind| format!("schema adaptation needed · {kind}"))
+                .unwrap_or_else(|| "schema adaptation not flagged".into());
             println!(
-                "{} · {} · {} · {} · {} · {} · {} · {} · {} · run {}",
+                "{} · {} · {} · {} · {} · {} · {} · {} · {} · {} · run {}",
                 run["status"].as_str().unwrap_or("UNKNOWN"),
                 automation_run_trigger_label(run["trigger"].as_str().unwrap_or("legacy")),
                 quality,
+                schema_adaptation,
                 run["job"].as_str().unwrap_or("(unknown job)"),
                 run["started_at"].as_str().unwrap_or("(unknown time)"),
                 connections,
@@ -15881,6 +21899,216 @@ fn list_automation_runs_cli(
             );
             if let Some(note) = run["analyst_note"].as_str().filter(|note| !note.is_empty()) {
                 println!("  COMMENT · {note}");
+            }
+        }
+    }
+    Ok(())
+}
+
+fn list_automation_batches_cli(case_path: &str, json_output: bool) -> Result<(), String> {
+    let case_file = Path::new(case_path);
+    let _case_lock = lock_automation_case(case_file)?;
+    let content =
+        fs::read_to_string(case_file).map_err(|error| format!("cannot read case: {error}"))?;
+    let case = serde_json::from_str::<CaseFile>(&content)
+        .map_err(|error| format!("cannot parse case: {error}"))?;
+    let batches: Vec<serde_json::Value> = case
+        .automation_batches
+        .iter()
+        .rev()
+        .map(|batch| {
+            let completed_job_ids: HashSet<Uuid> = batch
+                .completed_jobs
+                .iter()
+                .map(|checkpoint| checkpoint.job_id)
+                .collect();
+            let selected_jobs: Vec<serde_json::Value> = batch
+                .selected_jobs
+                .iter()
+                .map(|selection| {
+                    let effective_job = batch
+                        .effective_jobs
+                        .iter()
+                        .find(|job| job.id == selection.job_id);
+                    serde_json::json!({
+                        "job_id": selection.job_id,
+                        "job": selection.job_name,
+                        "effective_configuration_recorded": effective_job.is_some(),
+                        "effective_parameters": effective_job.map(|job| &job.parameters),
+                    })
+                })
+                .collect();
+            let pending_jobs: Vec<serde_json::Value> = batch
+                .selected_jobs
+                .iter()
+                .filter(|selection| !completed_job_ids.contains(&selection.job_id))
+                .map(|selection| {
+                    let latest_run = case.automation_runs.iter().rev().find(|run| {
+                        run.batch_id == Some(batch.batch_id)
+                            && run.job_id == selection.job_id
+                    });
+                    let schema_adaptation_kind = latest_run
+                        .filter(|run| !run.success)
+                        .and_then(|run| sql_schema_adaptation_kind(&run.message));
+                    serde_json::json!({
+                        "job_id": selection.job_id,
+                        "job": selection.job_name,
+                        "status": "RETRY_REQUIRED",
+                        "last_run_id": latest_run.map(|run| run.id),
+                        "last_status": latest_run.map(|run| if run.success { "PASS" } else { "FAIL" }),
+                        "last_message": latest_run.map(|run| run.message.as_str()),
+                        "last_finished_at": latest_run.map(|run| run.finished_at.as_str()),
+                        "schema_adaptation": {
+                            "required": schema_adaptation_kind.is_some(),
+                            "kind": schema_adaptation_kind,
+                            "hint": latest_run
+                                .filter(|run| !run.success)
+                                .and_then(|run| sql_schema_adaptation_hint(&run.message)),
+                        },
+                    })
+                })
+                .collect();
+            let completed_jobs: Vec<serde_json::Value> = batch
+                .completed_jobs
+                .iter()
+                .map(|checkpoint| {
+                    let schema_adaptation_kind =
+                        sql_schema_adaptation_kind(&checkpoint.message);
+                    let schema_adaptation = serde_json::json!({
+                        "required": !checkpoint.success && schema_adaptation_kind.is_some(),
+                        "kind": schema_adaptation_kind,
+                        "hint": sql_schema_adaptation_hint(&checkpoint.message),
+                    });
+                    let job_name = case
+                        .automation_jobs
+                        .iter()
+                        .find(|job| job.id == checkpoint.job_id)
+                        .map(|job| job.name.as_str())
+                        .or_else(|| {
+                            batch
+                                .selected_jobs
+                                .iter()
+                                .find(|selection| selection.job_id == checkpoint.job_id)
+                                .map(|selection| selection.job_name.as_str())
+                        });
+                    serde_json::json!({
+                        "job_id": checkpoint.job_id,
+                        "job": job_name,
+                        "run_id": checkpoint.run_id,
+                        "finished_at": checkpoint.finished_at,
+                        "status": if checkpoint.success { "PASS" } else { "FAIL" },
+                        "message": checkpoint.message,
+                        "duration_ms": checkpoint.duration_ms,
+                        "sqlite_lock_retries": checkpoint.sqlite_lock_retries,
+                        "snapshot_id": checkpoint.snapshot_id,
+                        "schema_adaptation": schema_adaptation,
+                    })
+                })
+                .collect();
+            let selection_recorded = !batch.selected_jobs.is_empty();
+            let passed = batch
+                .completed_jobs
+                .iter()
+                .filter(|checkpoint| checkpoint.success)
+                .count();
+            let failed = batch.completed_jobs.len().saturating_sub(passed)
+                + pending_jobs
+                    .iter()
+                    .filter(|job| job["last_status"] == "FAIL")
+                    .count();
+            let retry_required = pending_jobs.len();
+            let schema_adaptation_required = batch
+                .completed_jobs
+                .iter()
+                .filter(|checkpoint| {
+                    !checkpoint.success
+                        && sql_schema_adaptation_kind(&checkpoint.message).is_some()
+                })
+                .count()
+                + pending_jobs
+                    .iter()
+                    .filter(|job| job["schema_adaptation"]["required"] == true)
+                    .count();
+            let status = if !selection_recorded {
+                "UNKNOWN"
+            } else if retry_required > 0 {
+                "INCOMPLETE"
+            } else if failed > 0 {
+                "COMPLETE_WITH_FAILURES"
+            } else {
+                "COMPLETE"
+            };
+            serde_json::json!({
+                "batch_id": batch.batch_id,
+                "configuration_fingerprint": batch.configuration_fingerprint,
+                "selection_recorded": selection_recorded,
+                "status": status,
+                "counts": {
+                    "selected": batch.selected_jobs.len(),
+                    "completed": batch.completed_jobs.len(),
+                    "passed": passed,
+                    "failed": failed,
+                    "retry_required": retry_required,
+                    "schema_adaptation_required": schema_adaptation_required,
+                },
+                "selected_jobs": selection_recorded.then_some(selected_jobs),
+                "completed_jobs": completed_jobs,
+                "pending_jobs": selection_recorded.then_some(pending_jobs),
+            })
+        })
+        .collect();
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "schema_version": 1,
+                "case": case_path,
+                "total": batches.len(),
+                "batches": batches,
+            }))
+            .map_err(|error| error.to_string())?
+        );
+    } else {
+        for batch in batches {
+            let batch_id = batch["batch_id"].as_str().unwrap_or("unknown");
+            let completed_jobs = batch["completed_jobs"].as_array().map_or(0, Vec::len);
+            let batch_status = batch["status"].as_str().unwrap_or("UNKNOWN");
+            let failed = batch["counts"]["failed"].as_u64().unwrap_or_default();
+            let schema_adaptation_required = batch["counts"]["schema_adaptation_required"]
+                .as_u64()
+                .unwrap_or_default();
+            if let Some(pending_jobs) = batch["pending_jobs"].as_array() {
+                println!(
+                    "BATCH · {batch_id} · {batch_status} · {completed_jobs} completed · {failed} failed · {schema_adaptation_required} schema repairs · {} retry required",
+                    pending_jobs.len(),
+                );
+            } else {
+                println!(
+                    "BATCH · {batch_id} · {batch_status} · {completed_jobs} completed · selection not recorded in this older manifest"
+                );
+            }
+            if let Some(jobs) = batch["completed_jobs"].as_array() {
+                for job in jobs {
+                    let name = job["job"]
+                        .as_str()
+                        .or_else(|| job["job_id"].as_str())
+                        .unwrap_or("unknown job");
+                    let run_id = job["run_id"].as_str().unwrap_or("unknown");
+                    println!(
+                        "  {} · {name} · run {run_id} · {}",
+                        job["status"].as_str().unwrap_or("UNKNOWN"),
+                        job["message"].as_str().unwrap_or("")
+                    );
+                }
+            }
+            if let Some(jobs) = batch["pending_jobs"].as_array() {
+                for job in jobs {
+                    let name = job["job"]
+                        .as_str()
+                        .or_else(|| job["job_id"].as_str())
+                        .unwrap_or("unknown job");
+                    println!("  RETRY REQUIRED · {name}");
+                }
             }
         }
     }
@@ -16008,21 +22236,20 @@ fn report_cli_usage_error(usage: &str, json_output: bool) -> ! {
 fn parse_batch_selection_args(
     args: &[String],
     usage: &str,
-    allow_skip_recent_success: bool,
+    allow_resume_batch: bool,
 ) -> (
     bool,
     Option<Vec<String>>,
     Vec<(String, String)>,
     Vec<(String, String, String)>,
-    bool,
+    Option<Uuid>,
 ) {
     let json_output = args.iter().any(|arg| arg == "--json");
     let mut selectors = Vec::new();
     let mut parameter_options = Vec::new();
     let mut scoped_parameter_options = Vec::new();
     let mut seen_json = false;
-    let mut skip_recent_success = false;
-    let mut seen_skip_recent_success = false;
+    let mut resume_batch_id = None;
     let mut index = 2;
     while index < args.len() {
         match args[index].as_str() {
@@ -16067,9 +22294,17 @@ fn parse_batch_selection_args(
                 };
                 scoped_parameter_options.push((job_selector.clone(), value.clone()));
             }
-            "--skip-recent-success" if allow_skip_recent_success && !seen_skip_recent_success => {
-                skip_recent_success = true;
-                seen_skip_recent_success = true;
+            "--resume-batch" if allow_resume_batch && resume_batch_id.is_none() => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    report_cli_usage_error("--resume-batch requires a batch UUID", json_output);
+                };
+                resume_batch_id = Some(Uuid::parse_str(value).unwrap_or_else(|_| {
+                    report_cli_usage_error(
+                        "--resume-batch requires a valid batch UUID",
+                        json_output,
+                    )
+                }));
             }
             _ => report_cli_usage_error(usage, json_output),
         }
@@ -16092,7 +22327,7 @@ fn parse_batch_selection_args(
         (!selectors.is_empty()).then_some(selectors),
         parameters,
         scoped_parameters,
-        skip_recent_success,
+        resume_batch_id,
     )
 }
 
@@ -16100,10 +22335,32 @@ fn main() -> eframe::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args
         .first()
+        .is_some_and(|arg| arg == "--version" || arg == "-V")
+    {
+        let json_output = args.get(1).is_some_and(|arg| arg == "--json");
+        if args.len() > 2 || (args.len() == 2 && !json_output) {
+            report_cli_usage_error("usage: arch-notebook --version [--json]", json_output);
+        }
+        if json_output {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "schema_version": 1,
+                    "name": env!("CARGO_PKG_NAME"),
+                    "version": env!("CARGO_PKG_VERSION"),
+                })
+            );
+        } else {
+            println!("Arch Notebook {}", env!("CARGO_PKG_VERSION"));
+        }
+        return Ok(());
+    }
+    if args
+        .first()
         .is_some_and(|arg| arg == "--help" || arg == "-h")
     {
         println!(
-            "Arch Notebook\n\nUsage:\n  arch-notebook\n  arch-notebook --inspect-sqlite <database.sqlite> [--json]\n  arch-notebook --import-graphml <case.json> <input.graphml> [--json]\n  arch-notebook --export-graphml <case.json> <output.graphml> [--json]\n  arch-notebook --export-sql-snapshot <case.json> <snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --export-sql-comparison <case.json> <baseline-snapshot-id> <current-snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --export-job <case.json> <job-name-or-id> <output.json> [--json]\n  arch-notebook --import-job <case.json> <input.json> [--name <job-name>] [--database <path>] [--series <label>] [--json]\n  arch-notebook --export-import-design <case.json> <design-name-or-id> <output.json> [--json]\n  arch-notebook --import-import-design <case.json> <input.json> [--name <design-name>] [--json]\n  arch-notebook --list-jobs <case.json> [--enabled-only] [--json]\n  arch-notebook --list-runs <case.json> [--json] [--job <name-or-id>] [--trigger <desktop|scheduled|cli|replay|legacy>] [--offset <count>] [--limit <count>]\n  arch-notebook --validate-job <case.json> <job-name-or-id> [--query-only] [--param name=value ...] [--json]\n  arch-notebook --validate-enabled-jobs <case.json> [--json] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --check-enabled-job-queries <case.json> [--json] [--require-usable] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --validate-run <case.json> <run-id> [--json]\n  arch-notebook --run-enabled-jobs <case.json> [--json] [--skip-recent-success] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --run-job <case.json> <job-name-or-id> [--param name=value ...] [--json]\n  arch-notebook --rerun-run <case.json> <run-id> [--json]\n\nJob and import design packages contain portable configuration, not case data or run history. Batch runs save snapshots and run history to the case file. JSON output is available for scheduler integration."
+            "Arch Notebook\n\nUsage:\n  arch-notebook\n  arch-notebook --version [--json]\n  arch-notebook --inspect-sqlite <database.sqlite> [--json]\n  arch-notebook --import-graphml <case.json> <input.graphml> [--json]\n  arch-notebook --export-graphml <case.json> <output.graphml> [--json]\n  arch-notebook --export-kml <case.json> <output.kml> [--json]\n  arch-notebook --export-sql-snapshot <case.json> <snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --export-sql-series <case.json> <snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --export-sql-comparison <case.json> <baseline-snapshot-id> <current-snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --export-job <case.json> <job-name-or-id> <output.json> [--json]\n  arch-notebook --export-path <case.json> <path-name-or-id> <output.json> [--json]\n  arch-notebook --import-path <case.json> <input.json> [--name <path-name>] [--json]\n  arch-notebook --import-job <case.json> <input.json> [--name <job-name>] [--database <path>] [--series <label>] [--param name=value ...] [--json]\n  arch-notebook --export-import-design <case.json> <design-name-or-id> <output.json> [--json]\n  arch-notebook --import-import-design <case.json> <input.json> [--name <design-name>] [--json]\n  arch-notebook --list-jobs <case.json> [--enabled-only] [--json]\n  arch-notebook --list-batches <case.json> [--json]\n  arch-notebook --list-runs <case.json> [--json] [--job <name-or-id>] [--trigger <desktop|scheduled|cli|replay|legacy>] [--schema-adaptation-needed] [--offset <count>] [--limit <count>]\n  arch-notebook --export-runs <case.json> <output.csv|tsv> [--job <name-or-id>] [--trigger <desktop|scheduled|cli|replay|legacy>] [--schema-adaptation-needed] [--offset <count>] [--limit <count>] [--json]\n  arch-notebook --explain-job <case.json> <job-name-or-id> [--param name=value ...] [--json]\n  arch-notebook --validate-job <case.json> <job-name-or-id> [--query-only] [--param name=value ...] [--json]\n  arch-notebook --validate-enabled-jobs <case.json> [--json] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --check-enabled-job-queries <case.json> [--json] [--require-usable] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --validate-run <case.json> <run-id> [--json]\n  arch-notebook --run-enabled-jobs <case.json> [--json] [--resume-batch <batch-id>] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --run-job <case.json> <job-name-or-id> [--param name=value ...] [--resume-batch <batch-id>] [--json]\n  arch-notebook --rerun-run <case.json> <run-id> [--json]\n\nJob and import design packages contain portable configuration, not case data or run history. Batch runs save snapshots and run history to the case file. JSON output is available for scheduler integration."
         );
         println!("  arch-notebook --annotate-run <case.json> <run-id> <comment> [--json]");
         println!(
@@ -16149,6 +22406,20 @@ fn main() -> eframe::Result<()> {
         }
         return Ok(());
     }
+    if args.first().is_some_and(|arg| arg == "--export-kml") {
+        let json_output = args.iter().any(|arg| arg == "--json");
+        let usage = "usage: arch-notebook --export-kml <case.json> <output.kml> [--json]";
+        let (Some(case_path), Some(output_path)) = (args.get(1), args.get(2)) else {
+            report_cli_usage_error(usage, json_output);
+        };
+        if args.len() > 4 || args.get(3).is_some_and(|arg| arg != "--json") {
+            report_cli_usage_error(usage, json_output);
+        }
+        if let Err(error) = export_kml_cli(case_path, output_path, json_output) {
+            report_cli_error("KML export failed", error, json_output);
+        }
+        return Ok(());
+    }
     if args.first().is_some_and(|arg| arg == "--import-graphml") {
         let json_output = args.iter().any(|arg| arg == "--json");
         let usage = "usage: arch-notebook --import-graphml <case.json> <input.graphml> [--json]";
@@ -16181,9 +22452,59 @@ fn main() -> eframe::Result<()> {
         }
         return Ok(());
     }
+    if args.first().is_some_and(|arg| arg == "--export-path") {
+        let json_output = args.iter().any(|arg| arg == "--json");
+        let usage = "usage: arch-notebook --export-path <case.json> <path-name-or-id> <output.json> [--json]";
+        let (Some(case_path), Some(selector), Some(output_path)) =
+            (args.get(1), args.get(2), args.get(3))
+        else {
+            report_cli_usage_error(usage, json_output);
+        };
+        if args.len() > 5 || args.get(4).is_some_and(|arg| arg != "--json") {
+            report_cli_usage_error(usage, json_output);
+        }
+        if let Err(error) = export_saved_path_cli(case_path, selector, output_path, json_output) {
+            report_cli_error("saved path export failed", error, json_output);
+        }
+        return Ok(());
+    }
+    if args.first().is_some_and(|arg| arg == "--import-path") {
+        let json_output = args.iter().any(|arg| arg == "--json");
+        let usage = "usage: arch-notebook --import-path <case.json> <input.json> [--name <path-name>] [--json]";
+        let (Some(case_path), Some(input_path)) = (args.get(1), args.get(2)) else {
+            report_cli_usage_error(usage, json_output);
+        };
+        let mut name_override = None;
+        let mut seen_name = false;
+        let mut seen_json = false;
+        let mut index = 3;
+        while index < args.len() {
+            match args[index].as_str() {
+                "--json" if !seen_json => seen_json = true,
+                "--name" if !seen_name => {
+                    index += 1;
+                    let Some(value) = args
+                        .get(index)
+                        .filter(|value| !value.trim().is_empty() && !value.starts_with("--"))
+                    else {
+                        report_cli_usage_error("--name requires a path name", json_output);
+                    };
+                    name_override = Some(value.as_str());
+                    seen_name = true;
+                }
+                _ => report_cli_usage_error(usage, json_output),
+            }
+            index += 1;
+        }
+        if let Err(error) = import_saved_path_cli(case_path, input_path, name_override, json_output)
+        {
+            report_cli_error("saved path import failed", error, json_output);
+        }
+        return Ok(());
+    }
     if args.first().is_some_and(|arg| arg == "--import-job") {
         let json_output = args.iter().any(|arg| arg == "--json");
-        let usage = "usage: arch-notebook --import-job <case.json> <input.json> [--name <job-name>] [--database <path>] [--series <label>] [--json]";
+        let usage = "usage: arch-notebook --import-job <case.json> <input.json> [--name <job-name>] [--database <path>] [--series <label>] [--param name=value ...] [--json]";
         let (Some(case_path), Some(input_path)) = (args.get(1), args.get(2)) else {
             report_cli_usage_error(usage, json_output);
         };
@@ -16194,6 +22515,7 @@ fn main() -> eframe::Result<()> {
         let mut seen_name = false;
         let mut seen_database = false;
         let mut seen_series = false;
+        let mut parameter_options = Vec::new();
         let mut index = 3;
         while index < args.len() {
             match args[index].as_str() {
@@ -16231,16 +22553,30 @@ fn main() -> eframe::Result<()> {
                     series_override = Some(value.as_str());
                     seen_series = true;
                 }
+                "--param" => {
+                    index += 1;
+                    let Some(value) = args.get(index).filter(|value| !value.trim().is_empty())
+                    else {
+                        report_cli_usage_error("--param requires name=value", json_output);
+                    };
+                    parameter_options.push(value.clone());
+                }
                 _ => report_cli_usage_error(usage, json_output),
             }
             index += 1;
         }
+        let parameter_text = parameter_options.join("\n");
+        let parameter_overrides = match parse_sql_parameters(&parameter_text) {
+            Ok(parameters) => parameters,
+            Err(error) => report_cli_error("automation job import failed", error, json_output),
+        };
         if let Err(error) = import_automation_job_cli(
             case_path,
             input_path,
             name_override,
             database_path_override,
             series_override,
+            &parameter_overrides,
             json_output,
         ) {
             report_cli_error("automation job import failed", error, json_output);
@@ -16302,6 +22638,25 @@ fn main() -> eframe::Result<()> {
             import_import_design_cli(case_path, input_path, name_override, json_output)
         {
             report_cli_error("import design import failed", error, json_output);
+        }
+        return Ok(());
+    }
+    if args.first().is_some_and(|arg| arg == "--export-sql-series") {
+        let json_output = args.iter().any(|arg| arg == "--json");
+        let usage = "usage: arch-notebook --export-sql-series <case.json> <snapshot-id> <output.csv|tsv> [--json]";
+        let (Some(case_path), Some(snapshot_id), Some(output_path)) =
+            (args.get(1), args.get(2), args.get(3))
+        else {
+            report_cli_usage_error(usage, json_output);
+        };
+        if args.len() > 5 || args.get(4).is_some_and(|arg| arg != "--json") {
+            report_cli_usage_error(usage, json_output);
+        }
+        let snapshot_id = Uuid::parse_str(snapshot_id)
+            .unwrap_or_else(|_| report_cli_usage_error("invalid snapshot UUID", json_output));
+        if let Err(error) = export_sql_series_cli(case_path, snapshot_id, output_path, json_output)
+        {
+            report_cli_error("SQL series export failed", error, json_output);
         }
         return Ok(());
     }
@@ -16379,6 +22734,20 @@ fn main() -> eframe::Result<()> {
         }
         return Ok(());
     }
+    if args.first().is_some_and(|arg| arg == "--list-batches") {
+        let json_output = args.iter().any(|arg| arg == "--json");
+        let usage = "usage: arch-notebook --list-batches <case.json> [--json]";
+        let Some(case_path) = args.get(1) else {
+            report_cli_usage_error(usage, json_output);
+        };
+        if args.len() > 3 || (args.len() == 3 && args[2] != "--json") {
+            report_cli_usage_error(usage, json_output);
+        }
+        if let Err(error) = list_automation_batches_cli(case_path, json_output) {
+            report_cli_error("automation batch listing failed", error, json_output);
+        }
+        return Ok(());
+    }
     if args.first().is_some_and(|arg| arg == "--annotate-run") {
         let json_output = args.iter().any(|arg| arg == "--json");
         let usage = "usage: arch-notebook --annotate-run <case.json> <run-id> <comment> [--json]";
@@ -16426,13 +22795,15 @@ fn main() -> eframe::Result<()> {
     if args.first().is_some_and(|arg| arg == "--list-runs") {
         let Some(case_path) = args.get(1) else {
             report_cli_usage_error(
-                "usage: arch-notebook --list-runs <case.json> [--json] [--job <name-or-id>] [--trigger <desktop|scheduled|cli|replay|legacy>] [--offset <count>] [--limit <count>]",
+                "usage: arch-notebook --list-runs <case.json> [--json] [--job <name-or-id>] [--trigger <desktop|scheduled|cli|replay|legacy>] [--schema-adaptation-needed] [--offset <count>] [--limit <count>]",
                 args.iter().any(|arg| arg == "--json"),
             );
         };
         let json_output = args.iter().any(|arg| arg == "--json");
         let mut job_filter = None;
         let mut trigger_filter = None;
+        let mut schema_adaptation_needed = false;
+        let mut seen_schema_adaptation_needed = false;
         let mut offset = 0usize;
         let mut limit = None;
         let mut seen_json = false;
@@ -16444,6 +22815,10 @@ fn main() -> eframe::Result<()> {
         while index < args.len() {
             match args[index].as_str() {
                 "--json" if !seen_json => seen_json = true,
+                "--schema-adaptation-needed" if !seen_schema_adaptation_needed => {
+                    schema_adaptation_needed = true;
+                    seen_schema_adaptation_needed = true;
+                }
                 "--job" if !seen_job => {
                     index += 1;
                     let Some(value) = args.get(index).filter(|value| !value.trim().is_empty())
@@ -16510,7 +22885,7 @@ fn main() -> eframe::Result<()> {
                     seen_limit = true;
                 }
                 _ => report_cli_usage_error(
-                    "usage: arch-notebook --list-runs <case.json> [--json] [--job <name-or-id>] [--trigger <desktop|scheduled|cli|replay|legacy>] [--offset <count>] [--limit <count>]",
+                    "usage: arch-notebook --list-runs <case.json> [--json] [--job <name-or-id>] [--trigger <desktop|scheduled|cli|replay|legacy>] [--schema-adaptation-needed] [--offset <count>] [--limit <count>]",
                     json_output,
                 ),
             }
@@ -16521,10 +22896,154 @@ fn main() -> eframe::Result<()> {
             json_output,
             job_filter.as_deref(),
             trigger_filter.as_deref(),
+            schema_adaptation_needed,
             offset,
             limit,
         ) {
             report_cli_error("run history listing failed", error, json_output);
+        }
+        return Ok(());
+    }
+    if args.first().is_some_and(|arg| arg == "--export-runs") {
+        let json_output = args.iter().any(|arg| arg == "--json");
+        let usage = "usage: arch-notebook --export-runs <case.json> <output.csv|tsv> [--job <name-or-id>] [--trigger <desktop|scheduled|cli|replay|legacy>] [--schema-adaptation-needed] [--offset <count>] [--limit <count>] [--json]";
+        let (Some(case_path), Some(output_path)) = (args.get(1), args.get(2)) else {
+            report_cli_usage_error(usage, json_output);
+        };
+        let mut job_filter = None;
+        let mut trigger_filter = None;
+        let mut schema_adaptation_needed = false;
+        let mut seen_schema_adaptation_needed = false;
+        let mut offset = 0usize;
+        let mut limit = None;
+        let mut seen_json = false;
+        let mut seen_job = false;
+        let mut seen_trigger = false;
+        let mut seen_offset = false;
+        let mut seen_limit = false;
+        let mut index = 3;
+        while index < args.len() {
+            match args[index].as_str() {
+                "--json" if !seen_json => seen_json = true,
+                "--schema-adaptation-needed" if !seen_schema_adaptation_needed => {
+                    schema_adaptation_needed = true;
+                    seen_schema_adaptation_needed = true;
+                }
+                "--job" if !seen_job => {
+                    index += 1;
+                    let Some(value) = args.get(index).filter(|value| !value.trim().is_empty())
+                    else {
+                        report_cli_usage_error("--job requires a job name or UUID", json_output);
+                    };
+                    job_filter = Some(value.clone());
+                    seen_job = true;
+                }
+                "--trigger" if !seen_trigger => {
+                    index += 1;
+                    let Some(value) = args.get(index) else {
+                        report_cli_usage_error(
+                            "--trigger requires desktop, scheduled, cli, replay, or legacy",
+                            json_output,
+                        );
+                    };
+                    let normalized = value.to_ascii_lowercase();
+                    if !matches!(
+                        normalized.as_str(),
+                        "desktop" | "scheduled" | "cli" | "replay" | "legacy"
+                    ) {
+                        report_cli_usage_error(
+                            "--trigger requires desktop, scheduled, cli, replay, or legacy",
+                            json_output,
+                        );
+                    }
+                    trigger_filter = Some(normalized);
+                    seen_trigger = true;
+                }
+                "--offset" if !seen_offset => {
+                    index += 1;
+                    let Some(value) = args.get(index) else {
+                        report_cli_usage_error(
+                            "--offset requires a nonnegative integer",
+                            json_output,
+                        );
+                    };
+                    offset = value.parse::<usize>().unwrap_or_else(|_| {
+                        report_cli_usage_error(
+                            "--offset requires a nonnegative integer",
+                            json_output,
+                        )
+                    });
+                    seen_offset = true;
+                }
+                "--limit" if !seen_limit => {
+                    index += 1;
+                    let Some(value) = args.get(index) else {
+                        report_cli_usage_error("--limit requires a positive integer", json_output);
+                    };
+                    limit = Some(
+                        value
+                            .parse::<usize>()
+                            .ok()
+                            .filter(|value| *value > 0)
+                            .unwrap_or_else(|| {
+                                report_cli_usage_error(
+                                    "--limit requires a positive integer",
+                                    json_output,
+                                )
+                            }),
+                    );
+                    seen_limit = true;
+                }
+                _ => report_cli_usage_error(usage, json_output),
+            }
+            index += 1;
+        }
+        if let Err(error) = export_automation_runs_cli(
+            case_path,
+            output_path,
+            job_filter.as_deref(),
+            trigger_filter.as_deref(),
+            schema_adaptation_needed,
+            offset,
+            limit,
+            json_output,
+        ) {
+            report_cli_error("run history export failed", error, json_output);
+        }
+        return Ok(());
+    }
+    if args.first().is_some_and(|arg| arg == "--explain-job") {
+        let usage = "usage: arch-notebook --explain-job <case.json> <job-name-or-id> [--param name=value ...] [--json]";
+        let json_output = args.iter().any(|arg| arg == "--json");
+        let (Some(case_path), Some(selector)) = (args.get(1), args.get(2)) else {
+            report_cli_usage_error(usage, json_output);
+        };
+        let mut parameter_options = Vec::new();
+        let mut seen_json = false;
+        let mut index = 3;
+        while index < args.len() {
+            match args[index].as_str() {
+                "--json" if !seen_json => seen_json = true,
+                "--param" => {
+                    index += 1;
+                    let Some(value) = args
+                        .get(index)
+                        .filter(|value| !value.trim().is_empty() && !value.starts_with("--"))
+                    else {
+                        report_cli_usage_error("--param requires name=value", json_output);
+                    };
+                    parameter_options.push(value.clone());
+                }
+                _ => report_cli_usage_error(usage, json_output),
+            }
+            index += 1;
+        }
+        let parameter_overrides = parse_sql_parameters(&parameter_options.join("\n"))
+            .unwrap_or_else(|error| report_cli_usage_error(&error, json_output));
+        if let Err(error) =
+            explain_automation_job_cli(case_path, selector, &parameter_overrides, json_output)
+        {
+            report_cli_error("SQL query plan inspection failed", error, json_output);
         }
         return Ok(());
     }
@@ -16647,7 +23166,7 @@ fn main() -> eframe::Result<()> {
         return Ok(());
     }
     if args.first().is_some_and(|arg| arg == "--run-enabled-jobs") {
-        let usage = "usage: arch-notebook --run-enabled-jobs <case.json> [--json] [--skip-recent-success] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]";
+        let usage = "usage: arch-notebook --run-enabled-jobs <case.json> [--json] [--resume-batch <batch-id>] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]";
         let Some(case_path) = args.get(1) else {
             report_cli_usage_error(usage, args.iter().any(|arg| arg == "--json"));
         };
@@ -16656,7 +23175,7 @@ fn main() -> eframe::Result<()> {
             selected_jobs,
             parameter_overrides,
             scoped_parameter_overrides,
-            skip_recent_success,
+            resume_batch_id,
         ) = parse_batch_selection_args(&args, usage, true);
         match run_automation_cli(
             case_path,
@@ -16664,7 +23183,7 @@ fn main() -> eframe::Result<()> {
             selected_jobs.as_deref(),
             &parameter_overrides,
             &scoped_parameter_overrides,
-            skip_recent_success,
+            resume_batch_id,
             json_output,
         ) {
             Err(error) => report_cli_error("automation failed", error, json_output),
@@ -16678,12 +23197,13 @@ fn main() -> eframe::Result<()> {
     }
     if args.first().is_some_and(|arg| arg == "--run-job") {
         let json_output = args.iter().any(|arg| arg == "--json");
-        let usage = "usage: arch-notebook --run-job <case.json> <job-name-or-id> [--param name=value ...] [--json]";
+        let usage = "usage: arch-notebook --run-job <case.json> <job-name-or-id> [--param name=value ...] [--resume-batch <batch-id>] [--json]";
         let (Some(case_path), Some(job_name)) = (args.get(1), args.get(2)) else {
             report_cli_usage_error(usage, json_output);
         };
         let mut parameter_options = Vec::new();
         let mut seen_json = false;
+        let mut resume_batch_id = None;
         let mut index = 3;
         while index < args.len() {
             match args[index].as_str() {
@@ -16698,6 +23218,18 @@ fn main() -> eframe::Result<()> {
                     };
                     parameter_options.push(value.clone());
                 }
+                "--resume-batch" if resume_batch_id.is_none() => {
+                    index += 1;
+                    let Some(value) = args.get(index) else {
+                        report_cli_usage_error("--resume-batch requires a batch UUID", json_output);
+                    };
+                    resume_batch_id = Some(Uuid::parse_str(value).unwrap_or_else(|_| {
+                        report_cli_usage_error(
+                            "--resume-batch requires a valid batch UUID",
+                            json_output,
+                        )
+                    }));
+                }
                 _ => report_cli_usage_error(usage, json_output),
             }
             index += 1;
@@ -16710,7 +23242,7 @@ fn main() -> eframe::Result<()> {
             None,
             &parameter_overrides,
             &[],
-            false,
+            resume_batch_id,
             json_output,
         ) {
             Err(error) => report_cli_error("automation failed", error, json_output),
@@ -16830,6 +23362,9 @@ mod tests {
             target: "Pier 19 Warehouse".into(),
             target_type: "LOCATION".into(),
             target_entity_id: String::new(),
+            source_attributes: Vec::new(),
+            target_attributes: Vec::new(),
+            attributes: Vec::new(),
             relationship: "LEASES".into(),
             date: "2025-01-28".into(),
             confidence: 2,

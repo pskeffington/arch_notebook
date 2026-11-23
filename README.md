@@ -7,7 +7,7 @@ A local desktop workbench for exploring relationship data and finding changes be
 ## Quick start
 
 1. Install Arch Notebook using the platform instructions in [Build and deploy](docs/build-and-deploy.md).
-2. Open **Data → SQL regressions**, choose a SQLite database, and enter a read-only query returning `source` and `target` columns.
+2. Open **SQL Review**, choose a SQLite database, and enter a read-only query returning `source` and `target` columns.
 3. Give the capture a stable series name and ingest a baseline. Ingest later results under the same name.
 4. Review removals, confidence declines, changed details, and additions; export the comparison as CSV or TSV when needed.
 
@@ -15,15 +15,15 @@ See [SQL snapshot ingestion](docs/sql-ingestion.md) for supported columns, query
 
 ## Automate ingestion
 
-Create jobs under **Data → Automation** to validate and capture recurring SQLite queries. Preflight enabled jobs and one-run parameter overrides before a batch, inspect progress and per-job diagnostics, then review outcomes in run history. Jobs can run from the desktop, CLI, or scheduled systemd/LaunchAgent tasks.
+Create jobs under **Automation** to validate and capture recurring SQLite queries. Preflight enabled jobs and one-run parameter overrides before a batch, inspect progress and per-job diagnostics, then review outcomes in run history. Jobs can run from the desktop, CLI, or scheduled systemd/LaunchAgent tasks.
 
 See [Automated SQL ingestion](docs/automation.md) for job setup, CLI commands, scheduling, replay, and package sharing.
 
 ## Notebook features
 
-- Explore typed entities and relationships in chart, timeline, and data views.
+- Explore typed entities and relationships with custom properties in chart, timeline, and data views.
 - Trace paths, inspect evidence and history, and review possible duplicates.
-- Import and export CSV/TSV and GraphML with source attribution.
+- Import and export CSV/TSV, GraphML, and KML with source attribution and geographic coordinates.
 - Save cases as local JSON files and retain SQL snapshot and automation history.
 
 See [Notebook workflows](docs/notebook-workflows.md) for these features.

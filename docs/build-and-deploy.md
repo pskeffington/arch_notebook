@@ -4,6 +4,8 @@ Commands below run from the repository root unless stated otherwise.
 
 The supported desktop targets are Arch Linux on x86_64, generic Linux archives on x86_64 and ARM64, and macOS on Apple Silicon or Intel. Rust 1.89 or newer is required to build. macOS bundles SQLite so it does not depend on the older system SQLite library; Linux builds link to the system SQLite library, which is installed as an application dependency. On Linux, the application stores its database, CSV example, and default case under `$XDG_DATA_HOME/arch-notebook`, or `~/.local/share/arch-notebook` when `XDG_DATA_HOME` is unset. On macOS, it uses `~/Library/Application Support/Arch Notebook`. Existing sample files are left in place on later launches.
 
+Check an installed build with `arch-notebook --version`; scripts can use `arch-notebook --version --json` for machine-readable package name and version. In a macOS app bundle, invoke `"/Applications/Arch Notebook.app/Contents/MacOS/arch-notebook" --version`.
+
 ### Arch Linux
 
 Build and install the current `main` branch as a native package with `makepkg`:
