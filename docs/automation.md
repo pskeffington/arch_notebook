@@ -1,0 +1,201 @@
+# Automated SQL ingestion
+
+## Review and preflight
+
+In **Data → Automation**, **Unreviewed regressions** filters to captures with removals or confidence declines and no analyst comment, including runs that passed configured limits. **Unreviewed failures** remains available for failures without comments. Run-history search includes effective SQL parameter names and values, making ad-hoc and batch override runs discoverable by the values they used.
+
+Use **Preflight enabled jobs and overrides** to check every enabled query read-only with the current one-run SQL parameter overrides and inspect per-job progress and diagnostics before a batch run. The preflight does not save run history or change job parameters. Schedule install, check, remove, and preflight results remain visible in the Automation panel for the case that was acted on. Schedule installation separately preflights the saved job parameters before changing the scheduler, so one-run overrides never alter scheduled captures.
+
+### One-run overrides
+
+For an ad-hoc desktop run, expand **One-run SQL parameter overrides**. Enter `name=value` lines for a single job, or scope each line as `Job name or UUID::name=value` for a batch. The panel echoes the effective override lines and checks typed values before enabling a run, so malformed `int:`, `real:`, or `bool:` values fail before a job starts. Scoped selectors must match exactly one enabled job in the chosen batch, and a job/parameter pair can appear only once. Overrides are retained in each run's effective configuration for replay and audit, then clear from the editor. They do not modify saved jobs or scheduled captures.
+
+## Build and preview queries
+
+The validated query preview shows up to eight rows with endpoint names and source IDs, relationship, direction, date, confidence, evidence, and SQL supplied source notes. A prominent result-quality label distinguishes usable results, partial skips, empty results, and cases where every row was skipped, even when a zero-row query passes configured limits. The preview reports removals and confidence declines against the previous capture in the same series, labels a first capture as the baseline, and lists up to eight changes of any type in a **Change preview** with typed endpoints, stable connection IDs/keys, before/current confidence and dates, and evidence/source-note values on hover. The regression and addition counts remain separate for evaluating capture limits; a first capture has no comparison and counts as zero additions. Use **Regressions only** in the preview to focus on removals and confidence declines. The preview is horizontally scrollable for wide schemas. In **SQL regressions**, set optional automation capture limits, validate the current query and enter a job name before using **Save and review in Automation** to carry the database, series, query, parameters, and capture limits into a repeatable job without re-entering them. Expand **Automation capture limits** to set optional minimum confidence (1–3), minimum/maximum connections, regression, new-connection addition, or skipped-row thresholds before validating. A confidence floor rejects any captured connection below the selected rating; the validation preview reports how many fall below it. This handoff is enabled only for a usable result with no skipped endpoints and passing capture limits; the new job starts disabled until you review and enable it in Automation; disabled rows are labeled and expose Validate/Edit actions.
+
+In both the automation editor and one-off SQL snapshot panel, **Build query from schema** inspects the configured SQLite file read-only and generates an editable `SELECT` from the first table or view with recognizable source and target columns. Review and adjust the selected columns before validating or saving the query.
+
+When endpoint IDs have declared foreign keys to entity tables, generated queries join all columns in those keys and select a recognizable name column (and entity type when available). Composite endpoint IDs encode each SQLite storage type and hexadecimal value bytes, so embedded NULs and separator characters remain unambiguous and text, blob, and numeric IDs stay distinct. Without a usable foreign key, the template falls back to direct endpoint columns or the endpoint IDs themselves. View schemas are inspected without reading records, allowing the builder to recognize source and target aliases exposed by analyst-authored views.
+
+If a schema has no declared foreign keys, the builder infers an ID join only when one unambiguous entity-like table has a single primary key and a recognizable name column. Ambiguous schemas keep the endpoint IDs for manual query editing. Generated results retain endpoint IDs alongside display names so same-named source entities stay distinct and snapshots can match those identities over time.
+
+SQL can return stable endpoint IDs as `source_entity_id`/`target_entity_id`, `source_external_id`/`target_external_id`, or common endpoint names such as `target_id`, `from_id`/`to_id`, `entity_a_id`/`entity_b_id`, `source_person_id`/`target_person_id`, `from_person_id`/`to_person_id`, `source_node_id`/`target_node_id`, and `from_node_id`/`to_node_id`. The `source_id` column name remains available for evidence references. These IDs preserve entity identity across captures when an entity’s display name changes.
+
+When multiple tables or views match, the editor offers a source picker so you can choose which generated query to use. The CLI’s `query_template` is the first matching option; the full schema remains available in `objects`.
+
+Applying a generated template clears the parameter editor because the draft contains no named placeholders; add any required `WHERE` clause and parameters before validation.
+
+## Configure jobs
+
+Open **Data → Automation**, enter a unique job name, SQLite database path, snapshot series, and query, then use **Validate query** to check the read-only query, returned connection count, and configured limits against the latest saved snapshot without saving case changes. A successful validation also previews up to eight returned connections so you can confirm the endpoint mapping before ingestion. The status distinguishes an invalid query from a valid query whose configured limits fail; `--validate-enabled-jobs` applies the same capture-limit assessment as a job run, while `--check-enabled-job-queries` checks query validity without enforcing those limits. Each database/series identity can belong to only one automation job; aliases to the same existing database file resolve to the same identity. This keeps one query stream from replacing another job’s chart links or mixing unrelated results in a comparison chain. Relative database paths resolve from the case file’s directory. Snapshots retain both the canonical database path and the configured path; when a case and its relative-path database move together, loading the case rebases its saved series, imported-link provenance, and SQL entity identity namespaces to the new location. When loading a case, paths in earlier snapshots are normalized too when their source databases are still available. Set **Minimum connections** to require a nonzero result size; the default of 0 disables this check. A result below the configured minimum is recorded as a failed run, while its successfully captured snapshot remains in history for review. Optionally enable **Limit connections** and set a maximum accepted result size; an oversized result is retained as a snapshot for review but the run fails. Optionally enable **Limit regressions** and set a maximum count; a regression is a removed connection or confidence decline versus the preceding snapshot in the same database/series. The baseline snapshot has no regressions to compare, and runs still save their snapshot and history when a limit is exceeded. Optionally set **Minimum connection confidence** from 1–3 to fail captures when any returned connection is below that score; the captured snapshot remains available for review. Optionally set **Limit skipped rows** and a maximum count to fail runs when the SQL result has too many rows with blank or NULL endpoints. The skipped-row count and threshold are retained with the run, while the successfully captured snapshot stays available for review. Add the job when it is ready. The Automation list shows each job’s latest run status, capture quality, connection/skipped-row counts, and duration. Failed jobs also show a concise error summary inline; hover for the full result message. Use **View latest run** to filter and expand that exact run in history, or **View job history** to filter run history to every run from that job. Search the list by job name, database path, snapshot series, or SQL text without changing saved jobs or run history. Expand **SQL query and capture configuration** to inspect a saved job without loading it into the editor. Use **Validate** beside a saved job to preflight its query and limits without changing the case; **Edit** loads its configuration into the editor. Enable the jobs you want included in a batch run. Filter the job list, then choose **Run visible enabled jobs and save** to run only the matching enabled jobs; the unfiltered **Run enabled jobs and save** action still runs every enabled job. Running an individual job or batch keeps the current editor fields intact. Each run records its status and timestamps in the case and appends a new immutable snapshot when the query succeeds. Save case and job edits before starting automation. Desktop runs execute on a background worker and show progress while pausing case editing; the worker holds the case lock and atomically saves each job checkpoint, including failed run records, so a slow SQL query does not freeze the window or lose completed work. One-off SQL validation and ingestion also run in the background; validation leaves the case unchanged, while ingestion updates the open case and still requires an explicit save. The command-line runner executes enabled jobs without opening the desktop UI and saves the updated case automatically:
+
+Set the maximum to 0 to reject any skipped row. Older jobs default to no skipped-row limit. Expand a run in **Run history** to review its capture quality, connection and skipped-row counts, snapshot ID, and delta counts against the prior snapshot in that database/series. Use **Review changes** to open that exact capture pair in SQL comparison review, with its filters reset to show every change.
+
+Use SQLite named parameters when a scheduled query needs a changing period, tenant, or threshold instead of editing the SQL each run. Enter one `name=value` per line in **SQL parameters** and reference it in the query with `:name`, `@name`, or `$name`. Unprefixed values bind as text; type a value with `text:`, `int:`, `real:`, `bool:`, or `null:` when SQLite should receive text, a 64-bit integer, a finite real, 0/1, or NULL. For example, use `snapshot_id=current`, `min_confidence=int:2`, and `include_unknown=bool:false`; `null:` binds SQL NULL and `text:null` binds the literal text `null`. Parameters are saved with the automation job, each immutable snapshot, and each run for reproducibility. For a one-off CLI run or preflight, repeat `--param name=value` to override or add parameter values without changing the saved job. For example, use `WHERE snapshot_id = :snapshot_id` with `snapshot_id=current`.
+
+## Run jobs from the CLI
+
+Desktop batch runs save an atomic checkpoint after each job, then save the final batch summary. If a later job or checkpoint step fails, the open app reloads the latest saved checkpoint and keeps the regression view focused on its newest snapshot. The command-line runner also saves after each job, preserving completed run history if a later query stalls or the process is interrupted.
+
+```sh
+cargo run --offline -- --run-enabled-jobs harbor-light.case.json
+```
+
+Supply repeated `--job <name-or-id>` selectors to validate or run a subset of enabled jobs. Name matching ignores case; UUIDs remain stable across renames, and selected jobs execute in case-file order. A selected disabled or unknown job is an error. Use `--run-job` to run one named or UUID-selected job even when it is disabled:
+
+```sh
+cargo run --offline -- --validate-enabled-jobs harbor-light.case.json --job "Harbor Light baseline" --json
+cargo run --offline -- --run-enabled-jobs harbor-light.case.json --job "Harbor Light baseline" --json
+```
+
+Run one named job, including a disabled job, with:
+
+```sh
+cargo run --offline -- --run-job harbor-light.case.json "Harbor Light baseline"
+# A UUID selector continues to work if the job is renamed.
+cargo run --offline -- --run-job harbor-light.case.json 6f20f078-0dd4-4df3-b81a-e646aaaf4412 --json
+cargo run --offline -- --run-job harbor-light.case.json "Harbor Light baseline" --param snapshot_id=current --json
+```
+
+Pass `--param name=value` to apply a shared override to every selected job. Every selected query must use each shared parameter name. Use `--job-param <job-name-or-id> name=value` for values that differ by job; repeat the option for additional jobs or values. Job-specific overrides are applied after shared overrides and replace only that job’s matching value. A job-specific selector must refer to a job in the selected batch, and each targeted query must use its supplied parameter names.
+
+```sh
+cargo run --offline -- --validate-enabled-jobs harbor-light.case.json --job "Harbor Light baseline" --param snapshot_id=current --json
+cargo run --offline -- --run-enabled-jobs harbor-light.case.json --job "Harbor Light baseline" --param snapshot_id=current --json
+cargo run --offline -- --run-enabled-jobs harbor-light.case.json --job "Harbor Light baseline" --job "Harbor Light follow-up" --job-param "Harbor Light baseline" snapshot_id=baseline --job-param "Harbor Light follow-up" snapshot_id=current --json
+```
+
+### List and annotate jobs
+
+List configured jobs as JSON without changing the case file:
+
+```sh
+cargo run --offline -- --list-jobs harbor-light.case.json
+```
+
+Add `--json` to get a schema-versioned object containing each job’s UUID, enabled state, database, series, SQL query and parameters, limits, and compact latest-run status/timestamps/message/snapshot ID, plus total, enabled, and returned counts. Use `--enabled-only` to inspect just the batch set; it can be combined with `--json`. Without `--json`, output remains a JSON array for compatibility.
+
+```sh
+cargo run --offline -- --list-jobs harbor-light.case.json --enabled-only --json
+```
+
+Automation run history keeps a separate analyst comment for review context without changing the captured SQL result or machine-generated run message. In **Data → Automation**, expand a run, edit **Analyst comment**, then choose **Save comment** and save the case. For scheduler or review scripts, add or replace a comment using the run UUID from `--list-runs`:
+
+```sh
+cargo run --offline -- --annotate-run harbor-light.case.json <run-id> "Reviewed against the source release notes; expected removals."
+cargo run --offline -- --list-runs harbor-light.case.json --json
+```
+
+Run-list JSON includes `analyst_note`; pass an empty comment to clear it. Comment updates lock and atomically save the case.
+
+## Share job and import designs
+
+Share a saved SQL automation definition without copying the case, captured snapshots, or run history. Export by job name or UUID, then import the JSON package into another case:
+
+```sh
+cargo run --offline -- --export-job harbor-light.case.json "Harbor Light baseline" harbor-light-baseline.job.json --json
+cargo run --offline -- --import-job another-case.json harbor-light-baseline.job.json --json
+cargo run --offline -- --import-job another-case.json harbor-light-baseline.job.json --name "Local baseline" --database ./data/connections.sqlite --series "Local review" --json
+cargo run --offline -- --validate-job another-case.json "Local baseline" --query-only --param snapshot_id=current --json
+```
+
+The versioned package carries the job name, configured database path, snapshot series, SQL query, typed parameters, and capture limits, including the optional confidence floor and maximum number of newly added connections. Import assigns a new job UUID, starts the job disabled, and rejects a duplicate job name or a database/series already owned by another job. CLI imports can override the name, database path, or series when adapting a shared query to another environment; relative database paths resolve from the destination case file. Use `--validate-job` to preflight a named or UUID-selected job even while it is disabled. The default checks both query validity and its capture limits; add `--query-only` to report query validity without failing on unmet capture limits. Repeat `--param name=value` to override or add bound SQL parameters for this validation only; the saved job and case remain unchanged. Validation is read-only and does not save the case. In the desktop app, use the separate **Import JSON** and **Export JSON** paths in **Data → Automation**; expand **Adapt imported job** to override the name, database path, or series, and use **Export** beside a job to write its package. After import, the job list focuses on the new disabled entry and the status displays its UUID for review and script handoff. Use **Validate** before enabling it for a scheduled batch; package import does not connect to or modify its SQLite source. Export writes atomically and refuses to replace the case or a SQLite source used by its jobs or snapshots.
+
+Share a saved CSV/TSV import design without copying its case. Use **Import package** and **Export selected** in the Import design dialog, or use the CLI commands below. The versioned JSON package contains the column mapping, row filters, value transforms, and normalized header signature; importing gives the design a new ID and makes it available for matching source files in the destination case. In the dialog, enter an optional imported name to adapt a shared design or avoid a duplicate name. Save the destination case to keep imported designs.
+
+```sh
+cargo run --offline -- --export-import-design harbor-light.case.json "Financial connections" financial-connections.import.json --json
+cargo run --offline -- --import-import-design another-case.json financial-connections.import.json --name "Local financial feed" --json
+```
+
+Design names must be unique in a case. Use `--name` to adapt a shared design to a local naming scheme. Import does not read source data or change SQLite databases; the saved mapping is applied when a delimited file with the matching header signature is inspected.
+
+## Inspect and replay run history
+
+Read saved automation outcomes without opening the desktop app:
+
+```sh
+cargo run --offline -- --list-runs harbor-light.case.json --json
+```
+
+The result uses schema version 1 and lists newest runs first with status, trigger (`desktop`, `scheduled`, `cli`, `replay`, or `legacy` for older records), job identity, timestamps, elapsed query and validation duration in milliseconds, SQLite lock retry count, database/series, the captured query and bound parameters, thresholds, enabled state, outcome message, linked snapshot ID, capture time, connection count, and skipped-row count when a snapshot was produced. It also returns the structured limit checks, `query_valid`, `capture_limits_pass`, and typed snapshot delta with stable connection keys and prior/current facts, matching run and preflight outcomes. Older runs default to zero lock retries and return `limits` and `capture_limits_pass` as null when saved configuration was not recorded; runs from older case files report a null duration and `legacy` trigger. Listing run history does not modify the case.
+
+Filter by job name or UUID and page through newest-first history with `--job <name-or-id>`, `--offset <count>` (default `0`), and `--limit <count>` (positive integer). Use `--trigger desktop`, `--trigger scheduled`, `--trigger cli`, `--trigger replay`, or `--trigger legacy` to isolate runs by origin; filters can be combined. JSON responses include the active filters, total matches, returned count, and `next_offset` when another page exists. The selection is applied before snapshot deltas are computed. For example, list only scheduled captures for a case:
+
+```sh
+cargo run --offline -- --list-runs harbor-light.case.json --trigger scheduled --json
+```
+
+## Inspect SQLite and preflight
+
+Inspect a SQLite source before writing an ingestion query. This command opens the database read-only and lists its tables, views, column names, declared types, and key/required-column markers:
+
+```sh
+cargo run --offline -- --inspect-sqlite source.sqlite --json
+```
+
+The JSON response uses schema version 1 and includes `ok`, `object_count`, table/view definitions, declared foreign-key mappings, and `query_templates` for every table/view with recognizable source and target columns. The existing singular `query_template` field remains as the first candidate for compatibility. It reports structure only; it does not read table rows or modify the source. The text output reports when the database contains no user tables or views, lists declared foreign keys, and prints the first suggested query when one can be generated.
+
+To check enabled SQL queries and their SQLite sources without requiring current data to meet capture thresholds, use query-only preflight. It executes queries read-only and leaves the case unchanged; failing connection or regression limits are reported but do not fail the query check. A zero-connection result is still query-valid, but is classified as `empty_result` or `all_rows_skipped` and reported as having no usable connections, even when no minimum is configured. Desktop live checkpoints and run-history rows also show the result quality. Validation and query preflight acquire the per-case automation lock, so they wait for an active runner’s checkpoint and read a stable case snapshot. JSON output sets top-level `mode` to `query` and reports `query_valid`, `result_quality`, and `has_usable_connections` separately from each outcome’s normal run `status` and `capture_limits_pass`:
+
+```sh
+cargo run --offline -- --check-enabled-job-queries harbor-light.case.json
+```
+
+Add `--require-usable` to fail preflight when any selected query returns no usable connections. The Linux and macOS schedule installers use this stricter check, so an empty or all-skipped enabled job cannot be scheduled accidentally. This option does not enforce regression or capture thresholds; those remain visible runtime outcomes.
+
+Preflight every enabled SQL job before scheduling a batch. Validation runs each query read-only, checks minimum and optional regression limits, and evaluates jobs in run order with a temporary snapshot chain. It does not save snapshots or change the case file:
+
+```sh
+cargo run --offline -- --validate-enabled-jobs harbor-light.case.json
+```
+
+Append `--json` for a machine-readable validation summary (`ok`, `saved`, pass/fail counts, and per-job outcomes). Batch execution also accepts `--json`; it prints the same summary shape after atomically saving snapshots and run history. Each executed batch outcome includes its persisted `run_id` (null for validation) and `duration_ms`, so callers can correlate failures without a snapshot, inspect query time, and reconcile outcomes with `--list-runs`. The desktop run history shows the same duration. The case is atomically updated after each completed job, so earlier outcomes survive if a later query stalls or the runner is interrupted. In JSON mode, standard output contains only one JSON result; errors that occur before a summary is available produce an `{ "schema_version": 1, "ok": false, "error": "..." }` object, while diagnostics also go to standard error. Successful results and JSON errors carry schema version 1. Failed jobs still return a nonzero process exit code. For example:
+
+```sh
+cargo run --offline -- --run-enabled-jobs harbor-light.case.json --json
+```
+
+Run and validation JSON use schema version 1 and retain the existing per-job fields. Each outcome also includes observed-versus-required limit checks, snapshot identity and capture time, a typed delta summary, and changed connection facts with stable identity keys and prior values. Direction changes are explicitly typed as `direction_changed` while still counting as `connection_updated` for compatibility. Downstream tools can evaluate regressions and inspect evidence changes without parsing the human-readable message. Automation CLI runs and desktop case saves coordinate through a per-case advisory lock. Concurrent CLI runs wait for the active runner; desktop saves compare the on-disk case with the version they loaded and reject stale writes, preserving newer automation checkpoints. The lock file remains beside the case file and is reused on later runs.
+
+## Replay and resume
+
+Replay a recorded automation run by its run UUID, including its saved query, parameters, and thresholds:
+
+```sh
+cargo run --offline -- --rerun-run harbor-light.case.json <run-id> --json
+```
+
+To check the same saved configuration against the current SQLite source without saving a snapshot or run, use `--validate-run` first:
+
+```sh
+cargo run --offline -- --validate-run harbor-light.case.json <run-id> --json
+```
+
+Validation leaves the case unchanged. Rerun saves a new run and snapshot, leaves the job definition unchanged, and reports `rerun_of` in JSON. Both commands work even if the original job was edited or removed, but reject older run records that did not preserve their configuration. Get the UUID from `--list-runs --json`.
+
+To resume the same batch after an interruption, add `--skip-recent-success` to `--run-enabled-jobs`. A job is skipped only when its newest recorded run for the exact current database path, series, SQL query, parameters, and limits succeeded. A changed configuration, missing historical configuration, or latest failure runs again. Skips are reported separately in JSON (`skipped_jobs`) with their effective SQL configuration, prior run ID, and duration; they do not add snapshots, run history, or rewrite the case when every selected job is skipped. Omit this flag for regular scheduled captures so each invocation reads fresh source data.
+
+-Run history is bounded to the latest 200 records. Search the history by job, run ID, PASS/FAIL result, result message, analyst comment, database path, series, SQL text, or time. Use the origin selector to isolate desktop, scheduled, command-line, replay, or older runs. Use **Failures only** to show unsuccessful runs or **Unreviewed failures** to show failures without an analyst comment; these filters do not change saved history. Plain-text `--list-runs` output summarizes result quality, connection and skipped-row counts, regression counts, duration, and run ID; use `--json` for the full machine-readable capture and delta details. Each run retains the effective job configuration and SQL query used, including failures, so later job edits or deletion do not erase the run context. Run history also distinguishes effective SQL parameters from the explicit one-run overrides; older records identify when override provenance was not recorded. Expand a row in the desktop history to inspect both sets. Select **Replay saved configuration** to run that exact saved SQL, parameters, and thresholds against the current SQLite source; replay appends a new run and snapshot without changing the job definition, and carries the original override provenance into the replay record. Use **Load configuration into editor** to revise a saved run before execution; if its original job was deleted, the app opens a uniquely named recovered job draft; saving adds it disabled, filters the job list to that recovered job, and leaves it for you to review and enable. The new run records the ID of the run it replayed, in both desktop history and `--list-runs --json` output. Older runs that predate this configuration capture are labeled as such rather than showing default values as if they were recorded settings. Successful runs include a comparison with the previous snapshot in the same database and series; the history records removed connections, confidence declines, date changes, additions, confidence increases, and other updates. Each snapshot has a stable ID, and automation run records link directly to it; older cases migrate those links from their saved snapshot indices when loaded. In the desktop app, use **Review snapshot #N** beside a run or select any numbered capture in **Snapshot history** to compare it with the preceding capture in that series; the capture number disambiguates runs recorded within the same clock interval. Batch summaries report passed and failed job counts. The runner continues through the selected jobs if one fails, saves each outcome, and exits nonzero when any job fails. Filter the desktop job list by name, database, series, or SQL, then use **Run visible enabled jobs and save** to run only the enabled jobs shown without changing their enabled settings.
+
+## Schedule recurring runs
+
+In the desktop app, open **Data → Automation** and select **Check schedule** to see whether the open case's timer or LaunchAgent is active and which cadence it uses. Choose every 15 minutes, hourly, daily, or weekly, then select **Install/update schedule** to apply it. Each case has its own schedule, so multiple cases can run independently; updating one case leaves other case schedules in place. The app uses the saved case, checks enabled SQL queries in read-only mode, and installs or updates that case's Linux systemd timer or macOS LaunchAgent. Save case and job edits before installing. Select **Remove schedule** to disable and remove the open case's schedule. To manage schedules manually, use the platform commands below.
+
+On Arch Linux with systemd, configure enabled jobs in the app, then install the hourly timer for the default case:
+
+```sh
+arch-notebook-install-automation
+```
+
+Pass a case-file path to schedule it; the path is canonicalized to assign a stable per-case unit or LaunchAgent ID. Set `ARCH_NOTEBOOK_AUTOMATION_SCHEDULE=15m`, `ARCH_NOTEBOOK_AUTOMATION_SCHEDULE=daily`, or `ARCH_NOTEBOOK_AUTOMATION_SCHEDULE=weekly` before running either platform installer to change the cadence; hourly is the default. Rerunning an installer updates only that case's schedule. Both installers require at least one enabled job and use query-only preflight against each read-only SQLite source before creating or replacing that schedule. Current connection and regression limits remain runtime outcomes, so a real regression does not prevent its schedule from being installed. If query preflight fails, fix the job or make its database available; existing schedules remain active. Scheduler invocations print concise per-job status lines to keep journald and macOS log files from accumulating full connection deltas; add `--json` to manual CLI runs when structured output is needed. The Linux installer writes user-owned, case-specific units under `${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user` and enables or restarts the timer after preflight. It catches up a missed calendar run after the machine was offline and adds up to five minutes of randomized delay. User timers run only while the user systemd manager is active; to keep them running after logout and start them at boot, enable lingering for the account with `loginctl enable-linger "$USER"`. Each install prints its timer and service names. Check or remove one case with `arch-notebook-install-automation --status /path/to/case.json` or `arch-notebook-install-automation --remove /path/to/case.json`; omitting the case path addresses only the legacy single schedule. On macOS, first open the app and enable jobs, then install the bundled LaunchAgent for the case:
+
+```sh
+app_bundle="/Applications/Arch Notebook.app"
+bash "$app_bundle/Contents/Resources/install-macos-automation.sh" \
+  "$HOME/Library/Application Support/Arch Notebook/harbor-light.case.json" \
+  "$app_bundle"
+```
+
+After query preflight succeeds, the macOS installer creates and lints a case-specific LaunchAgent plist before unloading that case's previous agent. If the replacement cannot be loaded, it restores the prior plist and attempts to reload it. The agent runs once when loaded and then at the selected interval. The bundled runner keeps each case's logs private to the current account, rotates each at 5 MiB, and retains five older files under `~/Library/Logs/ArchNotebook/`; use the case schedule ID printed by the installer to locate the directory. Check or remove one case with `bash "$app_bundle/Contents/Resources/install-macos-automation.sh" --status "/path/to/case.json"` or `--remove "/path/to/case.json"`; omitting the case path addresses only the legacy single schedule. Keep the SQLite source available at the configured path when automation runs.

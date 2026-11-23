@@ -10,9 +10,9 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, HashMap, HashSet, VecDeque},
     env, fs,
-    io::Write,
+    io::{BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
-    process::Command,
+    process::{Command, Stdio},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -252,6 +252,7 @@ fn preflight_automation_jobs_command(
     case_path: &Path,
     job_ids: &[Uuid],
     parameter_overrides: &AutomationParameterOverrides,
+    progress: &Arc<Mutex<String>>,
 ) -> Result<String, String> {
     let executable =
         env::current_exe().map_err(|error| format!("cannot locate app executable: {error}"))?;
@@ -259,7 +260,9 @@ fn preflight_automation_jobs_command(
     command
         .arg("--check-enabled-job-queries")
         .arg(case_path)
-        .arg("--require-usable");
+        .arg("--require-usable")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
     for job_id in job_ids {
         command.arg("--job").arg(job_id.to_string());
     }
@@ -272,25 +275,78 @@ fn preflight_automation_jobs_command(
             .arg(selector)
             .arg(format!("{name}={value}"));
     }
-    let output = command
-        .output()
+    let mut child = command
+        .spawn()
         .map_err(|error| format!("could not start SQL query preflight: {error}"))?;
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
-    if output.status.success() {
-        Ok(if stdout.is_empty() {
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+    let Some(stdout) = stdout else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err("SQL preflight output stream is unavailable".into());
+    };
+    let Some(stderr) = stderr else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err("SQL preflight error stream is unavailable".into());
+    };
+    let stderr_worker = thread::spawn(move || {
+        let mut stderr_text = String::new();
+        let _ = BufReader::new(stderr).read_to_string(&mut stderr_text);
+        stderr_text
+    });
+    let mut reports = Vec::new();
+    let mut stream_error = None;
+    for line in BufReader::new(stdout).lines() {
+        match line {
+            Ok(line) => {
+                reports.push(line.clone());
+                if let Ok(mut current) = progress.lock() {
+                    *current = format!(
+                        "Preflighted {} of {} enabled jobs · {line}",
+                        reports.len(),
+                        job_ids.len()
+                    );
+                }
+            }
+            Err(error) => {
+                stream_error = Some(error.to_string());
+                break;
+            }
+        }
+    }
+    let status = match child.wait() {
+        Ok(status) => status,
+        Err(error) => {
+            let _ = stderr_worker.join();
+            return Err(format!("could not wait for SQL query preflight: {error}"));
+        }
+    };
+    let stderr = stderr_worker
+        .join()
+        .unwrap_or_else(|_| "SQL preflight error stream stopped unexpectedly".to_owned());
+    if let Some(error) = stream_error {
+        return Err(format!("SQL preflight output could not be read: {error}"));
+    }
+    let mut report = reports.join("\n");
+    if !stderr.trim().is_empty() {
+        if !report.is_empty() {
+            report.push('\n');
+        }
+        report.push_str(stderr.trim());
+    }
+    if status.success() {
+        Ok(if report.is_empty() {
             "ENABLED SQL JOBS PASSED PREFLIGHT".into()
         } else {
-            stdout
+            report
         })
     } else {
-        let details = match (stdout.is_empty(), stderr.is_empty()) {
-            (false, false) => format!("{stdout}\n{stderr}"),
-            (false, true) => stdout,
-            (true, false) => stderr,
-            (true, true) => format!("preflight exited with {}", output.status),
-        };
-        Err(details)
+        Err(if report.is_empty() {
+            format!("SQL preflight exited with {status}")
+        } else {
+            report
+        })
     }
 }
 
@@ -1540,14 +1596,21 @@ impl App {
         }
         let job_ids: Vec<Uuid> = enabled_jobs.iter().map(|job| job.id).collect();
         let case_label = case_path.to_string_lossy().into_owned();
+        let progress = Arc::new(Mutex::new("Preparing enabled SQL preflight".to_owned()));
+        let worker_progress = Arc::clone(&progress);
         let (sender, receiver) = mpsc::channel();
         self.automation_schedule_worker = Some(receiver);
+        self.automation_progress = Some(progress);
         self.automation_schedule_message = None;
         self.automation_schedule_target_path = Some(case_label.clone());
         self.status = "PREFLIGHTING ENABLED SQL JOBS WITH ONE-RUN PARAMETERS".into();
         thread::spawn(move || {
-            let result =
-                preflight_automation_jobs_command(&case_path, &job_ids, &parameter_overrides);
+            let result = preflight_automation_jobs_command(
+                &case_path,
+                &job_ids,
+                &parameter_overrides,
+                &worker_progress,
+            );
             let _ = sender.send((case_label, result));
         });
     }
@@ -7732,6 +7795,7 @@ impl eframe::App for App {
                 Ok((case_path, Ok(message))) => {
                     self.automation_schedule_worker = None;
                     self.automation_schedule_target_path = None;
+                    self.automation_progress = None;
                     self.status = message.clone();
                     self.automation_schedule_message = Some((case_path, true, message));
                 }
@@ -7747,6 +7811,7 @@ impl eframe::App for App {
                     };
                     self.automation_schedule_worker = None;
                     self.automation_schedule_target_path = None;
+                    self.automation_progress = None;
                     let message = format!("{verb} · {error}");
                     self.status = message.clone();
                     self.automation_schedule_message = Some((case_path, false, message));
@@ -7762,6 +7827,7 @@ impl eframe::App for App {
                         "SCHEDULE INSTALL FAILED"
                     };
                     self.automation_schedule_worker = None;
+                    self.automation_progress = None;
                     let case_path = self
                         .automation_schedule_target_path
                         .take()
@@ -7797,6 +7863,14 @@ impl eframe::App for App {
                                 "The installer is checking enabled SQL jobs and updating your user schedule."
                             });
                             ui.add_space(12.0);
+                            if self.status.starts_with("PREFLIGHTING")
+                                && let Some(progress) = self
+                                    .automation_progress
+                                    .as_ref()
+                                    .and_then(|progress| progress.lock().ok().map(|value| value.clone()))
+                            {
+                                ui.label(progress);
+                            }
                             ui.label(&self.status);
                         });
                     });
@@ -14451,6 +14525,7 @@ fn validate_enabled_automation_jobs_cli(
                 ));
             } else {
                 println!("FAIL · {} · {message}", job.name);
+                let _ = std::io::stdout().flush();
             }
             continue;
         }
@@ -14475,6 +14550,7 @@ fn validate_enabled_automation_jobs_cli(
                 ));
             } else {
                 println!("FAIL · {} · {}", job.name, message);
+                let _ = std::io::stdout().flush();
             }
             continue;
         }
@@ -14546,6 +14622,7 @@ fn validate_enabled_automation_jobs_cli(
                 job.name,
                 message
             );
+            let _ = std::io::stdout().flush();
         }
     }
     if json_output {
