@@ -475,6 +475,11 @@ struct SqlValidationPreview {
     connections: Vec<ConnectionFact>,
 }
 
+struct AutomationParameterOverrides {
+    global: Vec<(String, String)>,
+    scoped: Vec<(String, String, String)>,
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 struct CaseFile {
     #[serde(default)]
@@ -3599,17 +3604,49 @@ impl App {
     }
 
     fn start_automation_jobs(&mut self, job_ids: Vec<Uuid>, batch: bool) {
-        let parameter_overrides = match parse_sql_parameters(&self.automation_run_parameter_text) {
-            Ok(parameters) => parameters,
-            Err(error) => {
-                self.status = format!("AUTOMATION OVERRIDE INVALID · {error}");
+        let parameter_overrides =
+            match parse_automation_parameter_overrides(&self.automation_run_parameter_text) {
+                Ok(parameters) => parameters,
+                Err(error) => {
+                    self.status = format!("AUTOMATION OVERRIDE INVALID · {error}");
+                    return;
+                }
+            };
+        if !parameter_overrides.global.is_empty() && job_ids.len() != 1 {
+            self.status = "SHARED OVERRIDES NEED ONE JOB · USE job::name=value FOR A BATCH".into();
+            return;
+        }
+        let selected_jobs: Vec<&AutomationJob> = self
+            .case
+            .automation_jobs
+            .iter()
+            .filter(|job| job_ids.contains(&job.id))
+            .collect();
+        let mut assigned = HashSet::new();
+        for (selector, name, _) in &parameter_overrides.scoped {
+            let matches: Vec<&AutomationJob> = selected_jobs
+                .iter()
+                .copied()
+                .filter(|job| {
+                    job.name.eq_ignore_ascii_case(selector)
+                        || job.id.to_string().eq_ignore_ascii_case(selector)
+                })
+                .collect();
+            if matches.len() != 1 {
+                self.status = if matches.is_empty() {
+                    format!("AUTOMATION OVERRIDE JOB NOT SELECTED · {selector}")
+                } else {
+                    format!("AUTOMATION OVERRIDE JOB SELECTOR AMBIGUOUS · {selector}")
+                };
                 return;
             }
-        };
-        if !parameter_overrides.is_empty() && job_ids.len() != 1 {
-            self.status =
-                "AUTOMATION OVERRIDE NEEDS ONE JOB · FILTER OR RUN JOBS INDIVIDUALLY".into();
-            return;
+            if !assigned.insert((matches[0].id, name.clone())) {
+                self.status = format!(
+                    "AUTOMATION OVERRIDE DUPLICATED · {} · {name}",
+                    matches[0].name
+                );
+                return;
+            }
         }
         self.start_automation_work(job_ids, None, batch, parameter_overrides);
     }
@@ -3703,7 +3740,7 @@ impl App {
         job_ids: Vec<Uuid>,
         replay_run_id: Option<Uuid>,
         batch: bool,
-        parameter_overrides: Vec<(String, String)>,
+        parameter_overrides: AutomationParameterOverrides,
     ) {
         if self.automation_worker.is_some() {
             self.status = "AUTOMATION ALREADY RUNNING".into();
@@ -3770,7 +3807,7 @@ impl App {
                         return Err("one or more automation jobs no longer exist; reload the case".into());
                     }
                     for (job, _) in &mut jobs {
-                        for (name, value) in &parameter_overrides {
+                        for (name, value) in &parameter_overrides.global {
                             if let Some((_, configured_value)) = job
                                 .parameters
                                 .iter_mut()
@@ -3780,6 +3817,25 @@ impl App {
                             } else {
                                 job.parameters.push((name.clone(), value.clone()));
                             }
+                        }
+                    }
+                    for (selector, name, value) in &parameter_overrides.scoped {
+                        let Some((job, _)) = jobs.iter_mut().find(|(job, _)| {
+                            job.name.eq_ignore_ascii_case(selector)
+                                || job.id.to_string().eq_ignore_ascii_case(selector)
+                        }) else {
+                            return Err(format!(
+                                "automation override job is no longer selected: {selector}"
+                            ));
+                        };
+                        if let Some((_, configured_value)) = job
+                            .parameters
+                            .iter_mut()
+                            .find(|(configured_name, _)| configured_name == name)
+                        {
+                            *configured_value = value.clone();
+                        } else {
+                            job.parameters.push((name.clone(), value.clone()));
                         }
                     }
                     if let Some(run_id) = replay_run_id {
@@ -3964,7 +4020,15 @@ impl App {
     }
 
     fn replay_saved_automation_run(&mut self, run_id: Uuid) {
-        self.start_automation_work(Vec::new(), Some(run_id), false, Vec::new());
+        self.start_automation_work(
+            Vec::new(),
+            Some(run_id),
+            false,
+            AutomationParameterOverrides {
+                global: Vec::new(),
+                scoped: Vec::new(),
+            },
+        );
     }
 
     fn execute_automation_job(&mut self, job: &AutomationJob) -> (bool, String) {
@@ -6101,6 +6165,54 @@ fn parse_sql_parameters(text: &str) -> Result<Vec<(String, String)>, String> {
     Ok(parameters)
 }
 
+fn parse_automation_parameter_overrides(
+    text: &str,
+) -> Result<AutomationParameterOverrides, String> {
+    let mut overrides = AutomationParameterOverrides {
+        global: Vec::new(),
+        scoped: Vec::new(),
+    };
+    let mut global_names = HashSet::new();
+    for (line_index, line) in text.lines().enumerate() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if let Some((selector, binding)) = line.split_once("::") {
+            let selector = selector.trim();
+            if selector.is_empty() {
+                return Err(format!(
+                    "automation override line {} needs a job name or UUID before ::",
+                    line_index + 1
+                ));
+            }
+            let mut parsed = parse_sql_parameters(binding)?;
+            if parsed.len() != 1 {
+                return Err(format!(
+                    "automation override line {} must contain one scoped name=value pair",
+                    line_index + 1
+                ));
+            }
+            let (name, value) = parsed.remove(0);
+            overrides.scoped.push((selector.to_owned(), name, value));
+        } else {
+            let parsed = parse_sql_parameters(line)?;
+            let (name, value) = parsed
+                .into_iter()
+                .next()
+                .ok_or_else(|| format!("automation override line {} is empty", line_index + 1))?;
+            if !global_names.insert(name.clone()) {
+                return Err(format!("duplicate SQL parameter override: {name}"));
+            }
+            overrides.global.push((name, value));
+        }
+    }
+    if !overrides.global.is_empty() && !overrides.scoped.is_empty() {
+        return Err("use shared name=value lines or scoped job::name=value lines, not both".into());
+    }
+    Ok(overrides)
+}
+
 fn format_sql_parameters(parameters: &[(String, String)]) -> String {
     parameters
         .iter()
@@ -7439,8 +7551,13 @@ impl eframe::App for App {
                             if self.data_mode==DataMode::Automation {
                                 let automation_case_saved =
                                     self.disk_case_json.is_some() && !self.has_unsaved_changes();
-                                let has_run_parameter_overrides =
-                                    !self.automation_run_parameter_text.trim().is_empty();
+                                let run_parameter_overrides = parse_automation_parameter_overrides(
+                                    &self.automation_run_parameter_text,
+                                );
+                                let run_overrides_valid = run_parameter_overrides.is_ok();
+                                let has_shared_run_overrides = run_parameter_overrides
+                                    .as_ref()
+                                    .is_ok_and(|overrides| !overrides.global.is_empty());
                                 if !automation_case_saved {
                                     ui.horizontal(|ui| {
                                         ui.label(egui::RichText::new(
@@ -7462,7 +7579,7 @@ impl eframe::App for App {
                                     .id_salt("automation_run_parameter_overrides")
                                     .default_open(!self.automation_run_parameter_text.is_empty())
                                     .show(ui, |ui| {
-                                        ui.label(egui::RichText::new("Enter name=value lines. Overrides apply to the next run that selects exactly one job, are recorded with its effective SQL configuration, and do not change saved jobs or scheduled runs. Clear them before a multi-job batch.").small().color(muted));
+                                        ui.label(egui::RichText::new("For one job, enter name=value lines. For batches, scope each line as Job name or UUID::name=value. Effective values are recorded for replay and auditing; saved jobs and scheduled runs do not change.").small().color(muted));
                                         ui.horizontal(|ui| {
                                             ui.add(egui::TextEdit::multiline(&mut self.automation_run_parameter_text)
                                                 .desired_width(canvas_w - 130.0)
@@ -7569,16 +7686,19 @@ impl eframe::App for App {
                                         .add_enabled(
                                             enabled_job_count > 0
                                                 && automation_case_saved
+                                                && run_overrides_valid
                                                 && (enabled_job_count == 1
-                                                    || !has_run_parameter_overrides),
+                                                    || !has_shared_run_overrides),
                                             egui::Button::new("Run enabled jobs and save"),
                                         )
                                         .on_disabled_hover_text(if !automation_case_saved {
                                             "Save the case and job changes before running automation."
+                                        } else if !run_overrides_valid {
+                                            "Fix the one-run override lines before running automation."
                                         } else if enabled_job_count == 0 {
                                             "Enable at least one job before running the batch."
                                         } else {
-                                            "Clear one-run overrides or run a single job individually."
+                                            "Use Job name or UUID::name=value lines for a multi-job batch."
                                         })
                                         .clicked()
                                     {
@@ -7676,16 +7796,19 @@ impl eframe::App for App {
                                         .add_enabled(
                                             !visible_enabled_jobs.is_empty()
                                                 && automation_case_saved
+                                                && run_overrides_valid
                                                 && (visible_enabled_jobs.len() == 1
-                                                    || !has_run_parameter_overrides),
+                                                    || !has_shared_run_overrides),
                                             egui::Button::new("Run visible enabled jobs and save"),
                                         )
                                         .on_disabled_hover_text(if !automation_case_saved {
                                             "Save the case and job changes before running automation."
+                                        } else if !run_overrides_valid {
+                                            "Fix the one-run override lines before running automation."
                                         } else if visible_enabled_jobs.is_empty() {
                                             "Enable a visible job before running this batch."
                                         } else {
-                                            "Clear one-run overrides or run a single visible job individually."
+                                            "Use Job name or UUID::name=value lines for a multi-job batch."
                                         })
                                         .clicked()
                                     {
