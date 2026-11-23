@@ -15624,6 +15624,52 @@ fn annotate_automation_run_cli(
     Ok(())
 }
 
+fn set_automation_run_review_cli(
+    case_path: &str,
+    run_id: Uuid,
+    reviewed: bool,
+    json_output: bool,
+) -> Result<(), String> {
+    let case_file = Path::new(case_path);
+    let _case_lock = lock_automation_case(case_file)?;
+    let content =
+        fs::read_to_string(case_file).map_err(|error| format!("cannot read case: {error}"))?;
+    let mut case = serde_json::from_str::<CaseFile>(&content)
+        .map_err(|error| format!("cannot parse case: {error}"))?;
+    let run = case
+        .automation_runs
+        .iter_mut()
+        .find(|run| run.id == run_id)
+        .ok_or_else(|| format!("automation run not found: {run_id}"))?;
+    run.regressions_reviewed = Some(reviewed);
+    let job_name = run.job_name.clone();
+    save_case_atomically(case_file, &case)?;
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "schema_version": 1,
+                "ok": true,
+                "saved": true,
+                "run_id": run_id,
+                "job": job_name,
+                "regressions_reviewed": reviewed,
+            }))
+            .map_err(|error| error.to_string())?
+        );
+    } else {
+        println!(
+            "{} · {job_name} · run {run_id}",
+            if reviewed {
+                "REGRESSION REVIEW MARKED"
+            } else {
+                "REGRESSION REVIEW REOPENED"
+            }
+        );
+    }
+    Ok(())
+}
+
 fn report_cli_error(action: &str, error: String, json_output: bool) -> ! {
     if json_output {
         println!(
@@ -15758,6 +15804,9 @@ fn main() -> eframe::Result<()> {
             "Arch Notebook\n\nUsage:\n  arch-notebook\n  arch-notebook --inspect-sqlite <database.sqlite> [--json]\n  arch-notebook --import-graphml <case.json> <input.graphml> [--json]\n  arch-notebook --export-graphml <case.json> <output.graphml> [--json]\n  arch-notebook --export-sql-comparison <case.json> <baseline-snapshot-id> <current-snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --export-job <case.json> <job-name-or-id> <output.json> [--json]\n  arch-notebook --import-job <case.json> <input.json> [--name <job-name>] [--database <path>] [--series <label>] [--json]\n  arch-notebook --export-import-design <case.json> <design-name-or-id> <output.json> [--json]\n  arch-notebook --import-import-design <case.json> <input.json> [--name <design-name>] [--json]\n  arch-notebook --list-jobs <case.json> [--enabled-only] [--json]\n  arch-notebook --list-runs <case.json> [--json] [--job <name-or-id>] [--trigger <desktop|scheduled|cli|replay|legacy>] [--offset <count>] [--limit <count>]\n  arch-notebook --validate-job <case.json> <job-name-or-id> [--query-only] [--param name=value ...] [--json]\n  arch-notebook --validate-enabled-jobs <case.json> [--json] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --check-enabled-job-queries <case.json> [--json] [--require-usable] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --validate-run <case.json> <run-id> [--json]\n  arch-notebook --run-enabled-jobs <case.json> [--json] [--skip-recent-success] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --run-job <case.json> <job-name-or-id> [--param name=value ...] [--json]\n  arch-notebook --rerun-run <case.json> <run-id> [--json]\n\nJob and import design packages contain portable configuration, not case data or run history. Batch runs save snapshots and run history to the case file. JSON output is available for scheduler integration."
         );
         println!("  arch-notebook --annotate-run <case.json> <run-id> <comment> [--json]");
+        println!(
+            "  arch-notebook --review-run <case.json> <run-id> <reviewed|unreviewed> [--json]"
+        );
         return Ok(());
     }
     if args.first().is_some_and(|arg| arg == "--inspect-sqlite") {
@@ -16020,6 +16069,32 @@ fn main() -> eframe::Result<()> {
             .unwrap_or_else(|_| report_cli_usage_error("run-id must be a UUID", json_output));
         if let Err(error) = annotate_automation_run_cli(case_path, run_id, note, json_output) {
             report_cli_error("automation run comment failed", error, json_output);
+        }
+        return Ok(());
+    }
+    if args.first().is_some_and(|arg| arg == "--review-run") {
+        let json_output = args.iter().any(|arg| arg == "--json");
+        let usage =
+            "usage: arch-notebook --review-run <case.json> <run-id> <reviewed|unreviewed> [--json]";
+        let (Some(case_path), Some(run_id), Some(review_state)) =
+            (args.get(1), args.get(2), args.get(3))
+        else {
+            report_cli_usage_error(usage, json_output);
+        };
+        if args.len() > 5 || (args.len() == 5 && args[4] != "--json") {
+            report_cli_usage_error(usage, json_output);
+        }
+        let run_id = run_id
+            .parse::<Uuid>()
+            .unwrap_or_else(|_| report_cli_usage_error("run-id must be a UUID", json_output));
+        let reviewed = match review_state.as_str() {
+            "reviewed" => true,
+            "unreviewed" => false,
+            _ => report_cli_usage_error("review-state must be reviewed or unreviewed", json_output),
+        };
+        if let Err(error) = set_automation_run_review_cli(case_path, run_id, reviewed, json_output)
+        {
+            report_cli_error("automation run review update failed", error, json_output);
         }
         return Ok(());
     }

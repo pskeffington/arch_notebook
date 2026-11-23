@@ -91,6 +91,15 @@ cargo run --offline -- --list-runs harbor-light.case.json --json
 
 Run-list JSON includes `analyst_note` and `regressions_reviewed`. Pass an empty comment to clear it. Comment updates lock and atomically save the case; the desktop review control also saves its explicit reviewed/reopened state in the case.
 
+Scripts can set the explicit regression review state without changing the analyst comment:
+
+```sh
+cargo run --offline -- --review-run harbor-light.case.json <run-id> reviewed --json
+cargo run --offline -- --review-run harbor-light.case.json <run-id> unreviewed
+```
+
+The command locks and atomically saves the case. Setting `unreviewed` reopens an item even if it has an analyst comment; legacy records with no explicit state continue to use the comment as their prior review signal.
+
 ## Share job and import designs
 
 Share a saved SQL automation definition without copying the case, captured snapshots, or run history. Export by job name or UUID, then import the JSON package into another case:
