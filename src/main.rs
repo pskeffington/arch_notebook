@@ -880,6 +880,7 @@ struct App {
     chart_navigator_dragging: bool,
     new_link_from: Option<Uuid>,
     new_link_to: Option<Uuid>,
+    new_link_label: String,
     import_path: String,
     import_headers: Vec<String>,
     import_preview: Vec<Vec<String>>,
@@ -1344,6 +1345,7 @@ impl Default for App {
             chart_navigator_dragging: false,
             new_link_from: None,
             new_link_to: None,
+            new_link_label: "ASSOCIATED WITH".into(),
             import_path: data_dir.join("sample_relationships.csv").to_string_lossy().into_owned(),
             import_headers: Vec::new(),
             import_preview: Vec::new(),
@@ -1655,6 +1657,30 @@ fn demo_case() -> CaseFile {
 }
 
 impl App {
+    fn add_entity_with_type(&mut self, kind: &str) {
+        let item = Entity {
+            id: Uuid::new_v4(),
+            name: "New entity".into(),
+            kind: kind.into(),
+            detail: "Add an analyst note".into(),
+            attributes: Vec::new(),
+            sql_attribute_values: Vec::new(),
+            sql_attribute_baselines: Vec::new(),
+            aliases: Vec::new(),
+            external_ids: Vec::new(),
+            merged_records: Vec::new(),
+            x: 0.5,
+            y: 0.5,
+            position_locked: false,
+            color: [55, 128, 162],
+        };
+        self.selected = Some(item.id);
+        self.selected_link = None;
+        self.case.entities.push(item);
+        self.duplicate_candidates.clear();
+        self.invalidate_network_groups();
+    }
+
     fn invalidate_network_groups(&mut self) {
         self.network_groups = None;
         self.network_bridges = None;
@@ -1688,6 +1714,7 @@ impl App {
             chart_navigator_dragging: false,
             new_link_from: None,
             new_link_to: None,
+            new_link_label: "ASSOCIATED WITH".into(),
             import_path: String::new(),
             import_headers: Vec::new(),
             import_preview: Vec::new(),
@@ -10760,11 +10787,38 @@ impl eframe::App for App {
                         self.page=WorkspacePage::Data;self.show_timeline=false;self.data_mode=DataMode::Automation;
                     }
                     ui.separator();
-                    if ui.button("＋ Entity").clicked() {
-                        let item=Entity { id:Uuid::new_v4(),name:"New entity".into(),kind:"PERSON".into(),detail:"Add an analyst note".into(),attributes:Vec::new(),sql_attribute_values:Vec::new(),sql_attribute_baselines:Vec::new(),aliases:Vec::new(),external_ids:Vec::new(),merged_records:Vec::new(),x:0.5,y:0.5,position_locked:false,color:[55,128,162] };
-                        self.selected=Some(item.id); self.selected_link=None; self.case.entities.push(item);self.duplicate_candidates.clear();
-                        self.invalidate_network_groups();
+                    let mut entity_types = [
+                        "PERSON",
+                        "ORGANIZATION",
+                        "LOCATION",
+                        "ACCOUNT",
+                        "EVENT",
+                        "VEHICLE",
+                    ]
+                    .into_iter()
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>();
+                    for entity in &self.case.entities {
+                        let kind = entity.kind.trim();
+                        if !kind.is_empty()
+                            && !entity_types
+                                .iter()
+                                .any(|known| known.eq_ignore_ascii_case(kind))
+                        {
+                            entity_types.push(kind.to_owned());
+                        }
                     }
+                    entity_types.sort_by_key(|kind| kind.to_ascii_lowercase());
+                    ui.menu_button("＋ Entity", |ui| {
+                        ui.label("Choose an entity type");
+                        ui.separator();
+                        for kind in &entity_types {
+                            if ui.button(format!("＋ {kind}")).clicked() {
+                                self.add_entity_with_type(kind);
+                                ui.close_menu();
+                            }
+                        }
+                    });
                     let link_entities: Vec<(Uuid, String)> = self
                         .case
                         .entities
@@ -10785,11 +10839,44 @@ impl eframe::App for App {
                             .map(|(id, _)| *id)
                             .find(|id| Some(*id) != self.new_link_from);
                     }
+                    let mut link_types = [
+                        "ASSOCIATED WITH",
+                        "TRANSACTED WITH",
+                        "CONTACTED",
+                        "TRAVELED TO",
+                        "OWNS",
+                    ]
+                    .into_iter()
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>();
+                    for link in &self.case.links {
+                        let label = link.label.trim();
+                        if !label.is_empty()
+                            && !link_types
+                                .iter()
+                                .any(|known| known.eq_ignore_ascii_case(label))
+                        {
+                            link_types.push(label.to_owned());
+                        }
+                    }
+                    link_types.sort_by_key(|label| label.to_ascii_lowercase());
                     ui.menu_button("＋ Link", |ui| {
                         if link_entities.len() < 2 {
                             ui.label("Add another entity before creating a link.");
                             return;
                         }
+                        ui.label("Relationship type");
+                        egui::ComboBox::from_id_salt("new_link_label")
+                            .selected_text(&self.new_link_label)
+                            .show_ui(ui, |ui| {
+                                for label in &link_types {
+                                    ui.selectable_value(
+                                        &mut self.new_link_label,
+                                        label.clone(),
+                                        label,
+                                    );
+                                }
+                            });
                         let entity_label = |id: Option<Uuid>| {
                             id.and_then(|id| link_entities.iter().find(|(entity, _)| *entity == id))
                                 .map(|(_, label)| label.as_str())
@@ -10829,7 +10916,7 @@ impl eframe::App for App {
                                     from,
                                     to,
                                     connection_id: String::new(),
-                                    label: "ASSOCIATED WITH".into(),
+                                    label: self.new_link_label.clone(),
                                     date: "2025-02-15".into(),
                                     confidence: 2,
                                     directed: true,
@@ -19773,6 +19860,17 @@ fn sqlite_query_templates(schema: &[serde_json::Value]) -> Vec<(String, String)>
         "originator",
         "initiator",
         "subject",
+        "subject_name",
+        "actor",
+        "actor_name",
+        "sender",
+        "sender_name",
+        "start",
+        "start_name",
+        "start_entity",
+        "start_entity_name",
+        "start_node",
+        "start_node_name",
         "src",
         "source_node",
     ];
@@ -19788,7 +19886,15 @@ fn sqlite_query_templates(schema: &[serde_json::Value]) -> Vec<(String, String)>
         "from_node_id",
         "source_id",
         "source_key",
+        "subject_id",
+        "actor_id",
+        "sender_id",
+        "start_id",
+        "start_entity_id",
+        "start_node_id",
         "origin_id",
+        "originator_id",
+        "initiator_id",
         "src_id",
     ];
     let target_aliases = [
@@ -19805,7 +19911,17 @@ fn sqlite_query_templates(schema: &[serde_json::Value]) -> Vec<(String, String)>
         "destination",
         "destination_name",
         "recipient",
+        "recipient_name",
+        "receiver",
+        "receiver_name",
         "object",
+        "object_name",
+        "end",
+        "end_name",
+        "end_entity",
+        "end_entity_name",
+        "end_node",
+        "end_node_name",
         "dst",
         "target_node",
     ];
@@ -19821,6 +19937,12 @@ fn sqlite_query_templates(schema: &[serde_json::Value]) -> Vec<(String, String)>
         "target_node_id",
         "to_node_id",
         "target_key",
+        "recipient_id",
+        "receiver_id",
+        "object_id",
+        "end_id",
+        "end_entity_id",
+        "end_node_id",
         "destination_id",
         "dst_id",
     ];
@@ -19845,8 +19967,12 @@ fn sqlite_query_templates(schema: &[serde_json::Value]) -> Vec<(String, String)>
                 "relationship_type",
                 "relation_type",
                 "link_type",
+                "edge_type",
+                "connection_type",
+                "interaction_type",
                 "relation",
                 "predicate",
+                "action",
             ],
         ),
         (
