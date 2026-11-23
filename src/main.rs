@@ -7220,6 +7220,28 @@ impl eframe::App for App {
                                     visible_job_ids.len(),
                                     self.case.automation_jobs.len()
                                 )).small().color(muted));
+                                let visible_enabled_jobs: Vec<Uuid> = self
+                                    .case
+                                    .automation_jobs
+                                    .iter()
+                                    .filter(|job| visible_job_ids.contains(&job.id) && job.enabled)
+                                    .map(|job| job.id)
+                                    .collect();
+                                ui.horizontal(|ui| {
+                                    ui.label(format!(
+                                        "{} visible enabled jobs",
+                                        visible_enabled_jobs.len()
+                                    ));
+                                    if ui
+                                        .add_enabled(
+                                            !visible_enabled_jobs.is_empty(),
+                                            egui::Button::new("Run visible enabled jobs and save"),
+                                        )
+                                        .clicked()
+                                    {
+                                        self.start_automation_jobs(visible_enabled_jobs, true);
+                                    }
+                                });
                                 let mut action: Option<(String,Uuid)> = None;
                                 let mut focus_run = None;
                                 for job in &mut self.case.automation_jobs {
