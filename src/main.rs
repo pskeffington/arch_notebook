@@ -461,6 +461,10 @@ struct SqlValidationPreview {
     connection_count: usize,
     skipped_rows: usize,
     result_quality: String,
+    minimum_connections: usize,
+    maximum_connections: Option<usize>,
+    maximum_regressions: Option<usize>,
+    maximum_skipped_rows: Option<usize>,
     connections: Vec<ConnectionFact>,
 }
 
@@ -2935,15 +2939,44 @@ impl App {
     }
 
     fn save_sql_as_automation_job(&mut self) {
+        if !self.can_save_sql_as_automation_job() {
+            self.status =
+                "JOB NOT SAVED · validate the current query and confirm it returns usable rows with no skipped endpoints".into();
+            return;
+        }
         let job_count = self.case.automation_jobs.len();
+        let name = self.automation_job_name.trim().to_owned();
         self.save_automation_job();
         if self.case.automation_jobs.len() > job_count
             && self.status.starts_with("AUTOMATION JOB ADDED")
         {
+            if let Some(job) = self.case.automation_jobs.last_mut() {
+                job.enabled = false;
+            }
+            self.status = format!("AUTOMATION JOB ADDED · {name} · DISABLED UNTIL REVIEWED");
+            self.automation_job_filter = name;
             self.page = WorkspacePage::Data;
             self.show_timeline = false;
             self.data_mode = DataMode::Automation;
         }
+    }
+
+    fn can_save_sql_as_automation_job(&self) -> bool {
+        self.editing_automation_job.is_none()
+            && !self.automation_job_name.trim().is_empty()
+            && self.status.starts_with("SQL QUERY VALID · ")
+            && self.sql_validation_preview.as_ref().is_some_and(|preview| {
+                preview.result_quality == "usable"
+                    && preview.configured_database_path == self.sql_path.trim()
+                    && preview.series == self.sql_series.trim()
+                    && preview.query == self.sql_query.trim()
+                    && preview.minimum_connections == self.automation_minimum_connections
+                    && preview.maximum_connections == self.automation_maximum_connections
+                    && preview.maximum_regressions == self.automation_maximum_regressions
+                    && preview.maximum_skipped_rows == self.automation_maximum_skipped_rows
+                    && parse_sql_parameters(&self.sql_parameter_text)
+                        .is_ok_and(|parameters| parameters == preview.parameters)
+            })
     }
 
     fn export_automation_job_package(&mut self, id: Uuid) {
@@ -3052,6 +3085,10 @@ impl App {
                 connection_count: snapshot.connections.len(),
                 skipped_rows: snapshot.skipped_rows,
                 result_quality: snapshot_result_quality(snapshot).into(),
+                minimum_connections: self.automation_minimum_connections,
+                maximum_connections: self.automation_maximum_connections,
+                maximum_regressions: self.automation_maximum_regressions,
+                maximum_skipped_rows: self.automation_maximum_skipped_rows,
                 connections: snapshot.connections.iter().take(8).cloned().collect(),
             });
         let validation_message = if self.status.starts_with("SQL SNAPSHOT INGESTED") {
@@ -3150,11 +3187,19 @@ impl App {
         series: &str,
         query: &str,
         parameter_text: &str,
+        minimum_connections: usize,
+        maximum_connections: Option<usize>,
+        maximum_regressions: Option<usize>,
+        maximum_skipped_rows: Option<usize>,
     ) {
         let Some(preview) = preview.filter(|preview| {
             preview.configured_database_path == database_path.trim()
                 && preview.series == series.trim()
                 && preview.query == query.trim()
+                && preview.minimum_connections == minimum_connections
+                && preview.maximum_connections == maximum_connections
+                && preview.maximum_regressions == maximum_regressions
+                && preview.maximum_skipped_rows == maximum_skipped_rows
                 && parse_sql_parameters(parameter_text)
                     .is_ok_and(|parameters| parameters == preview.parameters)
         }) else {
@@ -7181,7 +7226,18 @@ impl eframe::App for App {
                                 ui.add(egui::TextEdit::multiline(&mut self.sql_query).desired_width(canvas_w-20.0).desired_rows(5).code_editor());
                                 ui.label(egui::RichText::new("Named SQL parameters · name=value per line; bind as text with :name, @name, or $name").small().color(muted));
                                 ui.add(egui::TextEdit::multiline(&mut self.sql_parameter_text).desired_width(canvas_w-20.0).desired_rows(2).code_editor());
-                                Self::show_sql_validation_preview(ui, self.sql_validation_preview.as_ref(), &self.sql_path, &self.sql_series, &self.sql_query, &self.sql_parameter_text);
+                                Self::show_sql_validation_preview(
+                                    ui,
+                                    self.sql_validation_preview.as_ref(),
+                                    &self.sql_path,
+                                    &self.sql_series,
+                                    &self.sql_query,
+                                    &self.sql_parameter_text,
+                                    self.automation_minimum_connections,
+                                    self.automation_maximum_connections,
+                                    self.automation_maximum_regressions,
+                                    self.automation_maximum_skipped_rows,
+                                );
                                 let enabled_job_count = self
                                     .case
                                     .automation_jobs
@@ -7402,6 +7458,10 @@ impl eframe::App for App {
                                                 &job.series,
                                                 &job.query,
                                                 &format_sql_parameters(&job.parameters),
+                                                job.minimum_connections,
+                                                job.maximum_connections,
+                                                job.maximum_regressions,
+                                                job.maximum_skipped_rows,
                                             );
                                         });
                                 }
@@ -7779,6 +7839,40 @@ impl eframe::App for App {
                                 ui.add(egui::TextEdit::multiline(&mut self.sql_query).desired_width(canvas_w-20.0).desired_rows(4).code_editor());
                                 ui.label(egui::RichText::new("Named SQL parameters · name=value per line; bind as text with :name, @name, or $name").small().color(muted));
                                 ui.add(egui::TextEdit::multiline(&mut self.sql_parameter_text).desired_width(canvas_w-20.0).desired_rows(2).code_editor());
+                                egui::CollapsingHeader::new("Automation capture limits (optional)")
+                                    .id_salt("sql_review_automation_limits")
+                                    .show(ui, |ui| {
+                                        ui.horizontal(|ui| {
+                                            ui.label("Minimum connections");
+                                            ui.add(egui::DragValue::new(&mut self.automation_minimum_connections).range(0..=1_000_000));
+                                            let mut limit_connections = self.automation_maximum_connections.is_some();
+                                            if ui.checkbox(&mut limit_connections, "Limit connections").changed() {
+                                                self.automation_maximum_connections = limit_connections.then_some(0);
+                                            }
+                                            if let Some(maximum) = self.automation_maximum_connections.as_mut() {
+                                                ui.label("Maximum");
+                                                ui.add(egui::DragValue::new(maximum).range(0..=1_000_000));
+                                            }
+                                        });
+                                        ui.horizontal(|ui| {
+                                            let mut limit_regressions = self.automation_maximum_regressions.is_some();
+                                            if ui.checkbox(&mut limit_regressions, "Limit regressions").changed() {
+                                                self.automation_maximum_regressions = limit_regressions.then_some(0);
+                                            }
+                                            if let Some(maximum) = self.automation_maximum_regressions.as_mut() {
+                                                ui.label("Maximum removals/confidence declines");
+                                                ui.add(egui::DragValue::new(maximum).range(0..=1_000_000));
+                                            }
+                                            let mut limit_skipped_rows = self.automation_maximum_skipped_rows.is_some();
+                                            if ui.checkbox(&mut limit_skipped_rows, "Limit skipped rows").changed() {
+                                                self.automation_maximum_skipped_rows = limit_skipped_rows.then_some(0);
+                                            }
+                                            if let Some(maximum) = self.automation_maximum_skipped_rows.as_mut() {
+                                                ui.label("Maximum empty-endpoint rows");
+                                                ui.add(egui::DragValue::new(maximum).range(0..=1_000_000));
+                                            }
+                                        });
+                                    });
                                 ui.horizontal(|ui|{if ui.button("Build query from schema").clicked(){self.build_sql_query_from_schema();}if ui.button("Validate query").clicked(){self.start_sql_validation();}if ui.button("Ingest SQL snapshot").clicked(){self.start_sql_ingestion();}});
                                 ui.horizontal(|ui| {
                                     ui.label("Save this query as an automation job");
@@ -7789,7 +7883,7 @@ impl eframe::App for App {
                                     );
                                     if ui
                                         .add_enabled(
-                                            self.editing_automation_job.is_none(),
+                                            self.can_save_sql_as_automation_job(),
                                             egui::Button::new("Save and review in Automation"),
                                         )
                                         .clicked()
@@ -7803,7 +7897,18 @@ impl eframe::App for App {
                                         self.show_sql_schema_template_picker(ui);
                                     });
                                 }
-                                Self::show_sql_validation_preview(ui, self.sql_validation_preview.as_ref(), &self.sql_path, &self.sql_series, &self.sql_query, &self.sql_parameter_text);
+                                Self::show_sql_validation_preview(
+                                    ui,
+                                    self.sql_validation_preview.as_ref(),
+                                    &self.sql_path,
+                                    &self.sql_series,
+                                    &self.sql_query,
+                                    &self.sql_parameter_text,
+                                    self.automation_minimum_connections,
+                                    self.automation_maximum_connections,
+                                    self.automation_maximum_regressions,
+                                    self.automation_maximum_skipped_rows,
+                                );
                                 if let Some(current)=current_snapshot.clone() {
                                     let chart_source_key = current.source_key.clone();
                                     let chart_database_path = current.database_path.clone();
