@@ -1100,9 +1100,33 @@ struct GraphMlDocument {
     edges: Vec<GraphMlRecord>,
 }
 
-struct GraphMlImportPayload {
+struct InterchangeImportPayload {
     csv_bytes: Vec<u8>,
     source_catalogs: Vec<serde_json::Value>,
+}
+
+#[derive(Default)]
+struct KmlPlacemark {
+    id: String,
+    name: String,
+    description: String,
+    data: HashMap<String, String>,
+    geometry: Option<KmlGeometry>,
+    coordinates: String,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum KmlGeometry {
+    Point,
+    LineString,
+}
+
+#[derive(Clone, Copy)]
+enum KmlTextTarget {
+    Name,
+    Description,
+    Coordinates,
+    DataValue,
 }
 
 #[derive(Clone, Default, Serialize, Deserialize)]
@@ -2116,11 +2140,31 @@ impl App {
                 return;
             }
         };
+        self.import_interchange_payload(payload, "GRAPHML");
+    }
+
+    fn import_kml(&mut self) {
+        let source_path = self.import_path.trim().to_owned();
+        let payload = match kml_import_payload(&source_path) {
+            Ok(payload) => payload,
+            Err(error) => {
+                self.status = format!("KML IMPORT FAILED · {error}");
+                return;
+            }
+        };
+        self.import_interchange_payload(payload, "KML");
+    }
+
+    fn import_interchange_payload(
+        &mut self,
+        payload: InterchangeImportPayload,
+        source_format: &str,
+    ) {
         let source_catalogs = payload.source_catalogs;
-        let temporary_path = match write_graphml_csv_temp(payload.csv_bytes) {
+        let temporary_path = match write_interchange_csv_temp(payload.csv_bytes, source_format) {
             Ok(path) => path,
             Err(error) => {
-                self.status = format!("GRAPHML IMPORT FAILED · {error}");
+                self.status = format!("{source_format} IMPORT FAILED · {error}");
                 return;
             }
         };
@@ -2133,17 +2177,19 @@ impl App {
         self.import_column_mapping = original_mapping;
         let import_status = std::mem::take(&mut self.status);
         self.status = if let Some(summary) = import_status.strip_prefix("CSV IMPORT · ") {
-            self.case.graphml_source_catalogs = merge_graphml_source_catalogs(
-                self.case
-                    .graphml_source_catalogs
-                    .drain(..)
-                    .chain(source_catalogs),
-            );
-            format!("GRAPHML IMPORT · {summary}")
+            if source_format == "GRAPHML" {
+                self.case.graphml_source_catalogs = merge_graphml_source_catalogs(
+                    self.case
+                        .graphml_source_catalogs
+                        .drain(..)
+                        .chain(source_catalogs),
+                );
+            }
+            format!("{source_format} IMPORT · {summary}")
         } else if let Some(error) = import_status.strip_prefix("IMPORT FAILED · ") {
-            format!("GRAPHML IMPORT FAILED · {error}")
+            format!("{source_format} IMPORT FAILED · {error}")
         } else {
-            format!("GRAPHML IMPORT FAILED · {import_status}")
+            format!("{source_format} IMPORT FAILED · {import_status}")
         };
         if let Err(error) = fs::remove_file(&temporary_path) {
             self.status = format!("{} · TEMP FILE CLEANUP FAILED · {error}", self.status);
@@ -11040,6 +11086,7 @@ impl eframe::App for App {
                         self.inspect_delimited_import();
                     }
                     if ui.button("Import GraphML").clicked(){self.import_graphml();}
+                    if ui.button("Import KML").clicked(){self.import_kml();}
                     if ui.button("Export CSV/TSV").clicked(){self.export_delimited();}
                     if ui.button("Export GraphML").clicked(){self.export_graphml();}
                     if ui.button("Export KML").clicked(){self.export_kml();}
@@ -17311,6 +17358,597 @@ fn parse_graphml(path: &str) -> Result<GraphMlDocument, String> {
     Ok(document)
 }
 
+fn kml_data_value<'a>(data: &'a HashMap<String, String>, keys: &[&str]) -> Option<&'a str> {
+    keys.iter().find_map(|key| {
+        data.iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case(key))
+            .map(|(_, value)| value.as_str())
+    })
+}
+
+fn store_kml_data_value(
+    placemark: &mut KmlPlacemark,
+    name: String,
+    value: String,
+) -> Result<(), String> {
+    if placemark
+        .data
+        .keys()
+        .any(|existing| existing.eq_ignore_ascii_case(&name))
+    {
+        return Err(format!("KML placemark repeats ExtendedData field {name}"));
+    }
+    placemark.data.insert(name, value);
+    Ok(())
+}
+
+fn parse_kml_placemarks(path: &str) -> Result<Vec<KmlPlacemark>, String> {
+    if path.trim().is_empty() {
+        return Err("KML import path cannot be empty".into());
+    }
+    let mut reader = XmlReader::from_file(path).map_err(|error| error.to_string())?;
+    reader.config_mut().trim_text(false);
+    let decoder = reader.decoder();
+    let mut placemarks = Vec::new();
+    let mut placemark: Option<KmlPlacemark> = None;
+    let mut active_data_name: Option<String> = None;
+    let mut active_simple_data = false;
+    let mut active_target: Option<KmlTextTarget> = None;
+    let mut text = String::new();
+    let mut root_seen = false;
+    let mut buffer = Vec::new();
+    loop {
+        let event = reader
+            .read_event_into(&mut buffer)
+            .map_err(|error| format!("invalid KML XML: {error}"))?;
+        match event {
+            XmlEvent::Start(start) => match start.local_name().as_ref() {
+                b"kml" => root_seen = true,
+                b"Placemark" => {
+                    if placemark.is_some() {
+                        return Err("KML placemarks cannot be nested".into());
+                    }
+                    let attributes = graphml_xml_attributes(&start, decoder)?;
+                    placemark = Some(KmlPlacemark {
+                        id: attributes.get("id").cloned().unwrap_or_default(),
+                        ..KmlPlacemark::default()
+                    });
+                }
+                b"Point" | b"LineString" if placemark.is_some() => {
+                    let current = placemark.as_mut().expect("checked placemark");
+                    if current.geometry.is_some() {
+                        return Err("KML MultiGeometry placemarks are not supported".into());
+                    }
+                    current.geometry = Some(if start.local_name().as_ref() == b"Point" {
+                        KmlGeometry::Point
+                    } else {
+                        KmlGeometry::LineString
+                    });
+                }
+                b"MultiGeometry" | b"Polygon" | b"LinearRing" | b"Model" | b"Track"
+                | b"MultiTrack"
+                    if placemark.is_some() =>
+                {
+                    return Err(format!(
+                        "KML {} geometry is not supported; use Point or LineString placemarks",
+                        String::from_utf8_lossy(start.local_name().as_ref())
+                    ));
+                }
+                b"Data" if placemark.is_some() => {
+                    let attributes = graphml_xml_attributes(&start, decoder)?;
+                    active_data_name = attributes.get("name").cloned();
+                    if active_data_name.as_deref().is_none_or(str::is_empty) {
+                        return Err("KML Data element is missing its name".into());
+                    }
+                }
+                b"SimpleData" if placemark.is_some() => {
+                    let attributes = graphml_xml_attributes(&start, decoder)?;
+                    active_data_name = attributes.get("name").cloned();
+                    if active_data_name.as_deref().is_none_or(str::is_empty) {
+                        return Err("KML SimpleData element is missing its name".into());
+                    }
+                    active_simple_data = true;
+                    active_target = Some(KmlTextTarget::DataValue);
+                    text.clear();
+                }
+                b"value" if placemark.is_some() && active_data_name.is_some() => {
+                    active_target = Some(KmlTextTarget::DataValue);
+                    text.clear();
+                }
+                b"name"
+                    if placemark.is_some()
+                        && active_target.is_none()
+                        && active_data_name.is_none() =>
+                {
+                    active_target = Some(KmlTextTarget::Name);
+                    text.clear();
+                }
+                b"description"
+                    if placemark.is_some()
+                        && active_target.is_none()
+                        && active_data_name.is_none() =>
+                {
+                    active_target = Some(KmlTextTarget::Description);
+                    text.clear();
+                }
+                b"coordinates"
+                    if placemark
+                        .as_ref()
+                        .is_some_and(|item| item.geometry.is_some()) =>
+                {
+                    active_target = Some(KmlTextTarget::Coordinates);
+                    text.clear();
+                }
+                _ => {}
+            },
+            XmlEvent::Empty(start) => match start.local_name().as_ref() {
+                b"Placemark" if placemark.is_none() => {
+                    let attributes = graphml_xml_attributes(&start, decoder)?;
+                    placemarks.push(KmlPlacemark {
+                        id: attributes.get("id").cloned().unwrap_or_default(),
+                        ..KmlPlacemark::default()
+                    });
+                }
+                b"Data" if placemark.is_some() => {
+                    let attributes = graphml_xml_attributes(&start, decoder)?;
+                    let name = attributes
+                        .get("name")
+                        .cloned()
+                        .filter(|name| !name.is_empty())
+                        .ok_or("KML Data element is missing its name")?;
+                    store_kml_data_value(
+                        placemark.as_mut().expect("checked placemark"),
+                        name,
+                        String::new(),
+                    )?;
+                }
+                b"SimpleData" if placemark.is_some() => {
+                    let attributes = graphml_xml_attributes(&start, decoder)?;
+                    let name = attributes
+                        .get("name")
+                        .cloned()
+                        .filter(|name| !name.is_empty())
+                        .ok_or("KML SimpleData element is missing its name")?;
+                    store_kml_data_value(
+                        placemark.as_mut().expect("checked placemark"),
+                        name,
+                        String::new(),
+                    )?;
+                }
+                _ => {}
+            },
+            XmlEvent::Text(value) => {
+                if active_target.is_some() {
+                    text.push_str(&value.decode().map_err(|error| error.to_string())?);
+                }
+            }
+            XmlEvent::CData(value) => {
+                if active_target.is_some() {
+                    text.push_str(&value.decode().map_err(|error| error.to_string())?);
+                }
+            }
+            XmlEvent::GeneralRef(reference) => {
+                if active_target.is_some() {
+                    text.push_str(&resolve_graphml_reference(
+                        &reference.decode().map_err(|error| error.to_string())?,
+                    )?);
+                }
+            }
+            XmlEvent::End(end) => match end.local_name().as_ref() {
+                b"value" if matches!(active_target, Some(KmlTextTarget::DataValue)) => {
+                    let name = active_data_name
+                        .take()
+                        .ok_or("KML value has no matching Data field")?;
+                    store_kml_data_value(
+                        placemark
+                            .as_mut()
+                            .ok_or("KML data value is outside a Placemark")?,
+                        name,
+                        std::mem::take(&mut text),
+                    )?;
+                    active_target = None;
+                }
+                b"SimpleData" if active_simple_data => {
+                    let name = active_data_name
+                        .take()
+                        .ok_or("KML SimpleData has no matching name")?;
+                    store_kml_data_value(
+                        placemark
+                            .as_mut()
+                            .ok_or("KML SimpleData is outside a Placemark")?,
+                        name,
+                        std::mem::take(&mut text),
+                    )?;
+                    active_simple_data = false;
+                    active_target = None;
+                }
+                b"Data" => {
+                    active_data_name = None;
+                    active_simple_data = false;
+                }
+                b"name" if matches!(active_target, Some(KmlTextTarget::Name)) => {
+                    placemark
+                        .as_mut()
+                        .ok_or("KML name is outside a Placemark")?
+                        .name = std::mem::take(&mut text).trim().to_owned();
+                    active_target = None;
+                }
+                b"description" if matches!(active_target, Some(KmlTextTarget::Description)) => {
+                    placemark
+                        .as_mut()
+                        .ok_or("KML description is outside a Placemark")?
+                        .description = std::mem::take(&mut text);
+                    active_target = None;
+                }
+                b"coordinates" if matches!(active_target, Some(KmlTextTarget::Coordinates)) => {
+                    placemark
+                        .as_mut()
+                        .ok_or("KML coordinates are outside a Placemark")?
+                        .coordinates = std::mem::take(&mut text);
+                    active_target = None;
+                }
+                b"Placemark" => {
+                    let item = placemark.take().ok_or("KML Placemark end has no start")?;
+                    if item.geometry.is_none() {
+                        return Err(format!(
+                            "KML placemark {} has no Point or LineString geometry",
+                            item.name
+                        ));
+                    }
+                    placemarks.push(item);
+                }
+                _ => {}
+            },
+            XmlEvent::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+    if !root_seen {
+        return Err("file does not contain a KML root element".into());
+    }
+    if placemark.is_some() || active_target.is_some() || active_simple_data {
+        return Err("KML document ended inside an element".into());
+    }
+    if placemarks.is_empty() {
+        return Err("KML document contains no supported placemarks".into());
+    }
+    Ok(placemarks)
+}
+
+fn parse_kml_coordinates(value: &str) -> Result<Vec<(f64, f64)>, String> {
+    value
+        .split_whitespace()
+        .map(|coordinate| {
+            let mut components = coordinate.split(',');
+            let longitude = components
+                .next()
+                .ok_or("KML coordinate is missing longitude")?
+                .parse::<f64>()
+                .map_err(|error| format!("invalid KML longitude: {error}"))?;
+            let latitude = components
+                .next()
+                .ok_or("KML coordinate is missing latitude")?
+                .parse::<f64>()
+                .map_err(|error| format!("invalid KML latitude: {error}"))?;
+            if let Some(altitude) = components.next() {
+                let altitude = altitude
+                    .parse::<f64>()
+                    .map_err(|error| format!("invalid KML altitude: {error}"))?;
+                if !altitude.is_finite() {
+                    return Err("KML altitude must be finite".into());
+                }
+            }
+            if components.next().is_some()
+                || !longitude.is_finite()
+                || !latitude.is_finite()
+                || !(-180.0..=180.0).contains(&longitude)
+                || !(-90.0..=90.0).contains(&latitude)
+            {
+                return Err("KML coordinates must be finite longitude,latitude[,altitude] values within WGS84 bounds".into());
+            }
+            Ok((longitude, latitude))
+        })
+        .collect()
+}
+
+fn kml_coordinate_key(coordinate: (f64, f64)) -> (i64, i64) {
+    (
+        (coordinate.0 * 100_000_000.0).round() as i64,
+        (coordinate.1 * 100_000_000.0).round() as i64,
+    )
+}
+
+fn kml_attributes(placemark: &KmlPlacemark, prefix: &str) -> Result<Vec<(String, String)>, String> {
+    let mut attributes = placemark
+        .data
+        .iter()
+        .filter_map(|(name, value)| {
+            let key = name
+                .get(..prefix.len())
+                .filter(|candidate| candidate.eq_ignore_ascii_case(prefix))
+                .map(|_| &name[prefix.len()..])?;
+            (!key.trim().is_empty()).then(|| (key.trim().to_owned(), value.clone()))
+        })
+        .collect::<Vec<_>>();
+    let encoded_key = "attributes_json";
+    if let Some(encoded) = kml_data_value(&placemark.data, &[encoded_key]) {
+        let decoded = serde_json::from_str::<Vec<(String, String)>>(encoded)
+            .map_err(|error| format!("invalid KML {encoded_key}: {error}"))?;
+        for (key, value) in decoded {
+            if attributes
+                .iter()
+                .any(|(existing, _)| existing.eq_ignore_ascii_case(&key))
+            {
+                return Err(format!("KML repeats custom attribute {key}"));
+            }
+            attributes.push((key, value));
+        }
+    }
+    Ok(attributes)
+}
+
+fn kml_to_graphml_document(placemarks: Vec<KmlPlacemark>) -> Result<GraphMlDocument, String> {
+    let mut document = GraphMlDocument::default();
+    let mut node_id_by_entity_id = HashMap::<Uuid, String>::new();
+    let mut node_ids_by_kml_id = HashMap::<String, String>::new();
+    let mut node_ids_by_coordinate = HashMap::<(i64, i64), Vec<String>>::new();
+    let mut line_placemarks = Vec::new();
+
+    for (index, placemark) in placemarks.into_iter().enumerate() {
+        let geometry = placemark
+            .geometry
+            .ok_or("KML placemark is missing its geometry")?;
+        let coordinates = parse_kml_coordinates(&placemark.coordinates)?;
+        match geometry {
+            KmlGeometry::Point => {
+                if coordinates.len() != 1 {
+                    return Err(format!(
+                        "KML point placemark {} must have exactly one coordinate",
+                        placemark.name
+                    ));
+                }
+                let coordinate = coordinates[0];
+                let external_entity_id = kml_data_value(
+                    &placemark.data,
+                    &["entity_id", "arch_notebook_uuid", "node_uuid", "uuid"],
+                )
+                .map(Uuid::parse_str)
+                .transpose()
+                .map_err(|error| {
+                    format!("KML entity {} has an invalid UUID: {error}", placemark.name)
+                })?;
+                let node_id = external_entity_id
+                    .map(|id| format!("n_{id}"))
+                    .or_else(|| (!placemark.id.is_empty()).then(|| placemark.id.clone()))
+                    .unwrap_or_else(|| format!("kml-node-{index}"));
+                if let Some(id) = external_entity_id
+                    && node_id_by_entity_id.insert(id, node_id.clone()).is_some()
+                {
+                    return Err(format!("KML entity UUID is duplicated: {id}"));
+                }
+                if !placemark.id.is_empty()
+                    && node_ids_by_kml_id
+                        .insert(placemark.id.clone(), node_id.clone())
+                        .is_some()
+                {
+                    return Err(format!("KML placemark ID is duplicated: {}", placemark.id));
+                }
+                node_ids_by_coordinate
+                    .entry(kml_coordinate_key(coordinate))
+                    .or_default()
+                    .push(node_id.clone());
+
+                let mut data = HashMap::new();
+                data.insert(
+                    "label".into(),
+                    if placemark.name.trim().is_empty() {
+                        node_id.clone()
+                    } else {
+                        placemark.name.clone()
+                    },
+                );
+                data.insert(
+                    "detail".into(),
+                    kml_data_value(&placemark.data, &["detail", "description"])
+                        .unwrap_or(&placemark.description)
+                        .to_owned(),
+                );
+                if let Some(kind) =
+                    kml_data_value(&placemark.data, &["entity_type", "type", "kind"])
+                {
+                    data.insert("entity_type".into(), kind.to_owned());
+                }
+                for key in [
+                    "aliases",
+                    "aliases_json",
+                    "merged_records_json",
+                    "color",
+                    "x",
+                    "y",
+                    "position_locked",
+                ] {
+                    if let Some(value) = kml_data_value(&placemark.data, &[key]) {
+                        data.insert(key.into(), value.to_owned());
+                    }
+                }
+                let external_ids = kml_external_ids(&placemark.data)?;
+                data.insert(
+                    "external_ids_json".into(),
+                    serde_json::to_string(&external_ids).map_err(|error| error.to_string())?,
+                );
+                let mut attributes = kml_attributes(&placemark, "attribute:")?;
+                for (key, value) in [
+                    ("latitude", coordinate.1.to_string()),
+                    ("longitude", coordinate.0.to_string()),
+                ] {
+                    if let Some((_, existing)) = attributes
+                        .iter_mut()
+                        .find(|(existing, _)| existing.eq_ignore_ascii_case(key))
+                    {
+                        *existing = value;
+                    } else {
+                        attributes.push((key.into(), value));
+                    }
+                }
+                validate_entity_attributes(&attributes)
+                    .map_err(|error| format!("KML entity {}: {error}", placemark.name))?;
+                data.insert(
+                    "attributes_json".into(),
+                    serde_json::to_string(&attributes).map_err(|error| error.to_string())?,
+                );
+                document.nodes.push(GraphMlRecord {
+                    id: node_id,
+                    data,
+                    ..GraphMlRecord::default()
+                });
+            }
+            KmlGeometry::LineString => line_placemarks.push((placemark, coordinates)),
+        }
+    }
+
+    for (index, (placemark, coordinates)) in line_placemarks.into_iter().enumerate() {
+        if coordinates.len() < 2 {
+            return Err(format!(
+                "KML LineString placemark {} needs at least two coordinates",
+                placemark.name
+            ));
+        }
+        let source = kml_resolve_endpoint(
+            &placemark.data,
+            &["source_entity_id", "from_entity_id"],
+            coordinates[0],
+            &node_id_by_entity_id,
+            &node_ids_by_kml_id,
+            &node_ids_by_coordinate,
+        )?;
+        let target = kml_resolve_endpoint(
+            &placemark.data,
+            &["target_entity_id", "to_entity_id"],
+            *coordinates.last().expect("at least two coordinates"),
+            &node_id_by_entity_id,
+            &node_ids_by_kml_id,
+            &node_ids_by_coordinate,
+        )?;
+        let directed = kml_data_value(&placemark.data, &["directed"])
+            .map(|value| match value.to_ascii_lowercase().as_str() {
+                "true" | "1" | "yes" | "directed" => Ok(true),
+                "false" | "0" | "no" | "undirected" => Ok(false),
+                _ => Err(format!("invalid KML relationship direction: {value}")),
+            })
+            .transpose()?;
+        let relationship = kml_data_value(
+            &placemark.data,
+            &["relationship", "relationship_type", "link_type"],
+        )
+        .or_else(|| (!placemark.name.trim().is_empty()).then_some(placemark.name.as_str()))
+        .unwrap_or("LINK")
+        .to_owned();
+        let mut data = HashMap::new();
+        for key in [
+            "connection_id",
+            "date",
+            "confidence",
+            "source_reference",
+            "evidence",
+            "notes",
+            "analyst_notes",
+            "source_notes",
+            "ingest_source",
+            "directed",
+        ] {
+            if let Some(value) = kml_data_value(&placemark.data, &[key]) {
+                data.insert(key.into(), value.to_owned());
+            }
+        }
+        data.insert("relationship".into(), relationship);
+        let attributes = kml_attributes(&placemark, "connection_attribute:")?;
+        validate_connection_attributes(&attributes)
+            .map_err(|error| format!("KML relationship {}: {error}", placemark.name))?;
+        data.insert(
+            "attributes_json".into(),
+            serde_json::to_string(&attributes).map_err(|error| error.to_string())?,
+        );
+        document.edges.push(GraphMlRecord {
+            id: if placemark.id.is_empty() {
+                format!("kml-edge-{index}")
+            } else {
+                placemark.id
+            },
+            source,
+            target,
+            directed,
+            data,
+        });
+    }
+    Ok(document)
+}
+
+fn kml_external_ids(data: &HashMap<String, String>) -> Result<Vec<(String, String)>, String> {
+    let mut external_ids = kml_data_value(data, &["external_ids_json", "external_ids"])
+        .map(serde_json::from_str::<Vec<(String, String)>>)
+        .transpose()
+        .map_err(|error| format!("invalid KML external IDs: {error}"))?
+        .unwrap_or_default();
+    for (name, value) in data {
+        if name
+            .get(.."external_id:".len())
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("external_id:"))
+        {
+            let source = &name["external_id:".len()..];
+            if source.trim().is_empty() {
+                return Err("KML external ID has an empty source name".into());
+            }
+            if external_ids
+                .iter()
+                .any(|(existing, _)| existing.eq_ignore_ascii_case(source))
+            {
+                return Err(format!("KML repeats external ID source {source}"));
+            }
+            external_ids.push((source.to_owned(), value.clone()));
+        }
+    }
+    Ok(external_ids)
+}
+
+fn kml_resolve_endpoint(
+    data: &HashMap<String, String>,
+    id_keys: &[&str],
+    coordinate: (f64, f64),
+    node_id_by_entity_id: &HashMap<Uuid, String>,
+    node_ids_by_kml_id: &HashMap<String, String>,
+    node_ids_by_coordinate: &HashMap<(i64, i64), Vec<String>>,
+) -> Result<String, String> {
+    if let Some(external_id) = kml_data_value(data, id_keys) {
+        if let Ok(id) = Uuid::parse_str(external_id)
+            && let Some(node_id) = node_id_by_entity_id.get(&id)
+        {
+            return Ok(node_id.clone());
+        }
+        if let Some(node_id) = node_ids_by_kml_id.get(external_id) {
+            return Ok(node_id.clone());
+        }
+    }
+    let key = kml_coordinate_key(coordinate);
+    match node_ids_by_coordinate.get(&key).map(Vec::as_slice) {
+        Some([node_id]) => Ok(node_id.clone()),
+        Some([]) | None => Err(format!(
+            "KML LineString endpoint {},{} does not match a Point placemark",
+            coordinate.0, coordinate.1
+        )),
+        Some(_) => Err(format!(
+            "KML LineString endpoint {},{} matches multiple Point placemarks; include source_entity_id and target_entity_id ExtendedData",
+            coordinate.0, coordinate.1
+        )),
+    }
+}
+
+fn kml_import_payload(path: &str) -> Result<InterchangeImportPayload, String> {
+    let placemarks = parse_kml_placemarks(path)?;
+    let document = kml_to_graphml_document(placemarks)?;
+    interchange_import_payload(document, path, "kml")
+}
+
 fn graphml_edge_record(attributes: HashMap<String, String>) -> Result<GraphMlRecord, String> {
     let directed = attributes
         .get("directed")
@@ -17482,8 +18120,25 @@ fn graphml_generated_connection_id(identity: &[u8], occurrence: usize) -> String
     format!("graphml:auto:{}:{occurrence}", sha256_hex(identity))
 }
 
-fn graphml_import_payload(path: &str) -> Result<GraphMlImportPayload, String> {
-    let mut document = parse_graphml(path)?;
+fn interchange_generated_connection_id(
+    source_format: &str,
+    identity: &[u8],
+    occurrence: usize,
+) -> String {
+    format!("{source_format}:auto:{}:{occurrence}", sha256_hex(identity))
+}
+
+fn graphml_import_payload(path: &str) -> Result<InterchangeImportPayload, String> {
+    let document = parse_graphml(path)?;
+    interchange_import_payload(document, path, "graphml")
+}
+
+fn interchange_import_payload(
+    mut document: GraphMlDocument,
+    path: &str,
+    source_format: &str,
+) -> Result<InterchangeImportPayload, String> {
+    let source_label = source_format.to_ascii_uppercase();
     let source_identity = fs::canonicalize(path)
         .unwrap_or_else(|_| PathBuf::from(path))
         .to_string_lossy()
@@ -17761,7 +18416,12 @@ fn graphml_import_payload(path: &str) -> Result<GraphMlImportPayload, String> {
         let external_ids = graphml_property(node, &["external_ids_json", "external_ids"])
             .map(serde_json::from_str::<Vec<(String, String)>>)
             .transpose()
-            .map_err(|error| format!("GraphML node {} has invalid external IDs: {error}", node.id))?
+            .map_err(|error| {
+                format!(
+                    "{source_label} entity {} has invalid external IDs: {error}",
+                    node.id
+                )
+            })?
             .unwrap_or_default();
         let entity_id = node_ids[&node.id].to_string();
         let source_detail = graphml_json_property(&detail)?;
@@ -17837,17 +18497,20 @@ fn graphml_import_payload(path: &str) -> Result<GraphMlImportPayload, String> {
     let mut generated_edge_id_occurrences = HashMap::<Vec<u8>, usize>::new();
     for edge in &mut document.edges {
         if !edge.id.is_empty() && !edge_ids.insert(edge.id.clone()) {
-            return Err(format!("GraphML edge ID is duplicated: {}", edge.id));
+            return Err(format!(
+                "{source_label} relationship ID is duplicated: {}",
+                edge.id
+            ));
         }
         let from = node_ids.get(&edge.source).ok_or_else(|| {
             format!(
-                "GraphML edge {} has missing source node {}",
+                "{source_label} relationship {} has missing source entity {}",
                 edge.id, edge.source
             )
         })?;
         let to = node_ids.get(&edge.target).ok_or_else(|| {
             format!(
-                "GraphML edge {} has missing target node {}",
+                "{source_label} relationship {} has missing target entity {}",
                 edge.id, edge.target
             )
         })?;
@@ -17932,11 +18595,17 @@ fn graphml_import_payload(path: &str) -> Result<GraphMlImportPayload, String> {
                 .map(serde_json::from_str::<Vec<(String, String)>>)
                 .transpose()
                 .map_err(|error| {
-                    format!("GraphML node {} has invalid attributes: {error}", record.id)
+                    format!(
+                        "{source_label} entity {} has invalid attributes: {error}",
+                        record.id
+                    )
                 })?
                 .unwrap_or_default();
             validate_entity_attributes(&attributes).map_err(|error| {
-                format!("GraphML node {} has invalid attributes: {error}", record.id)
+                format!(
+                    "{source_label} entity {} has invalid attributes: {error}",
+                    record.id
+                )
             })?;
             for key in &attribute_keys {
                 let value = attributes
@@ -17957,7 +18626,12 @@ fn graphml_import_payload(path: &str) -> Result<GraphMlImportPayload, String> {
         let connection_attributes = graphml_property(edge, &["attributes_json"])
             .map(serde_json::from_str::<Vec<(String, String)>>)
             .transpose()
-            .map_err(|error| format!("GraphML edge {} has invalid attributes: {error}", edge.id))?
+            .map_err(|error| {
+                format!(
+                    "{source_label} relationship {} has invalid attributes: {error}",
+                    edge.id
+                )
+            })?
             .unwrap_or_default();
         for key in &connection_attribute_keys {
             let value = connection_attributes
@@ -18031,7 +18705,7 @@ fn graphml_import_payload(path: &str) -> Result<GraphMlImportPayload, String> {
         let ingest_source = graphml_property(edge, &["ingest_source"])
             .filter(|value| !value.is_empty())
             .map(str::to_owned)
-            .unwrap_or_else(|| format!("graphml:{source_identity}"));
+            .unwrap_or_else(|| format!("{source_format}:{source_identity}"));
         let directed = edge.directed.unwrap_or(document.default_directed);
         let generated_id_material = graphml_connection_identity_material(
             *from,
@@ -18044,7 +18718,7 @@ fn graphml_import_payload(path: &str) -> Result<GraphMlImportPayload, String> {
             .entry(generated_id_material.clone())
             .or_default();
         let generated_connection_id =
-            graphml_generated_connection_id(&generated_id_material, *occurrence);
+            interchange_generated_connection_id(source_format, &generated_id_material, *occurrence);
         *occurrence += 1;
         let connection_id = graphml_property(edge, &["connection_id"])
             .filter(|value| !value.is_empty())
@@ -18053,7 +18727,7 @@ fn graphml_import_payload(path: &str) -> Result<GraphMlImportPayload, String> {
                 if edge.id.is_empty() {
                     generated_connection_id
                 } else {
-                    format!("graphml:{}", edge.id)
+                    format!("{source_format}:{}", edge.id)
                 }
             });
         put(&mut row, "connection_id", connection_id);
@@ -18065,16 +18739,17 @@ fn graphml_import_payload(path: &str) -> Result<GraphMlImportPayload, String> {
     let csv_bytes = writer
         .into_inner()
         .map_err(|error| error.into_error().to_string())?;
-    Ok(GraphMlImportPayload {
+    Ok(InterchangeImportPayload {
         csv_bytes,
         source_catalogs: document.source_catalogs,
     })
 }
 
-fn write_graphml_csv_temp(contents: Vec<u8>) -> Result<PathBuf, String> {
+fn write_interchange_csv_temp(contents: Vec<u8>, source_format: &str) -> Result<PathBuf, String> {
     use std::fs::OpenOptions;
     let path = env::temp_dir().join(format!(
-        "arch-notebook-graphml-import-{}.csv",
+        "arch-notebook-{}-import-{}.csv",
+        source_format.to_ascii_lowercase(),
         Uuid::new_v4()
     ));
     #[cfg(unix)]
@@ -18085,11 +18760,11 @@ fn write_graphml_csv_temp(contents: Vec<u8>) -> Result<PathBuf, String> {
     options.mode(0o600);
     let mut file = options
         .open(&path)
-        .map_err(|error| format!("cannot create temporary GraphML import file: {error}"))?;
+        .map_err(|error| format!("cannot create temporary {source_format} import file: {error}"))?;
     if let Err(error) = file.write_all(&contents) {
         let _ = fs::remove_file(&path);
         return Err(format!(
-            "cannot write temporary GraphML import file: {error}"
+            "cannot write temporary {source_format} import file: {error}"
         ));
     }
     Ok(path)
@@ -19286,13 +19961,40 @@ fn write_case_kml(
         let Some((latitude, longitude)) = coordinates.get(&entity.id) else {
             continue;
         };
-        kml.push_str("<Placemark><name>");
+        kml.push_str("<Placemark id=\"");
+        kml.push_str(&escape_xml_text(&format!("entity-{}", entity.id)));
+        kml.push_str("\"><name>");
         kml.push_str(&escape_xml_text(&entity.name));
         kml.push_str("</name><description>");
         kml.push_str(&escape_xml_text(&entity.detail));
         kml.push_str("</description><ExtendedData>");
         kml_data("entity_id", &entity.id.to_string(), &mut kml);
         kml_data("entity_type", &entity.kind, &mut kml);
+        kml_data(
+            "aliases_json",
+            &serde_json::to_string(&entity.aliases).map_err(|error| error.to_string())?,
+            &mut kml,
+        );
+        kml_data(
+            "merged_records_json",
+            &serde_json::to_string(&entity.merged_records).map_err(|error| error.to_string())?,
+            &mut kml,
+        );
+        kml_data(
+            "color",
+            &format!(
+                "#{:02X}{:02X}{:02X}",
+                entity.color[0], entity.color[1], entity.color[2]
+            ),
+            &mut kml,
+        );
+        kml_data("x", &entity.x.to_string(), &mut kml);
+        kml_data("y", &entity.y.to_string(), &mut kml);
+        kml_data(
+            "position_locked",
+            &entity.position_locked.to_string(),
+            &mut kml,
+        );
         for (key, value) in &entity.attributes {
             kml_data(&format!("attribute:{key}"), value, &mut kml);
         }
@@ -19323,13 +20025,21 @@ fn write_case_kml(
             .find(|entity| entity.id == link.to)
             .map(|entity| entity.name.as_str())
             .unwrap_or("Unknown target");
-        kml.push_str("<Placemark><name>");
+        kml.push_str("<Placemark id=\"");
+        kml.push_str(&escape_xml_text(&format!(
+            "connection-{}",
+            sha256_hex(link.connection_id.as_bytes())
+        )));
+        kml.push_str("\"><name>");
         kml.push_str(&escape_xml_text(&format!(
             "{}: {from_name} → {to_name}",
             link.label
         )));
         kml.push_str("</name><ExtendedData>");
         kml_data("connection_id", &link.connection_id, &mut kml);
+        kml_data("relationship", &link.label, &mut kml);
+        kml_data("source_entity_id", &link.from.to_string(), &mut kml);
+        kml_data("target_entity_id", &link.to.to_string(), &mut kml);
         kml_data("date", &link.date, &mut kml);
         kml_data("confidence", &link.confidence.to_string(), &mut kml);
         kml_data("directed", &link.directed.to_string(), &mut kml);
@@ -19427,6 +20137,19 @@ fn export_graphml_cli(case_path: &str, output_path: &str, json_output: bool) -> 
 }
 
 fn import_graphml_cli(case_path: &str, input_path: &str, json_output: bool) -> Result<(), String> {
+    import_interchange_cli(case_path, input_path, json_output, "GRAPHML")
+}
+
+fn import_kml_cli(case_path: &str, input_path: &str, json_output: bool) -> Result<(), String> {
+    import_interchange_cli(case_path, input_path, json_output, "KML")
+}
+
+fn import_interchange_cli(
+    case_path: &str,
+    input_path: &str,
+    json_output: bool,
+    source_format: &str,
+) -> Result<(), String> {
     let case_file = Path::new(case_path);
     let _case_lock = lock_automation_case(case_file)?;
     let content =
@@ -19436,8 +20159,15 @@ fn import_graphml_cli(case_path: &str, input_path: &str, json_output: bool) -> R
     normalize_snapshot_database_paths(&mut case, case_path);
     let mut app = App::automation_context(case, case_path);
     app.import_path = input_path.to_owned();
-    app.import_graphml();
-    if let Some(error) = app.status.strip_prefix("GRAPHML IMPORT FAILED · ") {
+    match source_format {
+        "GRAPHML" => app.import_graphml(),
+        "KML" => app.import_kml(),
+        _ => return Err(format!("unsupported interchange format {source_format}")),
+    }
+    if let Some(error) = app
+        .status
+        .strip_prefix(&format!("{source_format} IMPORT FAILED · "))
+    {
         return Err(error.to_owned());
     }
     save_case_atomically(case_file, &app.case)?;
@@ -23017,7 +23747,7 @@ fn main() -> eframe::Result<()> {
         .is_some_and(|arg| arg == "--help" || arg == "-h")
     {
         println!(
-            "Arch Notebook\n\nUsage:\n  arch-notebook\n  arch-notebook --version [--json]\n  arch-notebook --inspect-sqlite <database.sqlite> [--json]\n  arch-notebook --import-graphml <case.json> <input.graphml> [--json]\n  arch-notebook --export-graphml <case.json> <output.graphml> [--json]\n  arch-notebook --export-kml <case.json> <output.kml> [--json]\n  arch-notebook --export-sql-snapshot <case.json> <snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --export-sql-series <case.json> <snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --export-sql-comparison <case.json> <baseline-snapshot-id> <current-snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --export-job <case.json> <job-name-or-id> <output.json> [--json]\n  arch-notebook --export-path <case.json> <path-name-or-id> <output.json> [--json]\n  arch-notebook --import-path <case.json> <input.json> [--name <path-name>] [--json]\n  arch-notebook --import-job <case.json> <input.json> [--name <job-name>] [--database <path>] [--series <label>] [--param name=value ...] [--json]\n  arch-notebook --export-import-design <case.json> <design-name-or-id> <output.json> [--json]\n  arch-notebook --import-import-design <case.json> <input.json> [--name <design-name>] [--json]\n  arch-notebook --list-jobs <case.json> [--enabled-only] [--schema-adaptation-needed] [--json]\n  arch-notebook --list-batches <case.json> [--json]\n  arch-notebook --list-runs <case.json> [--json] [--job <name-or-id>] [--trigger <desktop|scheduled|cli|replay|legacy>] [--schema-adaptation-needed] [--offset <count>] [--limit <count>]\n  arch-notebook --export-runs <case.json> <output.csv|tsv> [--job <name-or-id>] [--trigger <desktop|scheduled|cli|replay|legacy>] [--schema-adaptation-needed] [--offset <count>] [--limit <count>] [--json]\n  arch-notebook --explain-job <case.json> <job-name-or-id> [--param name=value ...] [--json]\n  arch-notebook --validate-job <case.json> <job-name-or-id> [--query-only] [--param name=value ...] [--json]\n  arch-notebook --validate-enabled-jobs <case.json> [--json] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --check-enabled-job-queries <case.json> [--json] [--require-usable] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --validate-run <case.json> <run-id> [--json]\n  arch-notebook --run-enabled-jobs <case.json> [--json] [--resume-batch <batch-id>] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --run-job <case.json> <job-name-or-id> [--param name=value ...] [--resume-batch <batch-id>] [--json]\n  arch-notebook --rerun-run <case.json> <run-id> [--json]\n\nJob and import design packages contain portable configuration, not case data or run history. Batch runs save snapshots and run history to the case file. JSON output is available for scheduler integration."
+            "Arch Notebook\n\nUsage:\n  arch-notebook\n  arch-notebook --version [--json]\n  arch-notebook --inspect-sqlite <database.sqlite> [--json]\n  arch-notebook --import-graphml <case.json> <input.graphml> [--json]\n  arch-notebook --import-kml <case.json> <input.kml> [--json]\n  arch-notebook --export-graphml <case.json> <output.graphml> [--json]\n  arch-notebook --export-kml <case.json> <output.kml> [--json]\n  arch-notebook --export-sql-snapshot <case.json> <snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --export-sql-series <case.json> <snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --export-sql-comparison <case.json> <baseline-snapshot-id> <current-snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --export-job <case.json> <job-name-or-id> <output.json> [--json]\n  arch-notebook --export-path <case.json> <path-name-or-id> <output.json> [--json]\n  arch-notebook --import-path <case.json> <input.json> [--name <path-name>] [--json]\n  arch-notebook --import-job <case.json> <input.json> [--name <job-name>] [--database <path>] [--series <label>] [--param name=value ...] [--json]\n  arch-notebook --export-import-design <case.json> <design-name-or-id> <output.json> [--json]\n  arch-notebook --import-import-design <case.json> <input.json> [--name <design-name>] [--json]\n  arch-notebook --list-jobs <case.json> [--enabled-only] [--schema-adaptation-needed] [--json]\n  arch-notebook --list-batches <case.json> [--json]\n  arch-notebook --list-runs <case.json> [--json] [--job <name-or-id>] [--trigger <desktop|scheduled|cli|replay|legacy>] [--schema-adaptation-needed] [--offset <count>] [--limit <count>]\n  arch-notebook --export-runs <case.json> <output.csv|tsv> [--job <name-or-id>] [--trigger <desktop|scheduled|cli|replay|legacy>] [--schema-adaptation-needed] [--offset <count>] [--limit <count>] [--json]\n  arch-notebook --explain-job <case.json> <job-name-or-id> [--param name=value ...] [--json]\n  arch-notebook --validate-job <case.json> <job-name-or-id> [--query-only] [--param name=value ...] [--json]\n  arch-notebook --validate-enabled-jobs <case.json> [--json] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --check-enabled-job-queries <case.json> [--json] [--require-usable] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --validate-run <case.json> <run-id> [--json]\n  arch-notebook --run-enabled-jobs <case.json> [--json] [--resume-batch <batch-id>] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --run-job <case.json> <job-name-or-id> [--param name=value ...] [--resume-batch <batch-id>] [--json]\n  arch-notebook --rerun-run <case.json> <run-id> [--json]\n\nJob and import design packages contain portable configuration, not case data or run history. Batch runs save snapshots and run history to the case file. JSON output is available for scheduler integration."
         );
         println!("  arch-notebook --annotate-run <case.json> <run-id> <comment> [--json]");
         println!(
@@ -23088,6 +23818,20 @@ fn main() -> eframe::Result<()> {
         }
         if let Err(error) = import_graphml_cli(case_path, input_path, json_output) {
             report_cli_error("GraphML import failed", error, json_output);
+        }
+        return Ok(());
+    }
+    if args.first().is_some_and(|arg| arg == "--import-kml") {
+        let json_output = args.iter().any(|arg| arg == "--json");
+        let usage = "usage: arch-notebook --import-kml <case.json> <input.kml> [--json]";
+        let (Some(case_path), Some(input_path)) = (args.get(1), args.get(2)) else {
+            report_cli_usage_error(usage, json_output);
+        };
+        if args.len() > 4 || args.get(3).is_some_and(|arg| arg != "--json") {
+            report_cli_usage_error(usage, json_output);
+        }
+        if let Err(error) = import_kml_cli(case_path, input_path, json_output) {
+            report_cli_error("KML import failed", error, json_output);
         }
         return Ok(());
     }
