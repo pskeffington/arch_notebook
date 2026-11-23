@@ -23,7 +23,7 @@ use std::{
 };
 use uuid::Uuid;
 
-const CURRENT_CASE_FORMAT_VERSION: u32 = 12;
+const CURRENT_CASE_FORMAT_VERSION: u32 = 13;
 const SQL_QUERY_TIMEOUT_MINUTES: u64 = 15;
 const SQL_QUERY_TIMEOUT: Duration = Duration::from_secs(SQL_QUERY_TIMEOUT_MINUTES * 60);
 const SQLITE_LOCK_RETRY_ATTEMPTS: usize = 3;
@@ -836,6 +836,8 @@ struct CaseFile {
     graphml_source_catalogs: Vec<serde_json::Value>,
     #[serde(default)]
     saved_paths: Vec<SavedPath>,
+    #[serde(default)]
+    selection_sets: Vec<SavedSelectionSet>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -848,6 +850,13 @@ struct SavedPath {
     #[serde(default)]
     time_flow: PathTimeFlow,
     use_timeline_range: bool,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct SavedSelectionSet {
+    id: Uuid,
+    name: String,
+    entity_ids: Vec<Uuid>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -937,6 +946,7 @@ struct App {
     path_start: Option<Uuid>,
     path_end: Option<Uuid>,
     saved_path_name: String,
+    selection_set_name: String,
     saved_path_package_path: String,
     saved_path_import_name: String,
     path_follow_directions: bool,
@@ -1434,6 +1444,7 @@ impl Default for App {
             path_start: None,
             path_end: None,
             saved_path_name: String::new(),
+            selection_set_name: String::new(),
             saved_path_package_path: data_dir.join("investigation-path.json").to_string_lossy().into_owned(),
             saved_path_import_name: String::new(),
             path_follow_directions: true,
@@ -1705,6 +1716,7 @@ fn demo_case() -> CaseFile {
         import_specifications: Vec::new(),
         graphml_source_catalogs: Vec::new(),
         saved_paths: Vec::new(),
+        selection_sets: Vec::new(),
     }
 }
 
@@ -1807,6 +1819,7 @@ impl App {
             path_start: None,
             path_end: None,
             saved_path_name: String::new(),
+            selection_set_name: String::new(),
             saved_path_package_path: String::new(),
             saved_path_import_name: String::new(),
             path_follow_directions: true,
@@ -2104,6 +2117,7 @@ impl App {
                 self.editing_automation_job = None;
                 self.automation_editor_before_edit = None;
                 self.automation_job_name.clear();
+                self.selection_set_name.clear();
                 self.automation_run_parameter_text.clear();
                 self.selected_import_spec = None;
                 self.import_spec_name.clear();
@@ -7289,6 +7303,95 @@ impl App {
         self.show_timeline = false;
     }
 
+    fn save_current_selection_set(&mut self) {
+        let name = self.selection_set_name.trim().to_owned();
+        if name.is_empty() {
+            self.status = "SELECTION SET NOT SAVED · enter a name".into();
+            return;
+        }
+        if self.case.selection_sets.len() >= 10 {
+            self.status =
+                "SELECTION SET NOT SAVED · remove a set before saving another (maximum 10)".into();
+            return;
+        }
+        if self
+            .case
+            .selection_sets
+            .iter()
+            .any(|set| set.name.eq_ignore_ascii_case(&name))
+        {
+            self.status = format!("SELECTION SET NOT SAVED · {name} already exists");
+            return;
+        }
+        let live_entities: HashSet<Uuid> =
+            self.case.entities.iter().map(|entity| entity.id).collect();
+        let mut entity_ids = self
+            .chart_fit_entities
+            .clone()
+            .or_else(|| self.selected.map(|entity_id| vec![entity_id]))
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|entity_id| live_entities.contains(entity_id))
+            .collect::<Vec<_>>();
+        entity_ids.sort_unstable();
+        entity_ids.dedup();
+        if entity_ids.is_empty() {
+            self.status = "SELECTION SET NOT SAVED · focus entities on the chart first".into();
+            return;
+        }
+        self.case.selection_sets.push(SavedSelectionSet {
+            id: Uuid::new_v4(),
+            name: name.clone(),
+            entity_ids,
+        });
+        self.selection_set_name.clear();
+        self.status = format!("SELECTION SET SAVED · {name}");
+    }
+
+    fn show_saved_selection_set(&mut self, set_id: Uuid) {
+        let Some(set) = self
+            .case
+            .selection_sets
+            .iter()
+            .find(|set| set.id == set_id)
+            .cloned()
+        else {
+            self.status = "SELECTION SET NOT FOUND".into();
+            return;
+        };
+        let live_entities: HashSet<Uuid> =
+            self.case.entities.iter().map(|entity| entity.id).collect();
+        let mut entity_ids = set
+            .entity_ids
+            .into_iter()
+            .filter(|id| live_entities.contains(id))
+            .collect::<Vec<_>>();
+        entity_ids.sort_unstable();
+        entity_ids.dedup();
+        if entity_ids.is_empty() {
+            self.status = format!(
+                "SELECTION SET EMPTY · {} has no remaining entities",
+                set.name
+            );
+            return;
+        }
+        self.chart_fit_entities = Some(entity_ids.clone());
+        self.chart_fit_path = None;
+        self.chart_focus_group = Some(entity_ids.iter().copied().collect());
+        self.chart_focus = None;
+        self.chart_focus_link = None;
+        self.path_result.clear();
+        self.path_link_result.clear();
+        self.path_timeline_range = None;
+        self.timeline_range = None;
+        self.sql_source_focus = None;
+        self.selected = entity_ids.first().copied();
+        self.selected_link = None;
+        self.page = WorkspacePage::Chart;
+        self.show_timeline = false;
+        self.status = format!("SELECTION SET SHOWN · {}", set.name);
+    }
+
     fn focus_entity_from_chart_search(&mut self, entity_id: Uuid) {
         self.selected = Some(entity_id);
         self.selected_link = None;
@@ -7552,6 +7655,7 @@ impl App {
             import_specifications: Vec::new(),
             graphml_source_catalogs: Vec::new(),
             saved_paths: Vec::new(),
+            selection_sets: Vec::new(),
         };
         self.reset_chart_creation_drafts();
         self.network_groups = None;
@@ -7564,6 +7668,7 @@ impl App {
         self.editing_automation_job = None;
         self.automation_editor_before_edit = None;
         self.automation_run_parameter_text.clear();
+        self.selection_set_name.clear();
         self.selected_import_spec = None;
         self.import_spec_name.clear();
         self.show_import_wizard = false;
@@ -14160,6 +14265,41 @@ impl eframe::App for App {
                     egui::Frame::new().fill(panel).inner_margin(12).show(ui,|ui|{
                         ui.set_min_width(right);ui.set_max_width(right);
                         ui.label(egui::RichText::new("ANALYSIS").size(10.0).strong().color(muted));ui.add_space(10.0);
+                        ui.label(egui::RichText::new("SELECTION SETS").size(9.0).strong().color(cyan));
+                        ui.horizontal(|ui| {
+                            ui.add(egui::TextEdit::singleline(&mut self.selection_set_name)
+                                .hint_text("Name current focus")
+                                .desired_width((right - 92.0).max(100.0)));
+                            let has_focus = self.chart_fit_entities.as_ref().is_some_and(|ids| !ids.is_empty())
+                                || self.selected.is_some();
+                            if ui.add_enabled(has_focus && self.case.selection_sets.len() < 10,
+                                egui::Button::new("Save"))
+                                .on_hover_text("Save the current focused entities for later recall (up to 10 sets).")
+                                .clicked()
+                            {
+                                self.save_current_selection_set();
+                            }
+                        });
+                        let saved_selection_sets: Vec<(Uuid, String, usize)> = self.case.selection_sets
+                            .iter()
+                            .map(|set| (set.id, set.name.clone(), set.entity_ids.len()))
+                            .collect();
+                        if saved_selection_sets.is_empty() {
+                            ui.label(egui::RichText::new("Save a focused group to return to it later.").small().color(muted));
+                        }
+                        for (set_id, name, entity_count) in saved_selection_sets {
+                            ui.horizontal(|ui| {
+                                if ui.small_button("Show").clicked() {
+                                    self.show_saved_selection_set(set_id);
+                                }
+                                ui.label(format!("{name} · {entity_count}"));
+                                if ui.small_button("×").on_hover_text("Delete this selection set.").clicked() {
+                                    self.case.selection_sets.retain(|set| set.id != set_id);
+                                    self.status = format!("SELECTION SET DELETED · {name}");
+                                }
+                            });
+                        }
+                        ui.add_space(12.0);
                         let mut relationship_types: Vec<String> = self
                             .case
                             .links
@@ -14886,6 +15026,7 @@ impl eframe::App for App {
                         let mut focus_linked_entity = None;
                         let mut focus_linked_record = None;
                         let mut review_link_source = None;
+                        let mut automation_job_to_open = None;
                         let mut path_criteria_changed = false;
                         if let Some(id) = self.selected {
                             let linked_entities = linked_entities_for(&self.case, id);
@@ -15088,6 +15229,26 @@ impl eframe::App for App {
                                     });
                             });
                         } else if let Some(index) = self.selected_link {
+                            let source_job_id = self
+                                .case
+                                .links
+                                .get(index)
+                                .and_then(|link| link.ingest_source.as_deref())
+                                .and_then(|source_key| {
+                                    self.case
+                                        .snapshots
+                                        .iter()
+                                        .rev()
+                                        .find(|snapshot| snapshot.source_key == source_key)
+                                })
+                                .and_then(|snapshot| {
+                                    automation_job_for_snapshot(
+                                        &self.case,
+                                        snapshot,
+                                        &self.case_path,
+                                    )
+                                })
+                                .map(|job| job.id);
                             let sql_owned_attributes = self
                                 .case
                                 .links
@@ -15170,6 +15331,11 @@ impl eframe::App for App {
                                     }
                                     if ui.small_button("Review SQL series").clicked() {
                                         review_link_source = Some(source_key.to_owned());
+                                    }
+                                    if let Some(job_id) = source_job_id
+                                        && ui.small_button("Open SQL job").clicked()
+                                    {
+                                        automation_job_to_open = Some(job_id);
                                     }
                                 }
                                 ui.label("Source reference");
@@ -15274,6 +15440,12 @@ impl eframe::App for App {
                             {
                                 self.open_sql_snapshot_review(index);
                             }
+                        }
+                        if let Some(job_id) = automation_job_to_open {
+                            self.edit_automation_job(job_id);
+                            self.page = WorkspacePage::Data;
+                            self.data_mode = DataMode::Automation;
+                            self.show_timeline = false;
                         }
                         ui.add_space(20.0);ui.label(egui::RichText::new("LEGEND").size(9.0).strong().color(cyan));ui.label(egui::RichText::new("Solid link  ·  corroborated").small().color(muted));ui.label(egui::RichText::new("Dashed link  ·  unverified").small().color(muted));
                     });
@@ -17928,6 +18100,14 @@ fn kml_resolve_endpoint(
         if let Some(node_id) = node_ids_by_kml_id.get(external_id) {
             return Ok(node_id.clone());
         }
+        if Uuid::parse_str(external_id).is_ok() {
+            return Err(format!(
+                "KML LineString endpoint references unknown entity UUID {external_id}"
+            ));
+        }
+        return Err(format!(
+            "KML LineString endpoint references unknown Point placemark ID {external_id}"
+        ));
     }
     let key = kml_coordinate_key(coordinate);
     match node_ids_by_coordinate.get(&key).map(Vec::as_slice) {
@@ -20007,7 +20187,7 @@ fn write_case_kml(
     }
     kml.push_str("</Folder><Folder><name>Relationships</name>");
     let mut exported_relationships = 0usize;
-    for link in &case.links {
+    for (link_index, link) in case.links.iter().enumerate() {
         let (Some((from_latitude, from_longitude)), Some((to_latitude, to_longitude))) =
             (coordinates.get(&link.from), coordinates.get(&link.to))
         else {
@@ -20027,8 +20207,8 @@ fn write_case_kml(
             .unwrap_or("Unknown target");
         kml.push_str("<Placemark id=\"");
         kml.push_str(&escape_xml_text(&format!(
-            "connection-{}",
-            sha256_hex(link.connection_id.as_bytes())
+            "connection-{}-{link_index}",
+            sha256_hex(link.connection_id.as_bytes()),
         )));
         kml.push_str("\"><name>");
         kml.push_str(&escape_xml_text(&format!(
