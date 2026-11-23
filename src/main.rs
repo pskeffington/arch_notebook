@@ -12857,15 +12857,11 @@ impl eframe::App for App {
                                                 }
                                                 visible_source_count += 1;
                                                 let automation_job = source_snapshot.and_then(|snapshot| {
-                                                    self.case.automation_jobs.iter().find(|job| {
-                                                        same_sql_series(
-                                                            &job.database_path,
-                                                            &job.series,
-                                                            &snapshot.database_path,
-                                                            &snapshot.series,
-                                                            &self.case_path,
-                                                        )
-                                                    })
+                                                    automation_job_for_snapshot(
+                                                        &self.case,
+                                                        snapshot,
+                                                        &self.case_path,
+                                                    )
                                                 });
                                                 ui.label(&source_label).on_hover_text(source_key);
                                                 let source_entity_ids = source_entity_ids(&self.case, source_key);
@@ -13232,21 +13228,16 @@ impl eframe::App for App {
                                 if let Some(current)=current_snapshot.clone() {
                                     let chart_source_key = current.source_key.clone();
                                     let chart_database_path = current.database_path.clone();
-                                    let source_job_id = self.case.automation_jobs.iter().find(|job| {
-                                        same_sql_series(
-                                            &job.database_path,
-                                            &job.series,
-                                            &current.database_path,
-                                            &current.series,
-                                            &self.case_path,
-                                        )
-                                    }).map(|job| job.id);
-                                    let source_job_configuration_changed = source_job_id
-                                        .and_then(|job_id| self.case.automation_jobs.iter().find(|job| job.id == job_id))
-                                        .is_some_and(|job| {
-                                            job.query.trim() != current.query.trim()
-                                                || !sql_parameters_match(&job.parameters, &current.parameters)
-                                        });
+                                    let source_job = automation_job_for_snapshot(
+                                        &self.case,
+                                        &current,
+                                        &self.case_path,
+                                    );
+                                    let source_job_id = source_job.map(|job| job.id);
+                                    let source_job_configuration_changed = source_job.is_some_and(|job| {
+                                        job.query.trim() != current.query.trim()
+                                            || !sql_parameters_match(&job.parameters, &current.parameters)
+                                    });
                                     let capture_label=if selected_index==latest_index{"Latest snapshot"}else{"Selected historical snapshot"};
                                     let skipped = if current.skipped_rows == 0 {
                                         String::new()
@@ -18258,6 +18249,43 @@ fn same_sql_series(
     }
     sqlite_database_identity_path(first_database, case_path)
         == sqlite_database_identity_path(second_database, case_path)
+}
+
+fn automation_job_for_snapshot<'a>(
+    case: &'a CaseFile,
+    snapshot: &ConnectionSnapshot,
+    case_path: &str,
+) -> Option<&'a AutomationJob> {
+    let snapshot_index = case
+        .snapshots
+        .iter()
+        .position(|candidate| candidate.id == snapshot.id);
+    let originating_run =
+        case.automation_runs
+            .iter()
+            .rev()
+            .find(|run| run.snapshot_id == Some(snapshot.id))
+            .or_else(|| {
+                let snapshot_index = snapshot_index?;
+                case.automation_runs.iter().rev().find(|run| {
+                    run.snapshot_id.is_none() && run.snapshot_index == Some(snapshot_index)
+                })
+            });
+    if let Some(run) = originating_run {
+        return case.automation_jobs.iter().find(|job| job.id == run.job_id);
+    }
+
+    let mut matching_jobs = case.automation_jobs.iter().filter(|job| {
+        same_sql_series(
+            &job.database_path,
+            &job.series,
+            &snapshot.database_path,
+            &snapshot.series,
+            case_path,
+        )
+    });
+    let job = matching_jobs.next()?;
+    matching_jobs.next().is_none().then_some(job)
 }
 
 fn automation_job_effective_configuration_matches(
