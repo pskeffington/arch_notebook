@@ -6512,6 +6512,47 @@ impl eframe::App for App {
                                                 ui.label(format!("Query and validation time: {duration_ms} ms"));
                                             }
                                             ui.label(&run.message);
+                                            let snapshot_index = run
+                                                .snapshot_id
+                                                .and_then(|id| {
+                                                    self.case.snapshots.iter().position(|snapshot| snapshot.id == id)
+                                                })
+                                                .or_else(|| {
+                                                    run.snapshot_index.filter(|index| *index < self.case.snapshots.len())
+                                                });
+                                            if let Some(index) = snapshot_index {
+                                                let snapshot = &self.case.snapshots[index];
+                                                let previous = previous_snapshot_index(&self.case, index)
+                                                    .and_then(|previous_index| self.case.snapshots.get(previous_index));
+                                                let delta = snapshot_delta_json(snapshot, previous);
+                                                let counts = &delta["counts"];
+                                                ui.label(format!(
+                                                    "CAPTURE · {} connections · {} skipped rows · {} · {} changed records",
+                                                    snapshot.connections.len(),
+                                                    snapshot.skipped_rows,
+                                                    snapshot_result_quality_label(snapshot_result_quality(snapshot)),
+                                                    counts["changed_records"].as_u64().unwrap_or(0),
+                                                ));
+                                                if let Some(previous) = previous {
+                                                    ui.label(format!(
+                                                        "Compared with {} · removed {} · confidence declines {} · date changes {} · updates {} · added {}",
+                                                        previous.captured_at,
+                                                        counts["removed"].as_u64().unwrap_or(0),
+                                                        counts["confidence_declined"].as_u64().unwrap_or(0),
+                                                        counts["date_changed"].as_u64().unwrap_or(0),
+                                                        counts["connection_updated"].as_u64().unwrap_or(0),
+                                                        counts["added"].as_u64().unwrap_or(0),
+                                                    ));
+                                                } else {
+                                                    ui.label("This is the baseline capture for its database and series.");
+                                                }
+                                                ui.label(egui::RichText::new(format!(
+                                                    "SNAPSHOT ID · {}",
+                                                    snapshot.id
+                                                )).small().color(muted));
+                                            } else if run.success {
+                                                ui.label("This run has no linked snapshot record.");
+                                            }
                                             if run.configuration_recorded {
                                                 ui.label(format!(
                                                     "Minimum {} connections · maximum connections {} · maximum regressions {} · maximum skipped rows {} · job {}",
@@ -6554,14 +6595,6 @@ impl eframe::App for App {
                                             {
                                                 replay_run = Some(run.id);
                                             }
-                                            let snapshot_index = run
-                                                .snapshot_id
-                                                .and_then(|id| {
-                                                    self.case.snapshots.iter().position(|snapshot| snapshot.id == id)
-                                                })
-                                                .or_else(|| {
-                                                    run.snapshot_index.filter(|index| *index < self.case.snapshots.len())
-                                                });
                                             if let Some(index) = snapshot_index {
                                                 if ui.small_button(format!("Review snapshot #{}", index + 1)).clicked() {
                                                     review_snapshot = Some(index);
