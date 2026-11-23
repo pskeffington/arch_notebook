@@ -50,26 +50,39 @@ fn sql_schema_adaptation_kind(error: &str) -> Option<&'static str> {
         Some("missing_table")
     } else if error.contains("no such column:") || error.contains("has no column named") {
         Some("missing_column")
+    } else if error.contains("ambiguous column name:") {
+        Some("ambiguous_column")
     } else {
         None
     }
 }
 
 fn sql_schema_adaptation_hint(error: &str) -> Option<&'static str> {
-    sql_schema_adaptation_kind(error).map(|_| {
-        "the source schema may have changed; inspect the SQLite schema, rebuild or edit the query, then validate it before saving"
-    })
+    match sql_schema_adaptation_kind(error) {
+        Some("ambiguous_column") => Some(
+            "the column exists in multiple joined tables; qualify it with the intended table or alias, then validate the query before saving",
+        ),
+        Some(_) => Some(
+            "the source schema may have changed; inspect the SQLite schema, rebuild or edit the query, then validate it before saving",
+        ),
+        None => None,
+    }
 }
 
 fn sql_schema_adaptation_reference(error: &str) -> Option<String> {
     let lowercase = error.to_ascii_lowercase();
-    ["no such table:", "no such column:", "has no column named"]
-        .into_iter()
-        .find_map(|marker| {
-            let start = lowercase.find(marker)? + marker.len();
-            let reference = error.get(start..)?.trim();
-            (!reference.is_empty()).then(|| reference.to_owned())
-        })
+    [
+        "no such table:",
+        "no such column:",
+        "has no column named",
+        "ambiguous column name:",
+    ]
+    .into_iter()
+    .find_map(|marker| {
+        let start = lowercase.find(marker)? + marker.len();
+        let reference = error.get(start..)?.trim();
+        (!reference.is_empty()).then(|| reference.to_owned())
+    })
 }
 
 fn install_automation_schedule_command(case_path: &Path, schedule: &str) -> Result<String, String> {
