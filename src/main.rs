@@ -5466,6 +5466,22 @@ impl App {
                                 .drain(..worker.case.automation_batches.len() - 200);
                         }
                     }
+                    if resume_batch_id.is_none() && batch_id.is_some() {
+                        let serialized = serde_json::to_string_pretty(&worker.case)
+                            .map_err(|error| error.to_string())?;
+                        save_case_atomically(path, &worker.case)?;
+                        worker.disk_case_json = Some(serialized.clone());
+                        if let Ok(mut checkpoint) = worker_checkpoint.lock() {
+                            *checkpoint = Some((
+                                worker.case.clone(),
+                                serialized,
+                                worker
+                                    .sql_snapshot_source
+                                    .clone()
+                                    .zip(worker.sql_snapshot_index),
+                            ));
+                        }
+                    }
                     let job_count = jobs.len();
                     let job_names: Vec<_> = jobs.iter().map(|(job, _)| job.name.clone()).collect();
                     let mut passed = 0;
@@ -5684,7 +5700,7 @@ impl App {
                 self.automation_worker = Some(receiver);
                 self.automation_progress = Some(progress);
                 self.status = format!(
-                    "AUTOMATION RUNNING · CASE LOCKED · CHECKPOINTS SAVED AFTER EACH JOB{status_batch_label}"
+                    "AUTOMATION RUNNING · CASE LOCKED · BATCH SAVED BEFORE FIRST QUERY · CHECKPOINTS AFTER EACH JOB{status_batch_label}"
                 );
             }
             Err(error) => self.status = format!("AUTOMATION START FAILED · {error}"),
