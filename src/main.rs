@@ -2211,6 +2211,7 @@ impl App {
             let mut imported_ids = HashSet::new();
             let mut imported_natural_keys = HashSet::new();
             let mut imported_entity_values: HashMap<(Uuid, String), String> = HashMap::new();
+            let mut imported_external_ids: HashMap<Uuid, HashMap<String, String>> = HashMap::new();
             let immutable_sources: HashSet<String> = self
                 .case
                 .snapshots
@@ -2375,16 +2376,29 @@ impl App {
                                     normalized.push((source, external_id));
                                 }
                             }
-                            let canonical = serde_json::to_string(&normalized)
-                                .map_err(|error| error.to_string())?;
-                            record_imported_entity_value(
-                                &mut imported_entity_values,
-                                entity_id,
-                                "external_ids",
-                                &canonical,
-                                &entity_name,
-                            )?;
-                            entities[entity_position].external_ids = normalized;
+                            let imported_by_source =
+                                imported_external_ids.entry(entity_id).or_default();
+                            for (source, external_id) in normalized {
+                                if let Some(previous) = imported_by_source.get(&source)
+                                    && previous != &external_id
+                                {
+                                    return Err(format!(
+                                        "CSV has conflicting external identities for {entity_name} · {source}: {previous} / {external_id}"
+                                    ));
+                                }
+                                imported_by_source.entry(source).or_insert(external_id);
+                            }
+                            let mut merged: Vec<(String, String)> = entities[entity_position]
+                                .external_ids
+                                .iter()
+                                .filter(|(source, _)| !imported_by_source.contains_key(source))
+                                .cloned()
+                                .collect();
+                            merged.extend(imported_by_source.iter().map(
+                                |(source, external_id)| (source.clone(), external_id.clone()),
+                            ));
+                            merged.sort();
+                            entities[entity_position].external_ids = merged;
                         }
                     }
                     let color_column = if is_source {
