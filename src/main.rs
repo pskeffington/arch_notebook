@@ -5503,6 +5503,17 @@ fn automation_outcome_json(
         "series": job.series,
         "message": message,
         "query_valid": snapshot.is_some(),
+        "capture_limits_pass": snapshot.map(|_| {
+            automation_limits_pass(
+                connection_count.unwrap_or_default(),
+                regression_count,
+                skipped_rows.unwrap_or_default(),
+                job.minimum_connections,
+                job.maximum_connections,
+                job.maximum_regressions,
+                job.maximum_skipped_rows,
+            )
+        }),
         "snapshot_id": snapshot.map(|snapshot| snapshot.id),
         "captured_at": snapshot.map(|snapshot| snapshot.captured_at.as_str()),
         "source_key": snapshot.map(|snapshot| snapshot.source_key.as_str()),
@@ -9823,7 +9834,12 @@ fn validate_enabled_automation_jobs_cli(
         }
         if json_output {
             outcomes.push(automation_outcome_json(
-                &job, success, &message, None, snapshot, previous,
+                &job,
+                limits_pass,
+                &message,
+                None,
+                snapshot,
+                previous,
             ));
         } else {
             println!(

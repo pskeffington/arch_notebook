@@ -126,7 +126,7 @@ cargo run --offline -- --inspect-sqlite source.sqlite --json
 
 The JSON response uses schema version 1 and includes `ok`, `object_count`, table/view definitions, declared foreign-key mappings, and `query_templates` for every table/view with recognizable source and target columns. The existing singular `query_template` field remains as the first candidate for compatibility. It reports structure only; it does not read table rows or modify the source. The text output reports when the database contains no user tables or views, lists declared foreign keys, and prints the first suggested query when one can be generated.
 
-To check enabled SQL queries and their SQLite sources without requiring current data to meet capture thresholds, use query-only preflight. It executes queries read-only and leaves the case unchanged; failing connection or regression limits are reported but do not fail the query check:
+To check enabled SQL queries and their SQLite sources without requiring current data to meet capture thresholds, use query-only preflight. It executes queries read-only and leaves the case unchanged; failing connection or regression limits are reported but do not fail the query check. JSON output sets top-level `mode` to `query` and reports `query_valid` separately from each outcome’s normal run `status` and `capture_limits_pass`:
 
 ```sh
 cargo run --offline -- --check-enabled-job-queries harbor-light.case.json
