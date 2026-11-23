@@ -7637,6 +7637,7 @@ impl eframe::App for App {
                         ui.add_space(20.0);ui.label(egui::RichText::new("SELECTED ITEM").size(9.0).strong().color(cyan));ui.add_space(5.0);
                         let mut focus_linked_entity = None;
                         let mut focus_linked_record = None;
+                        let mut review_link_source = None;
                         if let Some(id) = self.selected {
                             let linked_entities = linked_entities_for(&self.case, id);
                             if let Some(entity) = self.case.entities.iter().find(|entity| entity.id == id) {
@@ -7808,6 +7809,7 @@ impl eframe::App for App {
                             });
                         } else if let Some(index) = self.selected_link {
                             if let Some(link) = self.case.links.get_mut(index) {
+                                let ingest_source = link.ingest_source.clone();
                                 ui.label(
                                     egui::RichText::new("RELATIONSHIP")
                                         .size(9.0)
@@ -7850,6 +7852,27 @@ impl eframe::App for App {
                                         .text("Confidence"),
                                 );
                                 ui.checkbox(&mut link.directed, "Directed relationship");
+                                if let Some(source_key) = ingest_source.as_deref() {
+                                    if let Some(snapshot) = self
+                                        .case
+                                        .snapshots
+                                        .iter()
+                                        .rev()
+                                        .find(|snapshot| snapshot.source_key == source_key)
+                                    {
+                                        ui.label(
+                                            egui::RichText::new(format!(
+                                                "SQL SOURCE · {} · {}",
+                                                snapshot.series, snapshot.database_path
+                                            ))
+                                            .small()
+                                            .color(cyan),
+                                        );
+                                    }
+                                    if ui.small_button("Review SQL series").clicked() {
+                                        review_link_source = Some(source_key.to_owned());
+                                    }
+                                }
                                 ui.label("Source reference");
                                 ui.add(
                                     egui::TextEdit::singleline(&mut link.source_reference)
@@ -7898,6 +7921,19 @@ impl eframe::App for App {
                             self.chart_fit_path = None;
                             self.path_result.clear();
                             self.sql_source_focus = None;
+                            self.show_timeline = false;
+                        }
+                        if let Some(source_key) = review_link_source {
+                            self.sql_snapshot_index = self
+                                .case
+                                .snapshots
+                                .iter()
+                                .rposition(|snapshot| snapshot.source_key == source_key);
+                            self.sql_snapshot_source = Some(source_key);
+                            self.sql_delta_filter = SnapshotDeltaFilter::All;
+                            self.sql_delta_search.clear();
+                            self.data_mode = DataMode::SqlRegressions;
+                            self.page = WorkspacePage::Data;
                             self.show_timeline = false;
                         }
                         ui.add_space(20.0);ui.label(egui::RichText::new("LEGEND").size(9.0).strong().color(cyan));ui.label(egui::RichText::new("Solid link  ·  corroborated").small().color(muted));ui.label(egui::RichText::new("Dashed link  ·  unverified").small().color(muted));
