@@ -425,6 +425,8 @@ struct AutomationJob {
     #[serde(default)]
     maximum_regressions: Option<usize>,
     #[serde(default)]
+    maximum_added_connections: Option<usize>,
+    #[serde(default)]
     maximum_skipped_rows: Option<usize>,
 }
 
@@ -449,6 +451,8 @@ struct AutomationJobPackageDefinition {
     maximum_connections: Option<usize>,
     #[serde(default)]
     maximum_regressions: Option<usize>,
+    #[serde(default)]
+    maximum_added_connections: Option<usize>,
     #[serde(default)]
     maximum_skipped_rows: Option<usize>,
 }
@@ -489,6 +493,8 @@ struct AutomationRun {
     maximum_connections: Option<usize>,
     #[serde(default)]
     maximum_regressions: Option<usize>,
+    #[serde(default)]
+    maximum_added_connections: Option<usize>,
     #[serde(default)]
     maximum_skipped_rows: Option<usize>,
     #[serde(default)]
@@ -540,6 +546,7 @@ struct SqlValidationPreview {
     skipped_rows: usize,
     has_baseline: bool,
     regression_count: usize,
+    added_connection_count: usize,
     change_count: usize,
     changes: Vec<ConnectionDelta>,
     regression_changes: Vec<ConnectionDelta>,
@@ -547,6 +554,7 @@ struct SqlValidationPreview {
     minimum_connections: usize,
     maximum_connections: Option<usize>,
     maximum_regressions: Option<usize>,
+    maximum_added_connections: Option<usize>,
     maximum_skipped_rows: Option<usize>,
     connections: Vec<ConnectionFact>,
 }
@@ -669,6 +677,7 @@ struct App {
     automation_minimum_connections: usize,
     automation_maximum_connections: Option<usize>,
     automation_maximum_regressions: Option<usize>,
+    automation_maximum_added_connections: Option<usize>,
     automation_maximum_skipped_rows: Option<usize>,
     editing_automation_job: Option<Uuid>,
     automation_editor_before_edit: Option<(
@@ -678,6 +687,7 @@ struct App {
         String,
         String,
         usize,
+        Option<usize>,
         Option<usize>,
         Option<usize>,
         Option<usize>,
@@ -726,6 +736,7 @@ struct SqlUiRequest {
     minimum_connections: usize,
     maximum_connections: Option<usize>,
     maximum_regressions: Option<usize>,
+    maximum_added_connections: Option<usize>,
     maximum_skipped_rows: Option<usize>,
     data_mode: DataMode,
     editing_job: Option<Uuid>,
@@ -1073,6 +1084,7 @@ impl Default for App {
             automation_minimum_connections: 0,
             automation_maximum_connections: None,
             automation_maximum_regressions: None,
+            automation_maximum_added_connections: None,
             automation_maximum_skipped_rows: None,
             editing_automation_job: None,
             automation_editor_before_edit: None,
@@ -1367,6 +1379,7 @@ impl App {
             automation_minimum_connections: 0,
             automation_maximum_connections: None,
             automation_maximum_regressions: None,
+            automation_maximum_added_connections: None,
             automation_maximum_skipped_rows: None,
             editing_automation_job: None,
             automation_editor_before_edit: None,
@@ -3161,6 +3174,7 @@ impl App {
                 job.minimum_connections = self.automation_minimum_connections;
                 job.maximum_connections = self.automation_maximum_connections;
                 job.maximum_regressions = self.automation_maximum_regressions;
+                job.maximum_added_connections = self.automation_maximum_added_connections;
                 job.maximum_skipped_rows = self.automation_maximum_skipped_rows;
                 self.editing_automation_job = None;
                 self.automation_editor_before_edit = None;
@@ -3178,6 +3192,7 @@ impl App {
                 minimum_connections: self.automation_minimum_connections,
                 maximum_connections: self.automation_maximum_connections,
                 maximum_regressions: self.automation_maximum_regressions,
+                maximum_added_connections: self.automation_maximum_added_connections,
                 maximum_skipped_rows: self.automation_maximum_skipped_rows,
             });
             self.editing_automation_job = None;
@@ -3199,6 +3214,7 @@ impl App {
             minimum_connections: self.automation_minimum_connections,
             maximum_connections: self.automation_maximum_connections,
             maximum_regressions: self.automation_maximum_regressions,
+            maximum_added_connections: self.automation_maximum_added_connections,
             maximum_skipped_rows: self.automation_maximum_skipped_rows,
         });
         self.editing_automation_job = None;
@@ -3242,6 +3258,8 @@ impl App {
                     && preview.minimum_connections == self.automation_minimum_connections
                     && preview.maximum_connections == self.automation_maximum_connections
                     && preview.maximum_regressions == self.automation_maximum_regressions
+                    && preview.maximum_added_connections
+                        == self.automation_maximum_added_connections
                     && preview.maximum_skipped_rows == self.automation_maximum_skipped_rows
                     && parse_sql_parameters(&self.sql_parameter_text)
                         .is_ok_and(|parameters| parameters == preview.parameters)
@@ -3368,6 +3386,10 @@ impl App {
                     .any(|kind| matches!(kind, DeltaKind::Removed | DeltaKind::ConfidenceDeclined))
             })
             .count();
+        let added_connection_count = deltas
+            .iter()
+            .filter(|delta| delta.kinds.contains(&DeltaKind::Added))
+            .count();
         let regression_changes = deltas
             .iter()
             .filter(|delta| {
@@ -3393,6 +3415,7 @@ impl App {
                 skipped_rows: snapshot.skipped_rows,
                 has_baseline,
                 regression_count,
+                added_connection_count,
                 change_count,
                 changes,
                 regression_changes,
@@ -3400,6 +3423,7 @@ impl App {
                 minimum_connections: self.automation_minimum_connections,
                 maximum_connections: self.automation_maximum_connections,
                 maximum_regressions: self.automation_maximum_regressions,
+                maximum_added_connections: self.automation_maximum_added_connections,
                 maximum_skipped_rows: self.automation_maximum_skipped_rows,
                 connections: snapshot.connections.iter().take(8).cloned().collect(),
             });
@@ -3451,13 +3475,24 @@ impl App {
                 }
                 None => String::new(),
             };
+            let addition_threshold = match self.automation_maximum_added_connections {
+                Some(maximum) if added_connection_count > maximum => format!(
+                    " · ADDITION LIMIT EXCEEDED ({added_connection_count}; MAXIMUM {maximum})"
+                ),
+                Some(maximum) => {
+                    format!(" · ADDITION LIMIT MET ({added_connection_count}; MAXIMUM {maximum})")
+                }
+                None => String::new(),
+            };
             let limits_pass = automation_limits_pass(
                 count,
                 regression_count,
+                added_connection_count,
                 skipped_rows,
                 self.automation_minimum_connections,
                 self.automation_maximum_connections,
                 self.automation_maximum_regressions,
+                self.automation_maximum_added_connections,
                 self.automation_maximum_skipped_rows,
             );
             let validation_result = if limits_pass {
@@ -3466,7 +3501,7 @@ impl App {
                 "SQL QUERY LIMITS FAILED"
             };
             format!(
-                "{validation_result} · {count} CONNECTIONS{maximum_connection_threshold}{skipped}{skipped_row_threshold}{threshold}{regression_threshold} · CASE UNCHANGED"
+                "{validation_result} · {count} CONNECTIONS{maximum_connection_threshold}{skipped}{skipped_row_threshold}{threshold}{regression_threshold}{addition_threshold} · CASE UNCHANGED"
             )
         } else {
             self.status
@@ -3503,6 +3538,7 @@ impl App {
         minimum_connections: usize,
         maximum_connections: Option<usize>,
         maximum_regressions: Option<usize>,
+        maximum_added_connections: Option<usize>,
         maximum_skipped_rows: Option<usize>,
         regressions_only: &mut bool,
     ) {
@@ -3513,6 +3549,7 @@ impl App {
                 && preview.minimum_connections == minimum_connections
                 && preview.maximum_connections == maximum_connections
                 && preview.maximum_regressions == maximum_regressions
+                && preview.maximum_added_connections == maximum_added_connections
                 && preview.maximum_skipped_rows == maximum_skipped_rows
                 && parse_sql_parameters(parameter_text)
                     .is_ok_and(|parameters| parameters == preview.parameters)
@@ -3540,8 +3577,8 @@ impl App {
             ));
             ui.label(if preview.has_baseline {
                 format!(
-                    "{} regressions vs previous capture",
-                    preview.regression_count
+                    "{} regressions · {} additions vs previous capture",
+                    preview.regression_count, preview.added_connection_count
                 )
             } else {
                 "Baseline capture · no prior comparison".into()
@@ -3751,6 +3788,7 @@ impl App {
                 self.automation_minimum_connections,
                 self.automation_maximum_connections,
                 self.automation_maximum_regressions,
+                self.automation_maximum_added_connections,
                 self.automation_maximum_skipped_rows,
             ));
             self.automation_job_name = job.name;
@@ -3761,6 +3799,7 @@ impl App {
             self.automation_minimum_connections = job.minimum_connections;
             self.automation_maximum_connections = job.maximum_connections;
             self.automation_maximum_regressions = job.maximum_regressions;
+            self.automation_maximum_added_connections = job.maximum_added_connections;
             self.automation_maximum_skipped_rows = job.maximum_skipped_rows;
             self.editing_automation_job = Some(id);
             self.status = "EDITING AUTOMATION JOB".into();
@@ -3815,6 +3854,7 @@ impl App {
             self.automation_minimum_connections,
             self.automation_maximum_connections,
             self.automation_maximum_regressions,
+            self.automation_maximum_added_connections,
             self.automation_maximum_skipped_rows,
         ));
         self.automation_job_name = job.name.clone();
@@ -3825,6 +3865,7 @@ impl App {
         self.automation_minimum_connections = job.minimum_connections;
         self.automation_maximum_connections = job.maximum_connections;
         self.automation_maximum_regressions = job.maximum_regressions;
+        self.automation_maximum_added_connections = job.maximum_added_connections;
         self.automation_maximum_skipped_rows = job.maximum_skipped_rows;
         self.editing_automation_job = Some(job.id);
         self.data_mode = DataMode::Automation;
@@ -3848,6 +3889,7 @@ impl App {
             minimum,
             maximum_connections,
             maximum_regressions,
+            maximum_added_connections,
             maximum_skipped_rows,
         )) = self.automation_editor_before_edit.take()
         {
@@ -3859,6 +3901,7 @@ impl App {
             self.automation_minimum_connections = minimum;
             self.automation_maximum_connections = maximum_connections;
             self.automation_maximum_regressions = maximum_regressions;
+            self.automation_maximum_added_connections = maximum_added_connections;
             self.automation_maximum_skipped_rows = maximum_skipped_rows;
         }
         self.status = "JOB EDIT CANCELED".into();
@@ -3921,6 +3964,7 @@ impl App {
             minimum_connections: self.automation_minimum_connections,
             maximum_connections: self.automation_maximum_connections,
             maximum_regressions: self.automation_maximum_regressions,
+            maximum_added_connections: self.automation_maximum_added_connections,
             maximum_skipped_rows: self.automation_maximum_skipped_rows,
             data_mode: self.data_mode,
             editing_job: self.editing_automation_job,
@@ -3964,6 +4008,7 @@ impl App {
                 worker.automation_minimum_connections = request.minimum_connections;
                 worker.automation_maximum_connections = request.maximum_connections;
                 worker.automation_maximum_regressions = request.maximum_regressions;
+                worker.automation_maximum_added_connections = request.maximum_added_connections;
                 worker.automation_maximum_skipped_rows = request.maximum_skipped_rows;
                 worker.data_mode = request.data_mode;
                 worker.editing_automation_job = request.editing_job;
@@ -4279,6 +4324,7 @@ impl App {
         request.minimum_connections = job.minimum_connections;
         request.maximum_connections = job.maximum_connections;
         request.maximum_regressions = job.maximum_regressions;
+        request.maximum_added_connections = job.maximum_added_connections;
         request.maximum_skipped_rows = job.maximum_skipped_rows;
         request.data_mode = DataMode::Automation;
         request.editing_job = Some(id);
@@ -4360,6 +4406,7 @@ impl App {
                 .map(|snapshot| snapshot.skipped_rows)
                 .unwrap_or_default();
             let regression_count = automation_regression_count(&self.case, &source_key);
+            let added_connection_count = automation_added_connection_count(&self.case, &source_key);
             if count < job.minimum_connections {
                 self.status = format!(
                     "{} · BELOW MINIMUM ({} CONNECTIONS; {} REQUIRED)",
@@ -4382,6 +4429,14 @@ impl App {
                     self.status
                 );
             }
+            if let Some(maximum) = job.maximum_added_connections {
+                let limit_status = if added_connection_count > maximum {
+                    format!("ADDITION LIMIT EXCEEDED ({added_connection_count}; MAXIMUM {maximum})")
+                } else {
+                    format!("ADDITION LIMIT MET ({added_connection_count}; MAXIMUM {maximum})")
+                };
+                self.status = format!("{} · {limit_status}", self.status);
+            }
             if let Some(maximum) = job.maximum_skipped_rows
                 && skipped_rows > maximum
             {
@@ -4403,10 +4458,12 @@ impl App {
             success = automation_limits_pass(
                 count,
                 regression_count,
+                added_connection_count,
                 skipped_rows,
                 job.minimum_connections,
                 job.maximum_connections,
                 job.maximum_regressions,
+                job.maximum_added_connections,
                 job.maximum_skipped_rows,
             );
         }
@@ -4447,6 +4504,7 @@ impl App {
             minimum_connections: job.minimum_connections,
             maximum_connections: job.maximum_connections,
             maximum_regressions: job.maximum_regressions,
+            maximum_added_connections: job.maximum_added_connections,
             maximum_skipped_rows: job.maximum_skipped_rows,
             enabled: job.enabled,
             configuration_recorded: true,
@@ -6967,18 +7025,39 @@ fn automation_regression_count(case: &CaseFile, source_key: &str) -> usize {
         .count()
 }
 
+fn automation_added_connection_count(case: &CaseFile, source_key: &str) -> usize {
+    let mut snapshots = case
+        .snapshots
+        .iter()
+        .rev()
+        .filter(|snapshot| snapshot.source_key == source_key);
+    let Some(current) = snapshots.next() else {
+        return 0;
+    };
+    let Some(previous) = snapshots.next() else {
+        return 0;
+    };
+    compare_snapshots(previous, current)
+        .iter()
+        .filter(|delta| delta.kinds.contains(&DeltaKind::Added))
+        .count()
+}
+
 fn automation_limits_pass(
     connections: usize,
     regressions: usize,
+    added_connections: usize,
     skipped_rows: usize,
     minimum_connections: usize,
     maximum_connections: Option<usize>,
     maximum_regressions: Option<usize>,
+    maximum_added_connections: Option<usize>,
     maximum_skipped_rows: Option<usize>,
 ) -> bool {
     connections >= minimum_connections
         && maximum_connections.is_none_or(|maximum| connections <= maximum)
         && maximum_regressions.is_none_or(|maximum| regressions <= maximum)
+        && maximum_added_connections.is_none_or(|maximum| added_connections <= maximum)
         && maximum_skipped_rows.is_none_or(|maximum| skipped_rows <= maximum)
 }
 
@@ -7132,6 +7211,14 @@ fn automation_outcome_json(
             .unwrap_or_default() as usize;
     let connection_count = snapshot.map(|snapshot| snapshot.connections.len());
     let skipped_rows = snapshot.map(|snapshot| snapshot.skipped_rows);
+    let added_connection_count = delta
+        .as_ref()
+        .and_then(|delta| {
+            delta
+                .pointer("/counts/added")
+                .and_then(serde_json::Value::as_u64)
+        })
+        .unwrap_or_default() as usize;
     let result_quality = snapshot.map(snapshot_result_quality);
     serde_json::json!({
         "schema_version": 1,
@@ -7151,10 +7238,12 @@ fn automation_outcome_json(
             automation_limits_pass(
                 connection_count.unwrap_or_default(),
                 regression_count,
+                added_connection_count,
                 skipped_rows.unwrap_or_default(),
                 job.minimum_connections,
                 job.maximum_connections,
                 job.maximum_regressions,
+                job.maximum_added_connections,
                 job.maximum_skipped_rows,
             )
         }),
@@ -7166,6 +7255,8 @@ fn automation_outcome_json(
         "minimum_connections": job.minimum_connections,
         "maximum_connections": job.maximum_connections,
         "maximum_regressions": job.maximum_regressions,
+        "added_connection_count": snapshot.map(|_| added_connection_count),
+        "maximum_added_connections": job.maximum_added_connections,
         "maximum_skipped_rows": job.maximum_skipped_rows,
         "query": job.query,
         "parameters": job.parameters,
@@ -7184,6 +7275,11 @@ fn automation_outcome_json(
                 "limit": job.maximum_regressions,
                 "observed": snapshot.map(|_| regression_count),
                 "passed": snapshot.map(|_| job.maximum_regressions.is_none_or(|limit| regression_count <= limit))
+            },
+            "maximum_added_connections": {
+                "limit": job.maximum_added_connections,
+                "observed": snapshot.map(|_| added_connection_count),
+                "passed": snapshot.map(|_| job.maximum_added_connections.is_none_or(|limit| added_connection_count <= limit))
             },
             "maximum_skipped_rows": {
                 "limit": job.maximum_skipped_rows,
@@ -7959,7 +8055,32 @@ impl eframe::App for App {
                                         ui.add(egui::DragValue::new(maximum).range(0..=1_000_000));
                                     }
                                 });
-                                ui.horizontal(|ui|{let mut limit_regressions=self.automation_maximum_regressions.is_some();if ui.checkbox(&mut limit_regressions,"Limit regressions").changed(){self.automation_maximum_regressions=limit_regressions.then_some(0);}if let Some(maximum)=self.automation_maximum_regressions.as_mut(){ui.label("Maximum removals/confidence declines");ui.add(egui::DragValue::new(maximum).range(0..=1_000_000));}if ui.button("Build query from schema").clicked(){self.build_sql_query_from_schema();}if ui.button("Validate query").clicked(){self.start_sql_validation();}if ui.button(if recovered_job_draft{"Save recovered job"}else if editing_saved_job{"Save job changes"}else{"Add job"}).clicked(){self.save_automation_job();}if self.editing_automation_job.is_some()&&ui.button(if recovered_job_draft{"Discard recovered draft"}else{"Cancel edit"}).clicked(){self.cancel_automation_job_edit();}});
+                                ui.horizontal(|ui| {
+                                    let mut limit_regressions = self.automation_maximum_regressions.is_some();
+                                    if ui.checkbox(&mut limit_regressions, "Limit regressions").changed() {
+                                        self.automation_maximum_regressions = limit_regressions.then_some(0);
+                                    }
+                                    if let Some(maximum) = self.automation_maximum_regressions.as_mut() {
+                                        ui.label("Maximum removals/confidence declines");
+                                        ui.add(egui::DragValue::new(maximum).range(0..=1_000_000));
+                                    }
+                                });
+                                ui.horizontal(|ui| {
+                                    let mut limit_additions = self.automation_maximum_added_connections.is_some();
+                                    if ui.checkbox(&mut limit_additions, "Limit additions").changed() {
+                                        self.automation_maximum_added_connections = limit_additions.then_some(0);
+                                    }
+                                    if let Some(maximum) = self.automation_maximum_added_connections.as_mut() {
+                                        ui.label("Maximum newly added connections");
+                                        ui.add(egui::DragValue::new(maximum).range(0..=1_000_000));
+                                    }
+                                });
+                                ui.horizontal(|ui| {
+                                    if ui.button("Build query from schema").clicked() { self.build_sql_query_from_schema(); }
+                                    if ui.button("Validate query").clicked() { self.start_sql_validation(); }
+                                    if ui.button(if recovered_job_draft { "Save recovered job" } else if editing_saved_job { "Save job changes" } else { "Add job" }).clicked() { self.save_automation_job(); }
+                                    if self.editing_automation_job.is_some() && ui.button(if recovered_job_draft { "Discard recovered draft" } else { "Cancel edit" }).clicked() { self.cancel_automation_job_edit(); }
+                                });
                                 if self.sql_schema_templates.len() > 1 {
                                     ui.horizontal(|ui| {
                                         ui.label("Query source table or view");
@@ -7980,6 +8101,7 @@ impl eframe::App for App {
                                     self.automation_minimum_connections,
                                     self.automation_maximum_connections,
                                     self.automation_maximum_regressions,
+                                    self.automation_maximum_added_connections,
                                     self.automation_maximum_skipped_rows,
                                     &mut self.sql_validation_preview_regressions_only,
                                 );
@@ -8243,7 +8365,7 @@ impl eframe::App for App {
                                                     .strong(),
                                             );
                                         }
-                                        ui.label(format!("{} · {} · {} · min {} · max connections {} · max regressions {} · max skipped rows {}",job.name,job.series,job.database_path,job.minimum_connections,job.maximum_connections.map(|value|value.to_string()).unwrap_or_else(||"unlimited".into()),job.maximum_regressions.map(|value|value.to_string()).unwrap_or_else(||"unlimited".into()),job.maximum_skipped_rows.map(|value|value.to_string()).unwrap_or_else(||"unlimited".into())));
+                                                ui.label(format!("{} · {} · {} · min {} · max connections {} · max regressions {} · max additions {} · max skipped rows {}",job.name,job.series,job.database_path,job.minimum_connections,job.maximum_connections.map(|value|value.to_string()).unwrap_or_else(||"unlimited".into()),job.maximum_regressions.map(|value|value.to_string()).unwrap_or_else(||"unlimited".into()),job.maximum_added_connections.map(|value|value.to_string()).unwrap_or_else(||"unlimited".into()),job.maximum_skipped_rows.map(|value|value.to_string()).unwrap_or_else(||"unlimited".into())));
                                         if ui.small_button("Validate").clicked(){action=Some(("validate".into(),job.id));}
                                         if ui.small_button("Edit").clicked(){action=Some(("edit".into(),job.id));}
                                         if ui.add_enabled(automation_case_saved,egui::Button::new("Run and save")).on_disabled_hover_text("Save the case and job changes before running automation.").clicked(){action=Some(("run".into(),job.id));}
@@ -8308,6 +8430,7 @@ impl eframe::App for App {
                                                 job.minimum_connections,
                                                 job.maximum_connections,
                                                 job.maximum_regressions,
+                                                job.maximum_added_connections,
                                                 job.maximum_skipped_rows,
                                                 &mut self.sql_validation_preview_regressions_only,
                                             );
@@ -8477,10 +8600,11 @@ impl eframe::App for App {
                                             }
                                             if run.configuration_recorded {
                                                 ui.label(format!(
-                                                    "Minimum {} connections · maximum connections {} · maximum regressions {} · maximum skipped rows {} · job {}",
+                                                    "Minimum {} connections · maximum connections {} · maximum regressions {} · maximum additions {} · maximum skipped rows {} · job {}",
                                                     run.minimum_connections,
                                                     run.maximum_connections.map(|value|value.to_string()).unwrap_or_else(||"unlimited".into()),
                                                     run.maximum_regressions.map(|value|value.to_string()).unwrap_or_else(||"unlimited".into()),
+                                                    run.maximum_added_connections.map(|value|value.to_string()).unwrap_or_else(||"unlimited".into()),
                                                     run.maximum_skipped_rows.map(|value|value.to_string()).unwrap_or_else(||"unlimited".into()),
                                                     if run.enabled { "enabled" } else { "disabled" }
                                                 ));
@@ -8747,6 +8871,16 @@ impl eframe::App for App {
                                                 ui.add(egui::DragValue::new(maximum).range(0..=1_000_000));
                                             }
                                         });
+                                        ui.horizontal(|ui| {
+                                            let mut limit_additions = self.automation_maximum_added_connections.is_some();
+                                            if ui.checkbox(&mut limit_additions, "Limit additions").changed() {
+                                                self.automation_maximum_added_connections = limit_additions.then_some(0);
+                                            }
+                                            if let Some(maximum) = self.automation_maximum_added_connections.as_mut() {
+                                                ui.label("Maximum newly added connections");
+                                                ui.add(egui::DragValue::new(maximum).range(0..=1_000_000));
+                                            }
+                                        });
                                     });
                                 ui.horizontal(|ui|{if ui.button("Build query from schema").clicked(){self.build_sql_query_from_schema();}if ui.button("Validate query").clicked(){self.start_sql_validation();}if ui.button("Ingest SQL snapshot").clicked(){self.start_sql_ingestion();}});
                                 ui.horizontal(|ui| {
@@ -8782,6 +8916,7 @@ impl eframe::App for App {
                                     self.automation_minimum_connections,
                                     self.automation_maximum_connections,
                                     self.automation_maximum_regressions,
+                                    self.automation_maximum_added_connections,
                                     self.automation_maximum_skipped_rows,
                                     &mut self.sql_validation_preview_regressions_only,
                                 );
@@ -12247,6 +12382,7 @@ fn run_automation_cli(
                 && run.minimum_connections == job.minimum_connections
                 && run.maximum_connections == job.maximum_connections
                 && run.maximum_regressions == job.maximum_regressions
+                && run.maximum_added_connections == job.maximum_added_connections
                 && run.maximum_skipped_rows == job.maximum_skipped_rows
         });
         if let Some(run) =
@@ -12264,6 +12400,7 @@ fn run_automation_cli(
                 "minimum_connections": job.minimum_connections,
                 "maximum_connections": job.maximum_connections,
                 "maximum_regressions": job.maximum_regressions,
+                "maximum_added_connections": job.maximum_added_connections,
                 "maximum_skipped_rows": job.maximum_skipped_rows,
                 "run_id": run.id,
                 "finished_at": run.finished_at,
@@ -12409,6 +12546,7 @@ fn automation_job_from_run(prior_run: &AutomationRun) -> Result<AutomationJob, S
         minimum_connections: prior_run.minimum_connections,
         maximum_connections: prior_run.maximum_connections,
         maximum_regressions: prior_run.maximum_regressions,
+        maximum_added_connections: prior_run.maximum_added_connections,
         maximum_skipped_rows: prior_run.maximum_skipped_rows,
     })
 }
@@ -12436,6 +12574,7 @@ fn validate_saved_automation_configuration_cli(
     app.sql_parameter_text = format_sql_parameters(&job.parameters);
     app.automation_minimum_connections = job.minimum_connections;
     app.automation_maximum_regressions = job.maximum_regressions;
+    app.automation_maximum_added_connections = job.maximum_added_connections;
     app.automation_maximum_skipped_rows = job.maximum_skipped_rows;
     let started = Instant::now();
     let snapshot_count_before = app.case.snapshots.len();
@@ -13480,6 +13619,7 @@ fn validate_automation_job_cli(
     app.automation_minimum_connections = job.minimum_connections;
     app.automation_maximum_connections = job.maximum_connections;
     app.automation_maximum_regressions = job.maximum_regressions;
+    app.automation_maximum_added_connections = job.maximum_added_connections;
     app.automation_maximum_skipped_rows = job.maximum_skipped_rows;
     let snapshot_index = app.case.snapshots.len();
     let limits_pass = app.validate_sql_query_for_batch();
@@ -13618,6 +13758,7 @@ fn validate_enabled_automation_jobs_cli(
         app.automation_minimum_connections = job.minimum_connections;
         app.automation_maximum_connections = job.maximum_connections;
         app.automation_maximum_regressions = job.maximum_regressions;
+        app.automation_maximum_added_connections = job.maximum_added_connections;
         app.automation_maximum_skipped_rows = job.maximum_skipped_rows;
         let snapshot_count_before = app.case.snapshots.len();
         let limits_pass = app.validate_sql_query_for_batch();
@@ -13736,6 +13877,7 @@ fn list_automation_jobs_cli(
                 "minimum_connections": job.minimum_connections,
                 "maximum_connections": job.maximum_connections,
                 "maximum_regressions": job.maximum_regressions,
+                "maximum_added_connections": job.maximum_added_connections,
                 "maximum_skipped_rows": job.maximum_skipped_rows,
                 "latest_run": latest_run,
             })
@@ -13777,6 +13919,7 @@ fn automation_job_package(job: &AutomationJob) -> AutomationJobPackage {
             minimum_connections: job.minimum_connections,
             maximum_connections: job.maximum_connections,
             maximum_regressions: job.maximum_regressions,
+            maximum_added_connections: job.maximum_added_connections,
             maximum_skipped_rows: job.maximum_skipped_rows,
         },
     }
@@ -13863,6 +14006,7 @@ fn job_from_automation_package(
         minimum_connections: definition.minimum_connections,
         maximum_connections: definition.maximum_connections,
         maximum_regressions: definition.maximum_regressions,
+        maximum_added_connections: definition.maximum_added_connections,
         maximum_skipped_rows: definition.maximum_skipped_rows,
     })
 }
@@ -14359,6 +14503,7 @@ fn list_automation_runs_cli(
                 minimum_connections: run.minimum_connections,
                 maximum_connections: run.maximum_connections,
                 maximum_regressions: run.maximum_regressions,
+                maximum_added_connections: run.maximum_added_connections,
                 maximum_skipped_rows: run.maximum_skipped_rows,
             };
             let mut outcome = automation_outcome_json(
