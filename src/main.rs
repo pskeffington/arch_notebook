@@ -462,7 +462,8 @@ struct SqlValidationPreview {
     skipped_rows: usize,
     has_baseline: bool,
     regression_count: usize,
-    regressions: Vec<ConnectionDelta>,
+    change_count: usize,
+    changes: Vec<ConnectionDelta>,
     result_quality: String,
     minimum_connections: usize,
     maximum_connections: Option<usize>,
@@ -3082,22 +3083,22 @@ impl App {
             .and_then(|_| previous_snapshot_index(&self.case, snapshot_count_before))
             .and_then(|index| self.case.snapshots.get(index));
         let has_baseline = baseline_snapshot.is_some();
-        let regression_deltas = candidate_snapshot
+        let deltas = candidate_snapshot
             .as_ref()
             .zip(baseline_snapshot)
-            .map(|(current, baseline)| {
-                compare_snapshots(baseline, current)
-                    .into_iter()
-                    .filter(|delta| {
-                        delta.kinds.iter().any(|kind| {
-                            matches!(kind, DeltaKind::Removed | DeltaKind::ConfidenceDeclined)
-                        })
-                    })
-                    .collect::<Vec<_>>()
-            })
+            .map(|(current, baseline)| compare_snapshots(baseline, current))
             .unwrap_or_default();
-        let regression_count = regression_deltas.len();
-        let regressions = regression_deltas.into_iter().take(8).collect();
+        let regression_count = deltas
+            .iter()
+            .filter(|delta| {
+                delta
+                    .kinds
+                    .iter()
+                    .any(|kind| matches!(kind, DeltaKind::Removed | DeltaKind::ConfidenceDeclined))
+            })
+            .count();
+        let change_count = deltas.len();
+        let changes = deltas.into_iter().take(8).collect();
         let validation_preview = candidate_snapshot
             .as_ref()
             .map(|snapshot| SqlValidationPreview {
@@ -3110,7 +3111,8 @@ impl App {
                 skipped_rows: snapshot.skipped_rows,
                 has_baseline,
                 regression_count,
-                regressions,
+                change_count,
+                changes,
                 result_quality: snapshot_result_quality(snapshot).into(),
                 minimum_connections: self.automation_minimum_connections,
                 maximum_connections: self.automation_maximum_connections,
@@ -3253,30 +3255,41 @@ impl App {
                 "Baseline capture · no prior comparison".into()
             });
         });
-        if preview.has_baseline && preview.regression_count > 0 {
+        if preview.has_baseline && preview.change_count > 0 {
             egui::CollapsingHeader::new(format!(
-                "REGRESSION PREVIEW · {} OF {} CONNECTIONS",
-                preview.regressions.len(),
-                preview.regression_count
+                "CHANGE PREVIEW · {} OF {} CONNECTIONS",
+                preview.changes.len(),
+                preview.change_count
             ))
-            .id_salt("sql_validation_regressions")
+            .id_salt("sql_validation_changes")
             .show(ui, |ui| {
-                egui::Grid::new("sql_validation_regression_rows")
+                egui::Grid::new("sql_validation_change_rows")
                     .striped(true)
                     .show(ui, |ui| {
                         ui.strong("Change");
                         ui.strong("Connection");
                         ui.strong("Connection ID / key");
-                        ui.strong("Confidence before");
-                        ui.strong("Confidence after");
+                        ui.strong("Before");
+                        ui.strong("Current result");
                         ui.end_row();
-                        for delta in &preview.regressions {
-                            let removed = delta.kinds.contains(&DeltaKind::Removed);
-                            ui.label(if removed {
-                                "REMOVED"
-                            } else {
-                                "CONFIDENCE DECLINED"
-                            });
+                        for delta in &preview.changes {
+                            let change = delta
+                                .kinds
+                                .iter()
+                                .map(|kind| match kind {
+                                    DeltaKind::Removed => "REMOVED",
+                                    DeltaKind::ConfidenceDeclined => "CONFIDENCE DOWN",
+                                    DeltaKind::DateChanged => "DATE CHANGED",
+                                    DeltaKind::Updated => "CONNECTION DETAILS",
+                                    DeltaKind::DirectionChanged => "DIRECTION CHANGED",
+                                    DeltaKind::EvidenceChanged => "EVIDENCE CHANGED",
+                                    DeltaKind::SourceNotesChanged => "SOURCE NOTES CHANGED",
+                                    DeltaKind::Added => "ADDED",
+                                    DeltaKind::ConfidenceIncreased => "CONFIDENCE UP",
+                                })
+                                .collect::<Vec<_>>()
+                                .join(" · ");
+                            ui.label(change);
                             let direction = if delta.connection.directed {
                                 "→"
                             } else {
@@ -3303,18 +3316,26 @@ impl App {
                                 "Stable connection key: {}",
                                 delta.connection.key
                             ));
-                            ui.label(
-                                delta
-                                    .previous_confidence
-                                    .map(|value| value.to_string())
-                                    .unwrap_or_else(|| "—".into()),
-                            );
-                            let confidence_after = if removed {
+                            let before = delta
+                                .previous_connection
+                                .as_ref()
+                                .map(|connection| {
+                                    format!(
+                                        "confidence {} · {}",
+                                        connection.confidence, connection.date
+                                    )
+                                })
+                                .unwrap_or_else(|| "—".into());
+                            let current = if delta.kinds.contains(&DeltaKind::Removed) {
                                 "Removed".to_owned()
                             } else {
-                                delta.connection.confidence.to_string()
+                                format!(
+                                    "confidence {} · {}",
+                                    delta.connection.confidence, delta.connection.date
+                                )
                             };
-                            ui.label(confidence_after);
+                            ui.label(before);
+                            ui.label(current);
                             ui.end_row();
                         }
                     });
