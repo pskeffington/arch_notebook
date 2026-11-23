@@ -2990,11 +2990,16 @@ impl App {
         match result {
             Ok(job) => {
                 let name = job.name.clone();
+                let imported_job_id = job.id;
                 self.case.automation_jobs.push(job);
+                self.automation_job_filter = name.clone();
+                self.automation_job_import_path.clear();
                 self.automation_job_import_name.clear();
                 self.automation_job_import_database_path.clear();
                 self.automation_job_import_series.clear();
-                self.status = format!("AUTOMATION JOB IMPORTED · {name} · DISABLED UNTIL REVIEWED");
+                self.status = format!(
+                    "AUTOMATION JOB IMPORTED · {name} · {imported_job_id} · DISABLED UNTIL REVIEWED"
+                );
             }
             Err(error) => self.status = format!("JOB PACKAGE IMPORT FAILED · {error}"),
         }
