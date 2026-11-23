@@ -462,6 +462,7 @@ struct SqlValidationPreview {
     skipped_rows: usize,
     has_baseline: bool,
     regression_count: usize,
+    regressions: Vec<ConnectionDelta>,
     result_quality: String,
     minimum_connections: usize,
     maximum_connections: Option<usize>,
@@ -3081,20 +3082,22 @@ impl App {
             .and_then(|_| previous_snapshot_index(&self.case, snapshot_count_before))
             .and_then(|index| self.case.snapshots.get(index));
         let has_baseline = baseline_snapshot.is_some();
-        let regression_count = candidate_snapshot
+        let regression_deltas = candidate_snapshot
             .as_ref()
             .zip(baseline_snapshot)
             .map(|(current, baseline)| {
                 compare_snapshots(baseline, current)
-                    .iter()
+                    .into_iter()
                     .filter(|delta| {
                         delta.kinds.iter().any(|kind| {
                             matches!(kind, DeltaKind::Removed | DeltaKind::ConfidenceDeclined)
                         })
                     })
-                    .count()
+                    .collect::<Vec<_>>()
             })
             .unwrap_or_default();
+        let regression_count = regression_deltas.len();
+        let regressions = regression_deltas.into_iter().take(8).collect();
         let validation_preview = candidate_snapshot
             .as_ref()
             .map(|snapshot| SqlValidationPreview {
@@ -3107,6 +3110,7 @@ impl App {
                 skipped_rows: snapshot.skipped_rows,
                 has_baseline,
                 regression_count,
+                regressions,
                 result_quality: snapshot_result_quality(snapshot).into(),
                 minimum_connections: self.automation_minimum_connections,
                 maximum_connections: self.automation_maximum_connections,
@@ -3249,6 +3253,73 @@ impl App {
                 "Baseline capture · no prior comparison".into()
             });
         });
+        if preview.has_baseline && preview.regression_count > 0 {
+            egui::CollapsingHeader::new(format!(
+                "REGRESSION PREVIEW · {} OF {} CONNECTIONS",
+                preview.regressions.len(),
+                preview.regression_count
+            ))
+            .id_salt("sql_validation_regressions")
+            .show(ui, |ui| {
+                egui::Grid::new("sql_validation_regression_rows")
+                    .striped(true)
+                    .show(ui, |ui| {
+                        ui.strong("Change");
+                        ui.strong("Connection");
+                        ui.strong("Connection ID / key");
+                        ui.strong("Confidence before");
+                        ui.strong("Confidence after");
+                        ui.end_row();
+                        for delta in &preview.regressions {
+                            let removed = delta.kinds.contains(&DeltaKind::Removed);
+                            ui.label(if removed {
+                                "REMOVED"
+                            } else {
+                                "CONFIDENCE DECLINED"
+                            });
+                            let direction = if delta.connection.directed {
+                                "→"
+                            } else {
+                                "↔"
+                            };
+                            ui.label(format!(
+                                "{} {} {} {} {}",
+                                delta.connection.source_type,
+                                delta.connection.source,
+                                direction,
+                                delta.connection.target_type,
+                                delta.connection.target
+                            ))
+                            .on_hover_text(format!(
+                                "{} · {}",
+                                delta.connection.relationship, delta.connection.date
+                            ));
+                            let identifier = if delta.connection.connection_id.is_empty() {
+                                delta.connection.key.chars().take(16).collect::<String>()
+                            } else {
+                                delta.connection.connection_id.clone()
+                            };
+                            ui.label(identifier).on_hover_text(format!(
+                                "Stable connection key: {}",
+                                delta.connection.key
+                            ));
+                            ui.label(
+                                delta
+                                    .previous_confidence
+                                    .map(|value| value.to_string())
+                                    .unwrap_or_else(|| "—".into()),
+                            );
+                            let confidence_after = if removed {
+                                "Removed".to_owned()
+                            } else {
+                                delta.connection.confidence.to_string()
+                            };
+                            ui.label(confidence_after);
+                            ui.end_row();
+                        }
+                    });
+            });
+        }
         egui::CollapsingHeader::new(format!(
             "SQL ROW PREVIEW · {} OF {} CONNECTIONS",
             preview.connections.len(),
@@ -6917,21 +6988,26 @@ impl eframe::App for App {
                 ui.add_space(1.0);
                 ui.horizontal(|ui| {
                     for (label, active) in [("CHART",self.page==WorkspacePage::Chart && !self.show_timeline),("TIMELINE",self.show_timeline),("DATA",self.page==WorkspacePage::Data)] {
-                        let response=ui.selectable_label(active,label);
+                        let shortcut = match label {
+                            "CHART" => "Ctrl/Command+1",
+                            "TIMELINE" => "Ctrl/Command+2",
+                            _ => "Ctrl/Command+3",
+                        };
+                        let response=ui.selectable_label(active,label).on_hover_text(format!("Open {label} · {shortcut}"));
                         if response.clicked() && label=="TIMELINE" { self.page=WorkspacePage::Chart;self.show_timeline=!self.show_timeline; }
                         if response.clicked() && label=="CHART" { self.page=WorkspacePage::Chart;self.show_timeline=false; }
                         if response.clicked() && label=="DATA" { self.page=WorkspacePage::Data;self.show_timeline=false; }
                     }
                     let automation_active = self.page == WorkspacePage::Data
                         && self.data_mode == DataMode::Automation;
-                    if ui.selectable_label(automation_active, "AUTOMATION").clicked() {
+                    if ui.selectable_label(automation_active, "AUTOMATION").on_hover_text("Open SQL automation · Ctrl/Command+4").clicked() {
                         self.page = WorkspacePage::Data;
                         self.show_timeline = false;
                         self.data_mode = DataMode::Automation;
                     }
                     let sql_review_active = self.page == WorkspacePage::Data
                         && self.data_mode == DataMode::SqlRegressions;
-                    if ui.selectable_label(sql_review_active, "SQL REVIEW").clicked() {
+                    if ui.selectable_label(sql_review_active, "SQL REVIEW").on_hover_text("Review SQL snapshots · Ctrl/Command+5").clicked() {
                         self.page = WorkspacePage::Data;
                         self.show_timeline = false;
                         self.data_mode = DataMode::SqlRegressions;
