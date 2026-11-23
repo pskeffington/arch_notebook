@@ -248,13 +248,31 @@ fn check_automation_schedule_command(case_path: &Path) -> Result<String, String>
     }
 }
 
-fn preflight_automation_schedule_command(case_path: &Path) -> Result<String, String> {
+fn preflight_automation_jobs_command(
+    case_path: &Path,
+    job_ids: &[Uuid],
+    parameter_overrides: &AutomationParameterOverrides,
+) -> Result<String, String> {
     let executable =
         env::current_exe().map_err(|error| format!("cannot locate app executable: {error}"))?;
-    let output = Command::new(executable)
+    let mut command = Command::new(executable);
+    command
         .arg("--check-enabled-job-queries")
         .arg(case_path)
-        .arg("--require-usable")
+        .arg("--require-usable");
+    for job_id in job_ids {
+        command.arg("--job").arg(job_id.to_string());
+    }
+    for (name, value) in &parameter_overrides.global {
+        command.arg("--param").arg(format!("{name}={value}"));
+    }
+    for (selector, name, value) in &parameter_overrides.scoped {
+        command
+            .arg("--job-param")
+            .arg(selector)
+            .arg(format!("{name}={value}"));
+    }
+    let output = command
         .output()
         .map_err(|error| format!("could not start SQL query preflight: {error}"))?;
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_owned();
@@ -1480,7 +1498,7 @@ impl App {
         });
     }
 
-    fn preflight_automation_schedule(&mut self) {
+    fn preflight_automation_jobs(&mut self) {
         if self.automation_worker.is_some() || self.automation_schedule_worker.is_some() {
             return;
         }
@@ -1493,14 +1511,43 @@ impl App {
             self.status = "SAVE THE CASE TO A FILE BEFORE PREFLIGHT".into();
             return;
         }
+        let parameter_overrides =
+            match parse_automation_parameter_overrides(&self.automation_run_parameter_text) {
+                Ok(overrides) => overrides,
+                Err(error) => {
+                    self.status = format!("AUTOMATION OVERRIDE INVALID · {error}");
+                    return;
+                }
+            };
+        if let Err(error) = validate_automation_parameter_override_values(&parameter_overrides) {
+            self.status = format!("AUTOMATION OVERRIDE INVALID · {error}");
+            return;
+        }
+        let enabled_jobs: Vec<&AutomationJob> = self
+            .case
+            .automation_jobs
+            .iter()
+            .filter(|job| job.enabled)
+            .collect();
+        if !parameter_overrides.global.is_empty() && enabled_jobs.len() != 1 {
+            self.status = "SHARED OVERRIDES NEED ONE JOB · USE job::name=value FOR A BATCH".into();
+            return;
+        }
+        if !automation_override_selectors_match_jobs(&parameter_overrides, &enabled_jobs) {
+            self.status =
+                "AUTOMATION OVERRIDE INVALID · scoped overrides must target one enabled job and cannot repeat a parameter".into();
+            return;
+        }
+        let job_ids: Vec<Uuid> = enabled_jobs.iter().map(|job| job.id).collect();
         let case_label = case_path.to_string_lossy().into_owned();
         let (sender, receiver) = mpsc::channel();
         self.automation_schedule_worker = Some(receiver);
         self.automation_schedule_message = None;
         self.automation_schedule_target_path = Some(case_label.clone());
-        self.status = "PREFLIGHTING ENABLED SQL JOBS".into();
+        self.status = "PREFLIGHTING ENABLED SQL JOBS WITH ONE-RUN PARAMETERS".into();
         thread::spawn(move || {
-            let result = preflight_automation_schedule_command(&case_path);
+            let result =
+                preflight_automation_jobs_command(&case_path, &job_ids, &parameter_overrides);
             let _ = sender.send((case_label, result));
         });
     }
@@ -8477,24 +8524,34 @@ impl eframe::App for App {
                                     }
                                     let preflight_ready = automation_case_saved
                                         && enabled_job_count > 0
+                                        && run_overrides_valid
+                                        && run_override_values_valid
+                                        && all_override_selectors_match
+                                        && (enabled_job_count == 1 || !has_shared_run_overrides)
                                         && self.automation_worker.is_none()
                                         && self.automation_schedule_worker.is_none()
                                         && Path::new(self.case_path.trim()).is_file();
                                     if ui
                                         .add_enabled(
                                             preflight_ready,
-                                            egui::Button::new("Preflight enabled jobs"),
+                                            egui::Button::new("Preflight enabled jobs and overrides"),
                                         )
                                         .on_disabled_hover_text(
                                             if enabled_job_count == 0 {
                                                 "Enable at least one job before SQL preflight."
+                                            } else if !run_overrides_valid || !run_override_values_valid {
+                                                "Fix the one-run override syntax or typed values before preflight."
+                                            } else if !all_override_selectors_match {
+                                                "Scoped overrides must name one enabled job and cannot repeat a parameter for that job."
+                                            } else if enabled_job_count > 1 && has_shared_run_overrides {
+                                                "Use Job name or UUID::name=value lines for a multi-job preflight."
                                             } else {
                                                 "Save the case and job changes before SQL preflight."
                                             },
                                         )
                                         .clicked()
                                     {
-                                        self.preflight_automation_schedule();
+                                        self.preflight_automation_jobs();
                                     }
                                     if ui
                                         .add_enabled(
