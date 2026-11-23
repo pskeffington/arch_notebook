@@ -1129,14 +1129,16 @@ impl App {
                 else {
                     continue;
                 };
-                if let Some(existing) = self
-                    .case
-                    .graphml_source_catalogs
-                    .iter_mut()
-                    .find(|existing| {
-                        existing.get("source_key").and_then(serde_json::Value::as_str)
-                            == Some(source_key)
-                    })
+                if let Some(existing) =
+                    self.case
+                        .graphml_source_catalogs
+                        .iter_mut()
+                        .find(|existing| {
+                            existing
+                                .get("source_key")
+                                .and_then(serde_json::Value::as_str)
+                                == Some(source_key)
+                        })
                 {
                     *existing = catalog;
                 } else {
