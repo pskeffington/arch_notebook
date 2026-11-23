@@ -14622,6 +14622,122 @@ fn export_sql_comparison_cli(
     Ok(())
 }
 
+fn export_sql_snapshot_cli(
+    case_path: &str,
+    snapshot_id: Uuid,
+    output_path: &str,
+    json_output: bool,
+) -> Result<(), String> {
+    let case_file = Path::new(case_path);
+    let _case_lock = lock_automation_case(case_file)?;
+    let content =
+        fs::read_to_string(case_file).map_err(|error| format!("cannot read case: {error}"))?;
+    let case = serde_json::from_str::<CaseFile>(&content)
+        .map_err(|error| format!("cannot parse case: {error}"))?;
+    let snapshot = case
+        .snapshots
+        .iter()
+        .find(|snapshot| snapshot.id == snapshot_id)
+        .cloned()
+        .ok_or_else(|| format!("snapshot not found: {snapshot_id}"))?;
+    if output_path.trim().is_empty() {
+        return Err("export path cannot be empty".into());
+    }
+    if paths_refer_to_same_file(case_path, output_path) {
+        return Err("snapshot export cannot replace its case file".into());
+    }
+    let app = App::automation_context(case, case_path);
+    app.ensure_path_is_not_sql_source(output_path)?;
+
+    let mut writer = csv::WriterBuilder::new()
+        .delimiter(delimited_text_delimiter(output_path))
+        .from_writer(Vec::new());
+    writer
+        .write_record([
+            "snapshot_id",
+            "source_key",
+            "database_path",
+            "configured_database_path",
+            "series",
+            "query",
+            "parameters_json",
+            "captured_at",
+            "skipped_rows",
+            "connection_id",
+            "source_entity_id",
+            "target_entity_id",
+            "source",
+            "source_type",
+            "target",
+            "target_type",
+            "relationship",
+            "date",
+            "confidence",
+            "directed",
+            "source_reference",
+            "notes",
+        ])
+        .map_err(|error| error.to_string())?;
+    let parameters_json = serde_json::to_string(&snapshot.parameters)
+        .map_err(|error| format!("could not encode snapshot parameters: {error}"))?;
+    for connection in &snapshot.connections {
+        writer
+            .write_record([
+                snapshot.id.to_string(),
+                snapshot.source_key.clone(),
+                snapshot.database_path.clone(),
+                snapshot.configured_database_path.clone(),
+                snapshot.series.clone(),
+                snapshot.query.clone(),
+                parameters_json.clone(),
+                snapshot.captured_at.clone(),
+                snapshot.skipped_rows.to_string(),
+                connection.connection_id.clone(),
+                connection.source_entity_id.clone(),
+                connection.target_entity_id.clone(),
+                connection.source.clone(),
+                connection.source_type.clone(),
+                connection.target.clone(),
+                connection.target_type.clone(),
+                connection.relationship.clone(),
+                connection.date.clone(),
+                connection.confidence.to_string(),
+                connection.directed.to_string(),
+                connection.source_reference.clone(),
+                connection.notes.clone(),
+            ])
+            .map_err(|error| error.to_string())?;
+    }
+    let contents = writer
+        .into_inner()
+        .map_err(|error| format!("could not finish snapshot export: {}", error.error()))?;
+    write_file_atomically(Path::new(output_path), &contents)?;
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "schema_version": 1,
+                "ok": true,
+                "case": case_path,
+                "output": output_path,
+                "format": delimited_text_format(output_path),
+                "snapshot_id": snapshot.id,
+                "captured_at": snapshot.captured_at,
+                "connections": snapshot.connections.len(),
+                "skipped_rows": snapshot.skipped_rows,
+            }))
+            .map_err(|error| error.to_string())?
+        );
+    } else {
+        println!(
+            "SQL SNAPSHOT EXPORTED · {} CONNECTIONS · {}",
+            snapshot.connections.len(),
+            output_path
+        );
+    }
+    Ok(())
+}
+
 fn automation_lock_path(path: &Path) -> Result<PathBuf, String> {
     if path.as_os_str().is_empty() {
         return Err("case path cannot be empty".into());
@@ -15981,7 +16097,7 @@ fn main() -> eframe::Result<()> {
         .is_some_and(|arg| arg == "--help" || arg == "-h")
     {
         println!(
-            "Arch Notebook\n\nUsage:\n  arch-notebook\n  arch-notebook --inspect-sqlite <database.sqlite> [--json]\n  arch-notebook --import-graphml <case.json> <input.graphml> [--json]\n  arch-notebook --export-graphml <case.json> <output.graphml> [--json]\n  arch-notebook --export-sql-comparison <case.json> <baseline-snapshot-id> <current-snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --export-job <case.json> <job-name-or-id> <output.json> [--json]\n  arch-notebook --import-job <case.json> <input.json> [--name <job-name>] [--database <path>] [--series <label>] [--json]\n  arch-notebook --export-import-design <case.json> <design-name-or-id> <output.json> [--json]\n  arch-notebook --import-import-design <case.json> <input.json> [--name <design-name>] [--json]\n  arch-notebook --list-jobs <case.json> [--enabled-only] [--json]\n  arch-notebook --list-runs <case.json> [--json] [--job <name-or-id>] [--trigger <desktop|scheduled|cli|replay|legacy>] [--offset <count>] [--limit <count>]\n  arch-notebook --validate-job <case.json> <job-name-or-id> [--query-only] [--param name=value ...] [--json]\n  arch-notebook --validate-enabled-jobs <case.json> [--json] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --check-enabled-job-queries <case.json> [--json] [--require-usable] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --validate-run <case.json> <run-id> [--json]\n  arch-notebook --run-enabled-jobs <case.json> [--json] [--skip-recent-success] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --run-job <case.json> <job-name-or-id> [--param name=value ...] [--json]\n  arch-notebook --rerun-run <case.json> <run-id> [--json]\n\nJob and import design packages contain portable configuration, not case data or run history. Batch runs save snapshots and run history to the case file. JSON output is available for scheduler integration."
+            "Arch Notebook\n\nUsage:\n  arch-notebook\n  arch-notebook --inspect-sqlite <database.sqlite> [--json]\n  arch-notebook --import-graphml <case.json> <input.graphml> [--json]\n  arch-notebook --export-graphml <case.json> <output.graphml> [--json]\n  arch-notebook --export-sql-snapshot <case.json> <snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --export-sql-comparison <case.json> <baseline-snapshot-id> <current-snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --export-job <case.json> <job-name-or-id> <output.json> [--json]\n  arch-notebook --import-job <case.json> <input.json> [--name <job-name>] [--database <path>] [--series <label>] [--json]\n  arch-notebook --export-import-design <case.json> <design-name-or-id> <output.json> [--json]\n  arch-notebook --import-import-design <case.json> <input.json> [--name <design-name>] [--json]\n  arch-notebook --list-jobs <case.json> [--enabled-only] [--json]\n  arch-notebook --list-runs <case.json> [--json] [--job <name-or-id>] [--trigger <desktop|scheduled|cli|replay|legacy>] [--offset <count>] [--limit <count>]\n  arch-notebook --validate-job <case.json> <job-name-or-id> [--query-only] [--param name=value ...] [--json]\n  arch-notebook --validate-enabled-jobs <case.json> [--json] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --check-enabled-job-queries <case.json> [--json] [--require-usable] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --validate-run <case.json> <run-id> [--json]\n  arch-notebook --run-enabled-jobs <case.json> [--json] [--skip-recent-success] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --run-job <case.json> <job-name-or-id> [--param name=value ...] [--json]\n  arch-notebook --rerun-run <case.json> <run-id> [--json]\n\nJob and import design packages contain portable configuration, not case data or run history. Batch runs save snapshots and run history to the case file. JSON output is available for scheduler integration."
         );
         println!("  arch-notebook --annotate-run <case.json> <run-id> <comment> [--json]");
         println!(
@@ -16180,6 +16296,29 @@ fn main() -> eframe::Result<()> {
             import_import_design_cli(case_path, input_path, name_override, json_output)
         {
             report_cli_error("import design import failed", error, json_output);
+        }
+        return Ok(());
+    }
+    if args
+        .first()
+        .is_some_and(|arg| arg == "--export-sql-snapshot")
+    {
+        let json_output = args.iter().any(|arg| arg == "--json");
+        let usage = "usage: arch-notebook --export-sql-snapshot <case.json> <snapshot-id> <output.csv|tsv> [--json]";
+        let (Some(case_path), Some(snapshot_id), Some(output_path)) =
+            (args.get(1), args.get(2), args.get(3))
+        else {
+            report_cli_usage_error(usage, json_output);
+        };
+        if args.len() > 5 || args.get(4).is_some_and(|arg| arg != "--json") {
+            report_cli_usage_error(usage, json_output);
+        }
+        let snapshot_id = Uuid::parse_str(snapshot_id)
+            .unwrap_or_else(|_| report_cli_usage_error("invalid snapshot UUID", json_output));
+        if let Err(error) =
+            export_sql_snapshot_cli(case_path, snapshot_id, output_path, json_output)
+        {
+            report_cli_error("SQL snapshot export failed", error, json_output);
         }
         return Ok(());
     }

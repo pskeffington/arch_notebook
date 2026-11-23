@@ -14,6 +14,16 @@ The saved-series review table can filter regressions, direction changes, evidenc
 
 In **Data → SQL regressions**, comparisons default to the immediately preceding capture in the selected series. Use **Compare with** to select any earlier capture in that same series for longer-range analysis; the selected baseline changes the on-screen delta table and CSV/TSV export together.
 
+### CLI snapshot export
+
+Export one immutable SQL capture without opening the desktop app. The output contains the captured connection fields plus snapshot provenance, query, typed parameter values, and skipped-row count on each record. An empty capture still exports its header row. A `.tsv` or `.tab` output path selects tab-separated output; other paths use CSV. Export is atomic and refuses to overwrite the case file or any saved SQLite source.
+
+```sh
+cargo run --offline -- --export-sql-snapshot harbor-light.case.json <snapshot-id> capture.csv --json
+```
+
+Get a snapshot UUID from `--list-runs --json` or the saved case's snapshot records. The JSON response reports output format, snapshot ID, captured time, connection count, and skipped-row count.
+
 ### CLI comparison export
 
 Export a saved SQL comparison without opening the desktop app by passing the baseline and current snapshot UUIDs. The snapshots must be ordered in the same saved database/series. A `.tsv` or `.tab` output path selects tab-separated output; other paths use CSV. Export is atomic and refuses to overwrite a saved SQLite source database.
