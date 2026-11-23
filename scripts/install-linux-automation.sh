@@ -66,6 +66,10 @@ if ! python3 -c 'import json, sys; raise SystemExit(0 if json.load(sys.stdin).ge
   echo "Enable at least one automation job in the case before installing its timer." >&2
   exit 1
 fi
+if ! "$binary" --validate-enabled-jobs "$case_file"; then
+  echo "One or more enabled SQL jobs failed preflight; fix the job, database, or query before installing the timer." >&2
+  exit 1
+fi
 
 config_home="${XDG_CONFIG_HOME:-$home_dir/.config}"
 case "$config_home" in
