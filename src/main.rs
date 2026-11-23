@@ -240,6 +240,8 @@ struct AutomationRun {
     success: bool,
     message: String,
     #[serde(default)]
+    analyst_note: String,
+    #[serde(default)]
     snapshot_index: Option<usize>,
     #[serde(default)]
     snapshot_id: Option<Uuid>,
@@ -338,6 +340,7 @@ struct App {
     sql_schema_template_source: Option<(String, String)>,
     automation_job_filter: String,
     automation_run_filter: String,
+    automation_run_note_drafts: HashMap<Uuid, String>,
     automation_job_import_path: String,
     automation_job_export_path: String,
     automation_job_import_name: String,
@@ -721,6 +724,7 @@ impl Default for App {
             sql_schema_template_source: None,
             automation_job_filter: String::new(),
             automation_run_filter: String::new(),
+            automation_run_note_drafts: HashMap::new(),
             automation_job_import_path: String::new(),
             automation_job_export_path: data_dir
                 .join("automation-job.json")
@@ -1001,6 +1005,7 @@ impl App {
             sql_schema_template_source: None,
             automation_job_filter: String::new(),
             automation_run_filter: String::new(),
+            automation_run_note_drafts: HashMap::new(),
             automation_job_import_path: String::new(),
             automation_job_export_path: String::new(),
             automation_job_import_name: String::new(),
@@ -3564,6 +3569,7 @@ impl App {
             duration_ms: Some(duration_ms),
             success,
             message,
+            analyst_note: String::new(),
             snapshot_index,
             snapshot_id,
             rerun_of: None,
@@ -6998,6 +7004,7 @@ impl eframe::App for App {
                                 let mut review_changes = None;
                                 let mut replay_run = None;
                                 let mut load_run = None;
+                                let mut save_run_note = None;
                                 egui::ScrollArea::vertical().max_height(210.0).show(ui, |ui| {
                                     for run in self
                                         .case
@@ -7037,6 +7044,20 @@ impl eframe::App for App {
                                                 ui.label(format!("Query and validation time: {duration_ms} ms"));
                                             }
                                             ui.label(&run.message);
+                                            let note = self
+                                                .automation_run_note_drafts
+                                                .entry(run.id)
+                                                .or_insert_with(|| run.analyst_note.clone());
+                                            ui.label("Analyst comment");
+                                            ui.add(
+                                                egui::TextEdit::multiline(note)
+                                                    .hint_text("Add review context for this run")
+                                                    .desired_width(canvas_w - 30.0)
+                                                    .desired_rows(2),
+                                            );
+                                            if ui.small_button("Save comment").clicked() {
+                                                save_run_note = Some((run.id, note.clone()));
+                                            }
                                             let snapshot_index = run
                                                 .snapshot_id
                                                 .and_then(|id| {
@@ -7141,6 +7162,17 @@ impl eframe::App for App {
                                         ui.label(egui::RichText::new("No automation runs match these filters.").small().color(muted));
                                     }
                                 });
+                                if let Some((run_id, note)) = save_run_note {
+                                    if let Some(run) = self
+                                        .case
+                                        .automation_runs
+                                        .iter_mut()
+                                        .find(|run| run.id == run_id)
+                                    {
+                                        run.analyst_note = note;
+                                        self.status = "AUTOMATION RUN COMMENT UPDATED · SAVE CASE TO KEEP IT".into();
+                                    }
+                                }
                                 if let Some(run_id) = replay_run {
                                     self.replay_saved_automation_run(run_id);
                                 }
@@ -10585,8 +10617,8 @@ fn validate_saved_automation_configuration_cli(
                 "saved": false,
                 "case": case_path,
                 "validated_run_id": run_id,
-                "passed": usize::from(success),
-                "failed": usize::from(!success),
+                "passed": if success { 1 } else { 0 },
+                "failed": if success { 0 } else { 1 },
                 "outcomes": [outcome],
             }))
             .map_err(|error| error.to_string())?
@@ -11540,6 +11572,123 @@ fn lock_automation_case(path: &Path) -> Result<fs::File, String> {
     Ok(lock_file)
 }
 
+fn validate_automation_job_cli(
+    case_path: &str,
+    selector: &str,
+    parameter_overrides: &[(String, String)],
+    queries_only: bool,
+    json_output: bool,
+) -> Result<bool, String> {
+    let _case_lock = lock_automation_case(Path::new(case_path))?;
+    let content =
+        fs::read_to_string(case_path).map_err(|error| format!("cannot read case: {error}"))?;
+    let case = serde_json::from_str::<CaseFile>(&content)
+        .map_err(|error| format!("cannot parse case: {error}"))?;
+    let matches: Vec<_> = case
+        .automation_jobs
+        .iter()
+        .filter(|job| {
+            job.name.eq_ignore_ascii_case(selector)
+                || job.id.to_string().eq_ignore_ascii_case(selector)
+        })
+        .cloned()
+        .collect();
+    if matches.len() > 1 {
+        return Err(format!("job selector is ambiguous: {selector}"));
+    }
+    let mut job = matches
+        .into_iter()
+        .next()
+        .ok_or_else(|| format!("automation job not found: {selector}"))?;
+    apply_sql_parameter_overrides(std::slice::from_mut(&mut job), parameter_overrides, &[])?;
+    let mut app = App::automation_context(case, case_path);
+    normalize_snapshot_database_paths(&mut app.case, &app.case_path);
+    if let Some(existing) = app.case.automation_jobs.iter().find(|existing| {
+        existing.id != job.id
+            && same_sql_series(
+                &existing.database_path,
+                &existing.series,
+                &job.database_path,
+                &job.series,
+                &app.case_path,
+            )
+    }) {
+        return Err(format!(
+            "database and series already belong to {}",
+            existing.name
+        ));
+    }
+    app.sql_path = job.database_path.clone();
+    app.sql_series = job.series.clone();
+    app.sql_query = job.query.clone();
+    app.sql_parameter_text = format_sql_parameters(&job.parameters);
+    app.automation_minimum_connections = job.minimum_connections;
+    app.automation_maximum_connections = job.maximum_connections;
+    app.automation_maximum_regressions = job.maximum_regressions;
+    app.automation_maximum_skipped_rows = job.maximum_skipped_rows;
+    let snapshot_index = app.case.snapshots.len();
+    let limits_pass = app.validate_sql_query_for_batch();
+    let snapshot = app.case.snapshots.get(snapshot_index);
+    let query_valid = snapshot.is_some();
+    let success = if queries_only {
+        query_valid
+    } else {
+        limits_pass
+    };
+    let message = if queries_only && query_valid && !limits_pass {
+        app.status.replacen(
+            "SQL QUERY LIMITS FAILED",
+            "SQL QUERY VALID · CURRENT CAPTURE LIMITS FAIL",
+            1,
+        )
+    } else {
+        app.status.clone()
+    };
+    let message = if queries_only
+        && let Some(snapshot) = snapshot
+        && snapshot.connections.is_empty()
+    {
+        format!(
+            "{message} · {} · NO USABLE CONNECTIONS",
+            if snapshot.skipped_rows == 0 {
+                "EMPTY QUERY RESULT"
+            } else {
+                "ALL RETURNED ROWS SKIPPED"
+            }
+        )
+    } else {
+        message
+    };
+    let previous = snapshot
+        .and_then(|_| previous_snapshot_index(&app.case, snapshot_index))
+        .and_then(|index| app.case.snapshots.get(index));
+    if json_output {
+        let outcome = automation_outcome_json(&job, success, &message, None, snapshot, previous);
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "schema_version": 1,
+                "mode": if queries_only { "query" } else { "capture_limits" },
+                "ok": success,
+                "saved": false,
+                "case": case_path,
+                "passed": usize::from(success),
+                "failed": usize::from(!success),
+                "outcome": outcome,
+            }))
+            .map_err(|error| error.to_string())?
+        );
+    } else {
+        println!(
+            "{} · {} · {}",
+            if success { "PASS" } else { "FAIL" },
+            job.name,
+            message
+        );
+    }
+    Ok(success)
+}
+
 fn validate_enabled_automation_jobs_cli(
     case_path: &str,
     selected_jobs: Option<&[String]>,
@@ -12089,6 +12238,7 @@ fn list_automation_runs_cli(
             outcome["enabled"] = serde_json::json!(run.enabled);
             outcome["configuration_recorded"] = serde_json::json!(run.configuration_recorded);
             outcome["rerun_of"] = serde_json::json!(run.rerun_of);
+            outcome["analyst_note"] = serde_json::json!(run.analyst_note);
             if !run.configuration_recorded {
                 outcome["limits"] = serde_json::Value::Null;
                 outcome["capture_limits_pass"] = serde_json::Value::Null;
@@ -12152,7 +12302,49 @@ fn list_automation_runs_cli(
                 duration,
                 run["id"].as_str().unwrap_or("unknown")
             );
+            if let Some(note) = run["analyst_note"].as_str().filter(|note| !note.is_empty()) {
+                println!("  COMMENT · {note}");
+            }
         }
+    }
+    Ok(())
+}
+
+fn annotate_automation_run_cli(
+    case_path: &str,
+    run_id: Uuid,
+    note: &str,
+    json_output: bool,
+) -> Result<(), String> {
+    let case_file = Path::new(case_path);
+    let _case_lock = lock_automation_case(case_file)?;
+    let content =
+        fs::read_to_string(case_file).map_err(|error| format!("cannot read case: {error}"))?;
+    let mut case = serde_json::from_str::<CaseFile>(&content)
+        .map_err(|error| format!("cannot parse case: {error}"))?;
+    let run = case
+        .automation_runs
+        .iter_mut()
+        .find(|run| run.id == run_id)
+        .ok_or_else(|| format!("automation run not found: {run_id}"))?;
+    run.analyst_note = note.trim().to_owned();
+    let job_name = run.job_name.clone();
+    save_case_atomically(case_file, &case)?;
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "schema_version": 1,
+                "ok": true,
+                "saved": true,
+                "run_id": run_id,
+                "job": job_name,
+                "analyst_note": note.trim(),
+            }))
+            .map_err(|error| error.to_string())?
+        );
+    } else {
+        println!("COMMENT SAVED · {job_name} · run {run_id}");
     }
     Ok(())
 }
@@ -12288,8 +12480,9 @@ fn main() -> eframe::Result<()> {
         .is_some_and(|arg| arg == "--help" || arg == "-h")
     {
         println!(
-            "Arch Notebook\n\nUsage:\n  arch-notebook\n  arch-notebook --inspect-sqlite <database.sqlite> [--json]\n  arch-notebook --import-graphml <case.json> <input.graphml> [--json]\n  arch-notebook --export-graphml <case.json> <output.graphml> [--json]\n  arch-notebook --export-sql-comparison <case.json> <baseline-snapshot-id> <current-snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --export-job <case.json> <job-name-or-id> <output.json> [--json]\n  arch-notebook --import-job <case.json> <input.json> [--name <job-name>] [--database <path>] [--series <label>] [--json]\n  arch-notebook --list-jobs <case.json> [--enabled-only] [--json]\n  arch-notebook --list-runs <case.json> [--json] [--job <name-or-id>] [--offset <count>] [--limit <count>]\n  arch-notebook --validate-enabled-jobs <case.json> [--json] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --check-enabled-job-queries <case.json> [--json] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --validate-run <case.json> <run-id> [--json]\n  arch-notebook --run-enabled-jobs <case.json> [--json] [--skip-recent-success] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --run-job <case.json> <job-name-or-id> [--param name=value ...] [--json]\n  arch-notebook --rerun-run <case.json> <run-id> [--json]\n\nJob packages contain only portable SQL job settings; case snapshots and run history stay in the case. Job and run listing and validation do not change the case file. Batch runs save snapshots and run history to the case file. JSON output is available for scheduler integration."
+            "Arch Notebook\n\nUsage:\n  arch-notebook\n  arch-notebook --inspect-sqlite <database.sqlite> [--json]\n  arch-notebook --import-graphml <case.json> <input.graphml> [--json]\n  arch-notebook --export-graphml <case.json> <output.graphml> [--json]\n  arch-notebook --export-sql-comparison <case.json> <baseline-snapshot-id> <current-snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --export-job <case.json> <job-name-or-id> <output.json> [--json]\n  arch-notebook --import-job <case.json> <input.json> [--name <job-name>] [--database <path>] [--series <label>] [--json]\n  arch-notebook --list-jobs <case.json> [--enabled-only] [--json]\n  arch-notebook --list-runs <case.json> [--json] [--job <name-or-id>] [--offset <count>] [--limit <count>]\n  arch-notebook --validate-job <case.json> <job-name-or-id> [--query-only] [--param name=value ...] [--json]\n  arch-notebook --validate-enabled-jobs <case.json> [--json] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --check-enabled-job-queries <case.json> [--json] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --validate-run <case.json> <run-id> [--json]\n  arch-notebook --run-enabled-jobs <case.json> [--json] [--skip-recent-success] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --run-job <case.json> <job-name-or-id> [--param name=value ...] [--json]\n  arch-notebook --rerun-run <case.json> <run-id> [--json]\n\nJob packages contain only portable SQL job settings; case snapshots and run history stay in the case. Job and run listing and validation do not change the case file. Batch runs save snapshots and run history to the case file. JSON output is available for scheduler integration."
         );
+        println!("  arch-notebook --annotate-run <case.json> <run-id> <comment> [--json]");
         return Ok(());
     }
     if args.first().is_some_and(|arg| arg == "--inspect-sqlite") {
@@ -12479,6 +12672,24 @@ fn main() -> eframe::Result<()> {
         }
         return Ok(());
     }
+    if args.first().is_some_and(|arg| arg == "--annotate-run") {
+        let json_output = args.iter().any(|arg| arg == "--json");
+        let usage = "usage: arch-notebook --annotate-run <case.json> <run-id> <comment> [--json]";
+        let (Some(case_path), Some(run_id), Some(note)) = (args.get(1), args.get(2), args.get(3))
+        else {
+            report_cli_usage_error(usage, json_output);
+        };
+        if args.len() > 5 || (args.len() == 5 && args[4] != "--json") {
+            report_cli_usage_error(usage, json_output);
+        }
+        let run_id = run_id
+            .parse::<Uuid>()
+            .unwrap_or_else(|_| report_cli_usage_error("run-id must be a UUID", json_output));
+        if let Err(error) = annotate_automation_run_cli(case_path, run_id, note, json_output) {
+            report_cli_error("automation run comment failed", error, json_output);
+        }
+        return Ok(());
+    }
     if args.first().is_some_and(|arg| arg == "--list-runs") {
         let Some(case_path) = args.get(1) else {
             report_cli_usage_error(
@@ -12553,6 +12764,56 @@ fn main() -> eframe::Result<()> {
             list_automation_runs_cli(case_path, json_output, job_filter.as_deref(), offset, limit)
         {
             report_cli_error("run history listing failed", error, json_output);
+        }
+        return Ok(());
+    }
+    if args.first().is_some_and(|arg| arg == "--validate-job") {
+        let usage = "usage: arch-notebook --validate-job <case.json> <job-name-or-id> [--query-only] [--param name=value ...] [--json]";
+        let json_output = args.iter().any(|arg| arg == "--json");
+        let (Some(case_path), Some(selector)) = (args.get(1), args.get(2)) else {
+            report_cli_usage_error(usage, json_output);
+        };
+        let mut queries_only = false;
+        let mut seen_query_only = false;
+        let mut seen_json = false;
+        let mut parameter_options = Vec::new();
+        let mut index = 3;
+        while index < args.len() {
+            match args[index].as_str() {
+                "--query-only" if !seen_query_only => {
+                    queries_only = true;
+                    seen_query_only = true;
+                }
+                "--json" if !seen_json => seen_json = true,
+                "--param" => {
+                    index += 1;
+                    let Some(value) = args
+                        .get(index)
+                        .filter(|value| !value.trim().is_empty() && !value.starts_with("--"))
+                    else {
+                        report_cli_usage_error("--param requires name=value", json_output);
+                    };
+                    parameter_options.push(value.clone());
+                }
+                _ => report_cli_usage_error(usage, json_output),
+            }
+            index += 1;
+        }
+        let parameter_overrides = parse_sql_parameters(&parameter_options.join("\n"))
+            .unwrap_or_else(|error| report_cli_usage_error(&error, json_output));
+        match validate_automation_job_cli(
+            case_path,
+            selector,
+            &parameter_overrides,
+            queries_only,
+            json_output,
+        ) {
+            Err(error) => report_cli_error("automation job validation failed", error, json_output),
+            Ok(false) => {
+                eprintln!("automation job validation failed; case file was not changed");
+                std::process::exit(1);
+            }
+            Ok(true) => {}
         }
         return Ok(());
     }

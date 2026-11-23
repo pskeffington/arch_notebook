@@ -108,15 +108,25 @@ Add `--json` to get a schema-versioned object containing each job’s UUID, enab
 cargo run --offline -- --list-jobs harbor-light.case.json --enabled-only --json
 ```
 
+Automation run history keeps a separate analyst comment for review context without changing the captured SQL result or machine-generated run message. In **Data → Automation**, expand a run, edit **Analyst comment**, then choose **Save comment** and save the case. For scheduler or review scripts, add or replace a comment using the run UUID from `--list-runs`:
+
+```sh
+cargo run --offline -- --annotate-run harbor-light.case.json <run-id> "Reviewed against the source release notes; expected removals."
+cargo run --offline -- --list-runs harbor-light.case.json --json
+```
+
+Run-list JSON includes `analyst_note`; pass an empty comment to clear it. Comment updates lock and atomically save the case.
+
 Share a saved SQL automation definition without copying the case, captured snapshots, or run history. Export by job name or UUID, then import the JSON package into another case:
 
 ```sh
 cargo run --offline -- --export-job harbor-light.case.json "Harbor Light baseline" harbor-light-baseline.job.json --json
 cargo run --offline -- --import-job another-case.json harbor-light-baseline.job.json --json
 cargo run --offline -- --import-job another-case.json harbor-light-baseline.job.json --name "Local baseline" --database ./data/connections.sqlite --series "Local review" --json
+cargo run --offline -- --validate-job another-case.json "Local baseline" --query-only --param snapshot_id=current --json
 ```
 
-The versioned package carries the job name, configured database path, snapshot series, SQL query, typed parameters, and capture limits. Import assigns a new job UUID, starts the job disabled, and rejects a duplicate job name or a database/series already owned by another job. CLI imports can override the name, database path, or series when adapting a shared query to another environment; relative database paths resolve from the destination case file. In the desktop app, use the separate **Import JSON** and **Export JSON** paths in **Data → Automation**; expand **Adapt imported job** to override the name, database path, or series, and use **Export** beside a job to write its package. Review the imported path and use **Validate** before enabling it for a scheduled batch; package import does not connect to or modify its SQLite source. Export writes atomically and refuses to replace the case or a SQLite source used by its jobs or snapshots.
+The versioned package carries the job name, configured database path, snapshot series, SQL query, typed parameters, and capture limits. Import assigns a new job UUID, starts the job disabled, and rejects a duplicate job name or a database/series already owned by another job. CLI imports can override the name, database path, or series when adapting a shared query to another environment; relative database paths resolve from the destination case file. Use `--validate-job` to preflight a named or UUID-selected job even while it is disabled. The default checks both query validity and its capture limits; add `--query-only` to report query validity without failing on unmet capture limits. Repeat `--param name=value` to override or add bound SQL parameters for this validation only; the saved job and case remain unchanged. Validation is read-only and does not save the case. In the desktop app, use the separate **Import JSON** and **Export JSON** paths in **Data → Automation**; expand **Adapt imported job** to override the name, database path, or series, and use **Export** beside a job to write its package. Review the imported path and use **Validate** before enabling it for a scheduled batch; package import does not connect to or modify its SQLite source. Export writes atomically and refuses to replace the case or a SQLite source used by its jobs or snapshots.
 
 Read saved automation outcomes without opening the desktop app:
 
