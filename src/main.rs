@@ -4152,18 +4152,22 @@ impl App {
                                                                     .unwrap_or_default()
                                                             )
                                                         });
-                                                    format!(
-                                                        "{}{}",
-                                                        name,
-                                                        if column["descending"]
-                                                            .as_bool()
-                                                            .unwrap_or(false)
-                                                        {
-                                                            " DESC"
-                                                        } else {
-                                                            ""
-                                                        }
-                                                    )
+                                                    let order = if column["descending"]
+                                                        .as_bool()
+                                                        .unwrap_or(false)
+                                                    {
+                                                        " DESC"
+                                                    } else {
+                                                        " ASC"
+                                                    };
+                                                    let collation = column["collation"]
+                                                        .as_str()
+                                                        .filter(|collation| !collation.is_empty())
+                                                        .map(|collation| {
+                                                            format!(" COLLATE {collation}")
+                                                        })
+                                                        .unwrap_or_default();
+                                                    format!("{name}{order}{collation}")
                                                 })
                                                 .collect::<Vec<_>>()
                                                 .join(", ");
@@ -21817,7 +21821,29 @@ fn inspect_sqlite_schema_cli(database_path: &str, json_output: bool) -> Result<(
                         .into_iter()
                         .flatten()
                         .filter(|column| column["key"].as_bool().unwrap_or(true))
-                        .filter_map(|column| column["name"].as_str())
+                        .map(|column| {
+                            let name =
+                                column["name"]
+                                    .as_str()
+                                    .map(str::to_owned)
+                                    .unwrap_or_else(|| {
+                                        format!(
+                                            "expression #{}",
+                                            column["column_id"].as_i64().unwrap_or_default()
+                                        )
+                                    });
+                            let order = if column["descending"].as_bool().unwrap_or(false) {
+                                " DESC"
+                            } else {
+                                " ASC"
+                            };
+                            let collation = column["collation"]
+                                .as_str()
+                                .filter(|collation| !collation.is_empty())
+                                .map(|collation| format!(" COLLATE {collation}"))
+                                .unwrap_or_default();
+                            format!("{name}{order}{collation}")
+                        })
                         .collect::<Vec<_>>()
                         .join(", ");
                     println!(
