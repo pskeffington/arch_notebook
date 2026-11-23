@@ -23,8 +23,11 @@ The macOS bundles produced by CI are explicitly labeled `unsigned`. For direct d
 gh release upload v0.1.1 \
   "dist/Arch-Notebook-macos-$(uname -m)-notarized.zip" \
   --clobber
-shasum -a 256 "dist/Arch-Notebook-macos-$(uname -m)-notarized.zip" \
-  > dist/SHA256SUMS-macos-notarized
+(
+  cd dist
+  shasum -a 256 "Arch-Notebook-macos-$(uname -m)-notarized.zip" \
+    > SHA256SUMS-macos-notarized
+)
 gh release upload v0.1.1 dist/SHA256SUMS-macos-notarized --clobber
 ```
 

@@ -82,4 +82,27 @@ gh release upload v0.1.0 "dist/Arch-Notebook-macos-$(uname -m)-notarized.zip" --
 
 The CI runner labels follow [GitHub's current hosted runner reference](https://docs.github.com/en/actions/reference/runners/github-hosted-runners). Arch package metadata follows the [Arch package guidelines](https://wiki.archlinux.org/title/Arch_package_guidelines).
 
+### Install a published release
+
+Published releases include a `SHA256SUMS` file for the attached CI artifacts. Download the release files and verify them before extracting or installing:
+
+```sh
+version=v0.1.0
+release_dir="$PWD/arch-notebook-$version"
+mkdir -p "$release_dir"
+gh release download "$version" --dir "$release_dir"
+(cd "$release_dir" && sha256sum --check SHA256SUMS)
+```
+
+On Linux, continue with the generic archive steps above or install the Arch package with `pacman -U` on an Arch system. Keep the downloaded checksum file with the artifacts for later verification.
+
+macOS CI bundles are unsigned and may be blocked by Gatekeeper. For normal direct installation, use a Developer ID signed and notarized bundle; the release process describes how to prepare and attach it. Extract a verified notarized zip into Applications with:
+
+```sh
+ditto -x -k "$release_dir/Arch-Notebook-macos-$(uname -m)-notarized.zip" "$release_dir"
+ditto "$release_dir/Arch Notebook.app" "/Applications/Arch Notebook.app"
+```
+
+The CI-provided `SHA256SUMS` covers the CI assets. A separately attached notarized macOS zip has its own `SHA256SUMS-macos-notarized`; verify it with `(cd "$release_dir" && shasum -a 256 --check SHA256SUMS-macos-notarized)` before extracting it.
+
 See [RELEASING.md](../RELEASING.md) for the version, tag, and signed macOS release process.
