@@ -3,6 +3,7 @@ set -euo pipefail
 
 legacy_schedule_matches_case() {
   python3 - "$1/com.archnotebook.automation.plist" "$2" <<'PY'
+import os
 import plistlib
 import sys
 
@@ -12,7 +13,12 @@ try:
         settings = plistlib.load(source)
 except (OSError, plistlib.InvalidFileException):
     raise SystemExit(1)
-raise SystemExit(0 if case_path in settings.get("ProgramArguments", []) else 1)
+configured_paths = settings.get("ProgramArguments", [])
+raise SystemExit(
+    0
+    if any(os.path.realpath(value) == os.path.realpath(case_path) for value in configured_paths)
+    else 1
+)
 PY
 }
 

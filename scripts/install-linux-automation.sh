@@ -3,6 +3,8 @@ set -euo pipefail
 
 legacy_schedule_matches_case() {
   python3 - "$1/arch-notebook-automation.service" "$2" <<'PY'
+import os
+import shlex
 import sys
 
 service_path, case_path = sys.argv[1:]
@@ -11,11 +13,18 @@ try:
         lines = source.readlines()
 except OSError:
     raise SystemExit(1)
-escaped = case_path.replace("\\", "\\\\").replace('"', '\\"')
-escaped = escaped.replace("%", "%%").replace("$", "$$")
-target = f'"{escaped}"'
-if any(line.startswith("ExecStart=") and line.rstrip().endswith(target) for line in lines):
-    raise SystemExit(0)
+for line in lines:
+    if not line.startswith("ExecStart="):
+        continue
+    try:
+        arguments = shlex.split(line.partition("=")[2])
+    except ValueError:
+        continue
+    if len(arguments) < 3 or arguments[1] != "--run-enabled-jobs":
+        continue
+    configured_case = arguments[2].replace("%%", "%").replace("$$", "$")
+    if os.path.realpath(configured_case) == os.path.realpath(case_path):
+        raise SystemExit(0)
 raise SystemExit(1)
 PY
 }
