@@ -1,14 +1,29 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+legacy_schedule_matches_case() {
+  python3 - "$1/com.archnotebook.automation.plist" "$2" <<'PY'
+import plistlib
+import sys
+
+plist_path, case_path = sys.argv[1:]
+try:
+    with open(plist_path, "rb") as source:
+        settings = plistlib.load(source)
+except (OSError, plistlib.InvalidFileException):
+    raise SystemExit(1)
+raise SystemExit(0 if case_path in settings.get("ProgramArguments", []) else 1)
+PY
+}
+
 if [[ "$(uname -s)" != "Darwin" ]]; then
   echo "This installer is for macOS." >&2
   exit 2
 fi
 
 if [[ "${1:-}" == "--remove" ]]; then
-  if [[ $# -ne 1 ]]; then
-    echo "Usage: $0 --remove" >&2
+  if [[ $# -gt 2 ]]; then
+    echo "Usage: $0 --remove [case-file]" >&2
     exit 2
   fi
   home_dir="${HOME:?HOME must be set}"
@@ -17,16 +32,33 @@ if [[ "${1:-}" == "--remove" ]]; then
     *) echo "HOME must be an absolute path." >&2; exit 1 ;;
   esac
   label="com.archnotebook.automation"
+  if [[ $# -eq 2 ]]; then
+    case_path="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$2")"
+    schedule_id="$(python3 - "$case_path" <<'PY'
+import hashlib
+import sys
+print(hashlib.sha256(sys.argv[1].encode()).hexdigest()[:12])
+PY
+)"
+    label+=".$schedule_id"
+    if [[ ! -e "$home_dir/Library/LaunchAgents/$label.plist" ]] && legacy_schedule_matches_case "$home_dir/Library/LaunchAgents" "$case_path"; then
+      label="com.archnotebook.automation"
+    fi
+  fi
   plist_path="$home_dir/Library/LaunchAgents/$label.plist"
   launchctl bootout "gui/$(id -u)" "$plist_path" >/dev/null 2>&1 || true
   rm -f "$plist_path"
-  echo "Removed Arch Notebook SQL automation schedule for this user."
+  if [[ $# -eq 2 ]]; then
+    echo "Removed the Arch Notebook SQL automation schedule for: $case_path"
+  else
+    echo "Removed the legacy Arch Notebook SQL automation schedule for this user."
+  fi
   exit 0
 fi
 
 if [[ "${1:-}" == "--status" ]]; then
-  if [[ $# -ne 1 ]]; then
-    echo "Usage: $0 --status" >&2
+  if [[ $# -gt 2 ]]; then
+    echo "Usage: $0 --status [case-file]" >&2
     exit 2
   fi
   home_dir="${HOME:?HOME must be set}"
@@ -35,17 +67,39 @@ if [[ "${1:-}" == "--status" ]]; then
     *) echo "HOME must be an absolute path." >&2; exit 1 ;;
   esac
   label="com.archnotebook.automation"
+  if [[ $# -eq 2 ]]; then
+    case_path="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$2")"
+    schedule_id="$(python3 - "$case_path" <<'PY'
+import hashlib
+import sys
+print(hashlib.sha256(sys.argv[1].encode()).hexdigest()[:12])
+PY
+)"
+    label+=".$schedule_id"
+    if [[ ! -r "$home_dir/Library/LaunchAgents/$label.plist" ]] && legacy_schedule_matches_case "$home_dir/Library/LaunchAgents" "$case_path"; then
+      label="com.archnotebook.automation"
+    fi
+  fi
   plist_path="$home_dir/Library/LaunchAgents/$label.plist"
   if [[ ! -r "$plist_path" ]]; then
-    echo "No Arch Notebook SQL automation schedule is installed for this user."
+    if [[ $# -eq 2 ]]; then
+      echo "No Arch Notebook SQL automation schedule is installed for: $case_path"
+    else
+      echo "No legacy Arch Notebook SQL automation schedule is installed for this user."
+    fi
     exit 0
   fi
-  python3 - "$plist_path" "$label" "gui/$(id -u)" <<'PY'
+  if [[ $# -eq 2 ]]; then
+    case_path="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$2")"
+  else
+    case_path="legacy schedule"
+  fi
+  python3 - "$plist_path" "$label" "gui/$(id -u)" "$case_path" <<'PY'
 import plistlib
 import subprocess
 import sys
 
-plist_path, label, domain = sys.argv[1:]
+plist_path, label, domain, case_path = sys.argv[1:]
 with open(plist_path, "rb") as source:
     settings = plistlib.load(source)
 seconds = settings.get("StartInterval")
@@ -57,7 +111,7 @@ loaded = subprocess.run(
     check=False,
 ).returncode == 0
 state = "loaded" if loaded else "configured but not loaded in the user LaunchAgent domain"
-print(f"Arch Notebook SQL schedule: {cadence}; {state}.")
+print(f"Arch Notebook SQL schedule for {case_path}: {cadence}; {state}.")
 PY
   exit $?
 fi
@@ -93,15 +147,25 @@ if ! command -v python3 >/dev/null 2>&1; then
   echo "python3 is required to write the LaunchAgent plist." >&2
   exit 1
 fi
+case_file="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$case_file")"
 # One locked preflight checks that enabled jobs exist and their queries work.
 if ! "$binary" --check-enabled-job-queries "$case_file" --require-usable; then
   echo "One or more enabled SQL jobs failed preflight or returned no usable connections; fix the job, database, or query before installing the LaunchAgent." >&2
   exit 1
 fi
 
-label="com.archnotebook.automation"
+schedule_id="$(python3 - "$case_file" <<'PY'
+import hashlib
+import sys
+print(hashlib.sha256(sys.argv[1].encode()).hexdigest()[:12])
+PY
+)"
+label="com.archnotebook.automation.$schedule_id"
+if legacy_schedule_matches_case "$HOME/Library/LaunchAgents" "$case_file"; then
+  label="com.archnotebook.automation"
+fi
 agent_dir="$HOME/Library/LaunchAgents"
-log_dir="$HOME/Library/Logs"
+log_dir="$HOME/Library/Logs/ArchNotebook/$schedule_id"
 plist_path="$agent_dir/$label.plist"
 mkdir -p "$agent_dir" "$log_dir"
 

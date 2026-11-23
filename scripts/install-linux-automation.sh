@@ -1,14 +1,33 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+legacy_schedule_matches_case() {
+  python3 - "$1/arch-notebook-automation.service" "$2" <<'PY'
+import sys
+
+service_path, case_path = sys.argv[1:]
+try:
+    with open(service_path, encoding="utf-8") as source:
+        lines = source.readlines()
+except OSError:
+    raise SystemExit(1)
+escaped = case_path.replace("\\", "\\\\").replace('"', '\\"')
+escaped = escaped.replace("%", "%%").replace("$", "$$")
+target = f'"{escaped}"'
+if any(line.startswith("ExecStart=") and line.rstrip().endswith(target) for line in lines):
+    raise SystemExit(0)
+raise SystemExit(1)
+PY
+}
+
 if [[ "$(uname -s)" != "Linux" ]]; then
   echo "This installer is for Linux." >&2
   exit 2
 fi
 
 if [[ "${1:-}" == "--remove" ]]; then
-  if [[ $# -ne 1 ]]; then
-    echo "Usage: $0 --remove" >&2
+  if [[ $# -gt 2 ]]; then
+    echo "Usage: $0 --remove [case-file]" >&2
     exit 2
   fi
   home_dir="${HOME:?HOME must be set}"
@@ -21,21 +40,43 @@ if [[ "${1:-}" == "--remove" ]]; then
     /*) ;;
     *) echo "XDG_CONFIG_HOME must be an absolute path." >&2; exit 1 ;;
   esac
+  schedule_name="arch-notebook-automation"
+  if [[ $# -eq 2 ]]; then
+    if ! command -v python3 >/dev/null 2>&1; then
+      echo "python3 is required to identify the case schedule." >&2
+      exit 1
+    fi
+    case_path="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$2")"
+    schedule_id="$(python3 - "$case_path" <<'PY'
+import hashlib
+import sys
+print(hashlib.sha256(sys.argv[1].encode()).hexdigest()[:12])
+PY
+)"
+    schedule_name+="-$schedule_id"
+    if [[ ! -e "$config_home/systemd/user/$schedule_name.timer" ]] && legacy_schedule_matches_case "$config_home/systemd/user" "$case_path"; then
+      schedule_name="arch-notebook-automation"
+    fi
+  fi
   unit_dir="$config_home/systemd/user"
   if command -v systemctl >/dev/null 2>&1; then
-    systemctl --user disable --now arch-notebook-automation.timer >/dev/null 2>&1 || true
+    systemctl --user disable --now "$schedule_name.timer" >/dev/null 2>&1 || true
   fi
-  rm -f "$unit_dir/arch-notebook-automation.service" "$unit_dir/arch-notebook-automation.timer"
+  rm -f "$unit_dir/$schedule_name.service" "$unit_dir/$schedule_name.timer"
   if command -v systemctl >/dev/null 2>&1; then
     systemctl --user daemon-reload >/dev/null 2>&1 || true
   fi
-  echo "Removed Arch Notebook SQL automation schedule for this user."
+  if [[ $# -eq 2 ]]; then
+    echo "Removed the Arch Notebook SQL automation schedule for: $case_path"
+  else
+    echo "Removed the legacy Arch Notebook SQL automation schedule for this user."
+  fi
   exit 0
 fi
 
 if [[ "${1:-}" == "--status" ]]; then
-  if [[ $# -ne 1 ]]; then
-    echo "Usage: $0 --status" >&2
+  if [[ $# -gt 2 ]]; then
+    echo "Usage: $0 --status [case-file]" >&2
     exit 2
   fi
   home_dir="${HOME:?HOME must be set}"
@@ -48,9 +89,31 @@ if [[ "${1:-}" == "--status" ]]; then
     /*) ;;
     *) echo "XDG_CONFIG_HOME must be an absolute path." >&2; exit 1 ;;
   esac
-  timer_file="$config_home/systemd/user/arch-notebook-automation.timer"
+  schedule_name="arch-notebook-automation"
+  if [[ $# -eq 2 ]]; then
+    if ! command -v python3 >/dev/null 2>&1; then
+      echo "python3 is required to identify the case schedule." >&2
+      exit 1
+    fi
+    case_path="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$2")"
+    schedule_id="$(python3 - "$case_path" <<'PY'
+import hashlib
+import sys
+print(hashlib.sha256(sys.argv[1].encode()).hexdigest()[:12])
+PY
+)"
+    schedule_name+="-$schedule_id"
+    if [[ ! -r "$config_home/systemd/user/$schedule_name.timer" ]] && legacy_schedule_matches_case "$config_home/systemd/user" "$case_path"; then
+      schedule_name="arch-notebook-automation"
+    fi
+  fi
+  timer_file="$config_home/systemd/user/$schedule_name.timer"
   if [[ ! -r "$timer_file" ]]; then
-    echo "No Arch Notebook SQL automation schedule is installed for this user."
+    if [[ $# -eq 2 ]]; then
+      echo "No Arch Notebook SQL automation schedule is installed for: $case_path"
+    else
+      echo "No legacy Arch Notebook SQL automation schedule is installed for this user."
+    fi
     exit 0
   fi
   cadence="$(awk -F= '/^OnCalendar=/ { print $2; exit }' "$timer_file")"
@@ -58,8 +121,8 @@ if [[ "${1:-}" == "--status" ]]; then
   if command -v systemctl >/dev/null 2>&1; then
     enabled=0
     active=0
-    if systemctl --user is-enabled --quiet arch-notebook-automation.timer; then enabled=1; fi
-    if systemctl --user is-active --quiet arch-notebook-automation.timer; then active=1; fi
+    if systemctl --user is-enabled --quiet "$schedule_name.timer"; then enabled=1; fi
+    if systemctl --user is-active --quiet "$schedule_name.timer"; then active=1; fi
     if (( enabled && active )); then
       state="active and enabled"
     elif (( active )); then
@@ -72,7 +135,11 @@ if [[ "${1:-}" == "--status" ]]; then
   else
     state="configured; systemctl is unavailable"
   fi
-  echo "Arch Notebook SQL schedule: $cadence; $state."
+  if [[ $# -eq 2 ]]; then
+    printf 'Arch Notebook SQL schedule for %s: %s; %s.\n' "$case_path" "$cadence" "$state"
+  else
+    echo "Legacy Arch Notebook SQL schedule: $cadence; $state."
+  fi
   exit 0
 fi
 
@@ -105,7 +172,26 @@ if [[ ! -f "$case_file" || ! -r "$case_file" ]]; then
   echo "Launch Arch Notebook once to create the default case, or pass an existing case file." >&2
   exit 1
 fi
-case_file="$(cd "$(dirname "$case_file")" && pwd)/$(basename "$case_file")"
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "python3 is required to write the systemd user units." >&2
+  exit 1
+fi
+case_file="$(python3 - "$case_file" <<'PY'
+import os
+import sys
+print(os.path.realpath(sys.argv[1]))
+PY
+)"
+schedule_id="$(python3 - "$case_file" <<'PY'
+import hashlib
+import sys
+print(hashlib.sha256(sys.argv[1].encode()).hexdigest()[:12])
+PY
+)"
+schedule_name="arch-notebook-automation-$schedule_id"
+if legacy_schedule_matches_case "${XDG_CONFIG_HOME:-$home_dir/.config}/systemd/user" "$case_file"; then
+  schedule_name="arch-notebook-automation"
+fi
 
 if [[ $# -ge 2 ]]; then
   binary="$2"
@@ -118,10 +204,6 @@ if [[ -z "$binary" || ! -x "$binary" ]]; then
 fi
 binary="$(realpath "$binary")"
 
-if ! command -v python3 >/dev/null 2>&1; then
-  echo "python3 is required to write the systemd user units." >&2
-  exit 1
-fi
 if ! command -v systemctl >/dev/null 2>&1; then
   echo "systemctl is required to enable the user timer." >&2
   exit 1
@@ -141,12 +223,12 @@ esac
 unit_dir="$config_home/systemd/user"
 mkdir -p "$unit_dir"
 
-python3 - "$unit_dir" "$binary" "$case_file" "$schedule" <<'PY'
+python3 - "$unit_dir" "$binary" "$case_file" "$schedule" "$schedule_name" <<'PY'
 import os
 import sys
 import tempfile
 
-unit_dir, binary, case_file, schedule = sys.argv[1:]
+unit_dir, binary, case_file, schedule, schedule_name = sys.argv[1:]
 
 def quote_exec_arg(value: str) -> str:
     if any(ord(character) < 32 or ord(character) == 127 for character in value):
@@ -175,11 +257,11 @@ Description=Schedule Arch Notebook SQL automation
 OnCalendar={schedule}
 Persistent=true
 RandomizedDelaySec=5m
-Unit=arch-notebook-automation.service
+Unit={schedule_name}.service
 
 [Install]
 WantedBy=timers.target
-""".format(schedule=schedule)
+""".format(schedule=schedule, schedule_name=schedule_name)
 
 def replace_atomically(destination: str, contents: str) -> None:
     fd, temporary = tempfile.mkstemp(
@@ -198,16 +280,16 @@ def replace_atomically(destination: str, contents: str) -> None:
         raise
 
 replace_atomically(
-    os.path.join(unit_dir, "arch-notebook-automation.service"), service
+    os.path.join(unit_dir, f"{schedule_name}.service"), service
 )
 replace_atomically(
-    os.path.join(unit_dir, "arch-notebook-automation.timer"), timer
+    os.path.join(unit_dir, f"{schedule_name}.timer"), timer
 )
 PY
 
 systemctl --user daemon-reload
-systemctl --user enable --now arch-notebook-automation.timer
-systemctl --user restart arch-notebook-automation.timer
+systemctl --user enable --now "$schedule_name.timer"
+systemctl --user restart "$schedule_name.timer"
 echo "Enabled $schedule Arch Notebook automation for: $case_file"
-echo "Check status with: systemctl --user status arch-notebook-automation.timer"
-echo "View run output with: journalctl --user -u arch-notebook-automation.service"
+echo "Check status with: systemctl --user status $schedule_name.timer"
+echo "View run output with: journalctl --user -u $schedule_name.service"

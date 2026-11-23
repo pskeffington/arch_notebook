@@ -107,7 +107,7 @@ fn install_automation_schedule_command(case_path: &Path, schedule: &str) -> Resu
     }
 }
 
-fn remove_automation_schedule_command() -> Result<String, String> {
+fn remove_automation_schedule_command(case_path: &Path) -> Result<String, String> {
     let executable =
         env::current_exe().map_err(|error| format!("cannot locate app executable: {error}"))?;
     let mut command: Command;
@@ -119,7 +119,7 @@ fn remove_automation_schedule_command() -> Result<String, String> {
             .join("arch-notebook-install-automation");
         if packaged_installer.is_file() {
             command = Command::new(packaged_installer);
-            command.arg("--remove");
+            command.arg("--remove").arg(case_path);
         } else {
             command = Command::new("bash");
             command
@@ -127,7 +127,8 @@ fn remove_automation_schedule_command() -> Result<String, String> {
                     Path::new(env!("CARGO_MANIFEST_DIR"))
                         .join("scripts/install-linux-automation.sh"),
                 )
-                .arg("--remove");
+                .arg("--remove")
+                .arg(case_path);
         }
     }
     #[cfg(target_os = "macos")]
@@ -143,11 +144,11 @@ fn remove_automation_schedule_command() -> Result<String, String> {
             Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/install-macos-automation.sh")
         };
         command = Command::new("bash");
-        command.arg(installer).arg("--remove");
+        command.arg(installer).arg("--remove").arg(case_path);
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
-        let _ = executable;
+        let _ = (executable, case_path);
         return Err("scheduled SQL automation is supported on Linux and macOS".into());
     }
     let output = command
@@ -170,7 +171,7 @@ fn remove_automation_schedule_command() -> Result<String, String> {
     }
 }
 
-fn check_automation_schedule_command() -> Result<String, String> {
+fn check_automation_schedule_command(case_path: &Path) -> Result<String, String> {
     let executable =
         env::current_exe().map_err(|error| format!("cannot locate app executable: {error}"))?;
     let mut command: Command;
@@ -182,7 +183,7 @@ fn check_automation_schedule_command() -> Result<String, String> {
             .join("arch-notebook-install-automation");
         if packaged_installer.is_file() {
             command = Command::new(packaged_installer);
-            command.arg("--status");
+            command.arg("--status").arg(case_path);
         } else {
             command = Command::new("bash");
             command
@@ -190,7 +191,8 @@ fn check_automation_schedule_command() -> Result<String, String> {
                     Path::new(env!("CARGO_MANIFEST_DIR"))
                         .join("scripts/install-linux-automation.sh"),
                 )
-                .arg("--status");
+                .arg("--status")
+                .arg(case_path);
         }
     }
     #[cfg(target_os = "macos")]
@@ -206,11 +208,11 @@ fn check_automation_schedule_command() -> Result<String, String> {
             Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/install-macos-automation.sh")
         };
         command = Command::new("bash");
-        command.arg(installer).arg("--status");
+        command.arg(installer).arg("--status").arg(case_path);
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
-        let _ = executable;
+        let _ = (executable, case_path);
         return Err("scheduled SQL automation is supported on Linux and macOS".into());
     }
     let output = command
@@ -565,6 +567,7 @@ struct App {
     automation_job_filter: String,
     automation_run_filter: String,
     automation_run_note_drafts: HashMap<Uuid, String>,
+    automation_run_parameter_text: String,
     automation_job_import_path: String,
     automation_job_export_path: String,
     automation_job_import_name: String,
@@ -960,6 +963,7 @@ impl Default for App {
             automation_job_filter: String::new(),
             automation_run_filter: String::new(),
             automation_run_note_drafts: HashMap::new(),
+            automation_run_parameter_text: String::new(),
             automation_job_import_path: String::new(),
             automation_job_export_path: data_dir
                 .join("automation-job.json")
@@ -1251,6 +1255,7 @@ impl App {
             automation_job_filter: String::new(),
             automation_run_filter: String::new(),
             automation_run_note_drafts: HashMap::new(),
+            automation_run_parameter_text: String::new(),
             automation_job_import_path: String::new(),
             automation_job_export_path: String::new(),
             automation_job_import_name: String::new(),
@@ -1314,11 +1319,12 @@ impl App {
         if self.automation_worker.is_some() || self.automation_schedule_worker.is_some() {
             return;
         }
+        let case_path = PathBuf::from(self.case_path.trim());
         let (sender, receiver) = mpsc::channel();
         self.automation_schedule_worker = Some(receiver);
         self.status = "REMOVING SQL AUTOMATION SCHEDULE".into();
         thread::spawn(move || {
-            let result = remove_automation_schedule_command();
+            let result = remove_automation_schedule_command(&case_path);
             let _ = sender.send(result);
         });
     }
@@ -1327,11 +1333,12 @@ impl App {
         if self.automation_worker.is_some() || self.automation_schedule_worker.is_some() {
             return;
         }
+        let case_path = PathBuf::from(self.case_path.trim());
         let (sender, receiver) = mpsc::channel();
         self.automation_schedule_worker = Some(receiver);
         self.status = "CHECKING SQL AUTOMATION SCHEDULE".into();
         thread::spawn(move || {
-            let result = check_automation_schedule_command();
+            let result = check_automation_schedule_command(&case_path);
             let _ = sender.send(result);
         });
     }
@@ -3592,7 +3599,19 @@ impl App {
     }
 
     fn start_automation_jobs(&mut self, job_ids: Vec<Uuid>, batch: bool) {
-        self.start_automation_work(job_ids, None, batch);
+        let parameter_overrides = match parse_sql_parameters(&self.automation_run_parameter_text) {
+            Ok(parameters) => parameters,
+            Err(error) => {
+                self.status = format!("AUTOMATION OVERRIDE INVALID · {error}");
+                return;
+            }
+        };
+        if !parameter_overrides.is_empty() && job_ids.len() != 1 {
+            self.status =
+                "AUTOMATION OVERRIDE NEEDS ONE JOB · FILTER OR RUN JOBS INDIVIDUALLY".into();
+            return;
+        }
+        self.start_automation_work(job_ids, None, batch, parameter_overrides);
     }
 
     fn sql_ui_request(&self) -> SqlUiRequest {
@@ -3684,6 +3703,7 @@ impl App {
         job_ids: Vec<Uuid>,
         replay_run_id: Option<Uuid>,
         batch: bool,
+        parameter_overrides: Vec<(String, String)>,
     ) {
         if self.automation_worker.is_some() {
             self.status = "AUTOMATION ALREADY RUNNING".into();
@@ -3748,6 +3768,19 @@ impl App {
                         .collect();
                     if jobs.len() != job_ids.len() {
                         return Err("one or more automation jobs no longer exist; reload the case".into());
+                    }
+                    for (job, _) in &mut jobs {
+                        for (name, value) in &parameter_overrides {
+                            if let Some((_, configured_value)) = job
+                                .parameters
+                                .iter_mut()
+                                .find(|(configured_name, _)| configured_name == name)
+                            {
+                                *configured_value = value.clone();
+                            } else {
+                                job.parameters.push((name.clone(), value.clone()));
+                            }
+                        }
                     }
                     if let Some(run_id) = replay_run_id {
                         let prior_run = worker
@@ -3890,6 +3923,7 @@ impl App {
             });
         match spawn_result {
             Ok(_) => {
+                self.automation_run_parameter_text.clear();
                 self.automation_worker = Some(receiver);
                 self.automation_progress = Some(progress);
                 self.status =
@@ -3930,7 +3964,7 @@ impl App {
     }
 
     fn replay_saved_automation_run(&mut self, run_id: Uuid) {
-        self.start_automation_work(Vec::new(), Some(run_id), false);
+        self.start_automation_work(Vec::new(), Some(run_id), false, Vec::new());
     }
 
     fn execute_automation_job(&mut self, job: &AutomationJob) -> (bool, String) {
@@ -7405,6 +7439,8 @@ impl eframe::App for App {
                             if self.data_mode==DataMode::Automation {
                                 let automation_case_saved =
                                     self.disk_case_json.is_some() && !self.has_unsaved_changes();
+                                let has_run_parameter_overrides =
+                                    !self.automation_run_parameter_text.trim().is_empty();
                                 if !automation_case_saved {
                                     ui.horizontal(|ui| {
                                         ui.label(egui::RichText::new(
@@ -7422,6 +7458,21 @@ impl eframe::App for App {
                                     self.editing_automation_job.is_some() && !editing_saved_job;
                                 ui.label(egui::RichText::new("REPEATABLE SQL INGESTION JOBS").strong().color(cyan));
                                 ui.label(egui::RichText::new("Jobs are saved in this case file. Run them here or from a script with the command-line runner.").small().color(muted));
+                                egui::CollapsingHeader::new("One-run SQL parameter overrides (optional)")
+                                    .id_salt("automation_run_parameter_overrides")
+                                    .default_open(!self.automation_run_parameter_text.is_empty())
+                                    .show(ui, |ui| {
+                                        ui.label(egui::RichText::new("Enter name=value lines. Overrides apply to the next run that selects exactly one job, are recorded with its effective SQL configuration, and do not change saved jobs or scheduled runs. Clear them before a multi-job batch.").small().color(muted));
+                                        ui.horizontal(|ui| {
+                                            ui.add(egui::TextEdit::multiline(&mut self.automation_run_parameter_text)
+                                                .desired_width(canvas_w - 130.0)
+                                                .desired_rows(2)
+                                                .code_editor());
+                                            if ui.button("Clear overrides").clicked() {
+                                                self.automation_run_parameter_text.clear();
+                                            }
+                                        });
+                                    });
                                 ui.horizontal(|ui| {
                                     ui.label("Import JSON");
                                     ui.add(egui::TextEdit::singleline(&mut self.automation_job_import_path).desired_width(300.0));
@@ -7516,13 +7567,18 @@ impl eframe::App for App {
                                     ui.label(format!("Batch includes {enabled_job_count} enabled jobs"));
                                     if ui
                                         .add_enabled(
-                                            enabled_job_count > 0 && automation_case_saved,
+                                            enabled_job_count > 0
+                                                && automation_case_saved
+                                                && (enabled_job_count == 1
+                                                    || !has_run_parameter_overrides),
                                             egui::Button::new("Run enabled jobs and save"),
                                         )
-                                        .on_disabled_hover_text(if automation_case_saved {
+                                        .on_disabled_hover_text(if !automation_case_saved {
+                                            "Save the case and job changes before running automation."
+                                        } else if enabled_job_count == 0 {
                                             "Enable at least one job before running the batch."
                                         } else {
-                                            "Save the case and job changes before running automation."
+                                            "Clear one-run overrides or run a single job individually."
                                         })
                                         .clicked()
                                     {
@@ -7567,7 +7623,7 @@ impl eframe::App for App {
                                         self.remove_automation_schedule();
                                     }
                                 });
-                                ui.label(egui::RichText::new("One Arch Notebook schedule is installed per user. Installing from another case replaces its case and cadence. Install runs a read-only SQL preflight; remove disables this user's Linux systemd timer or macOS LaunchAgent.").small().color(muted));
+                                ui.label(egui::RichText::new("Schedules are installed per case, so multiple cases can run independently. Install checks enabled queries read-only; Check and Remove apply to the case file currently open here.").small().color(muted));
                                 ui.add_space(8.0);
                                 ui.horizontal(|ui| {
                                     ui.label(egui::RichText::new("JOBS").small().strong().color(cyan));
@@ -7619,13 +7675,17 @@ impl eframe::App for App {
                                     if ui
                                         .add_enabled(
                                             !visible_enabled_jobs.is_empty()
-                                                && automation_case_saved,
+                                                && automation_case_saved
+                                                && (visible_enabled_jobs.len() == 1
+                                                    || !has_run_parameter_overrides),
                                             egui::Button::new("Run visible enabled jobs and save"),
                                         )
-                                        .on_disabled_hover_text(if automation_case_saved {
+                                        .on_disabled_hover_text(if !automation_case_saved {
+                                            "Save the case and job changes before running automation."
+                                        } else if visible_enabled_jobs.is_empty() {
                                             "Enable a visible job before running this batch."
                                         } else {
-                                            "Save the case and job changes before running automation."
+                                            "Clear one-run overrides or run a single visible job individually."
                                         })
                                         .clicked()
                                     {
