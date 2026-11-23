@@ -12,7 +12,10 @@ use std::{
     env, fs,
     io::Write,
     path::{Path, PathBuf},
-    sync::mpsc::{self, Receiver},
+    sync::{
+        Arc, Mutex,
+        mpsc::{self, Receiver},
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -282,6 +285,7 @@ struct App {
         Option<usize>,
     )>,
     automation_worker: Option<Receiver<Result<AutomationWorkerResult, String>>>,
+    automation_progress: Option<Arc<Mutex<String>>>,
 }
 
 enum AutomationWorkerResult {
@@ -598,6 +602,7 @@ impl Default for App {
             editing_automation_job: None,
             automation_editor_before_edit: None,
             automation_worker: None,
+            automation_progress: None,
         }
     }
 }
@@ -863,6 +868,7 @@ impl App {
             editing_automation_job: None,
             automation_editor_before_edit: None,
             automation_worker: None,
+            automation_progress: None,
         }
     }
 
@@ -2782,13 +2788,21 @@ impl App {
             .selected_link
             .and_then(|index| self.case.links.get(index))
             .cloned();
+        let progress = Arc::new(Mutex::new("Waiting for the case lock".to_owned()));
+        let worker_progress = Arc::clone(&progress);
         let (sender, receiver) = mpsc::channel();
         let spawn_result = thread::Builder::new()
             .name("arch-notebook-automation".into())
             .spawn(move || {
+                let update_progress = |message: String| {
+                    if let Ok(mut progress) = worker_progress.lock() {
+                        *progress = message;
+                    }
+                };
                 let result = (|| -> Result<AutomationWorkerResult, String> {
                     let path = Path::new(&case_path);
                     let _case_lock = lock_automation_case(path)?;
+                    update_progress("Reading the saved case".into());
                     let disk_json = fs::read_to_string(path)
                         .map_err(|error| format!("cannot read case: {error}"))?;
                     if disk_json != expected_disk_json {
@@ -2829,7 +2843,12 @@ impl App {
                     let job_count = jobs.len();
                     let job_names: Vec<_> = jobs.iter().map(|(job, _)| job.name.clone()).collect();
                     let mut passed = 0;
-                    for (job, rerun_of) in jobs {
+                    for (index, (job, rerun_of)) in jobs.into_iter().enumerate() {
+                        update_progress(format!(
+                            "Running job {} of {job_count} · {}",
+                            index + 1,
+                            job.name
+                        ));
                         if worker.run_automation_job_cli(&job).0 {
                             passed += 1;
                         }
@@ -2842,6 +2861,11 @@ impl App {
                             .map_err(|error| error.to_string())?;
                         save_case_atomically(path, &worker.case)?;
                         worker.disk_case_json = Some(serialized.clone());
+                        update_progress(format!(
+                            "Saved checkpoint {} of {job_count} · {}",
+                            index + 1,
+                            job.name
+                        ));
                     }
                     let status = if batch {
                         format!(
@@ -2880,6 +2904,7 @@ impl App {
         match spawn_result {
             Ok(_) => {
                 self.automation_worker = Some(receiver);
+                self.automation_progress = Some(progress);
                 self.status =
                     "AUTOMATION RUNNING · CASE LOCKED · CHECKPOINTS SAVED AFTER EACH JOB".into();
             }
@@ -5520,6 +5545,7 @@ impl eframe::App for App {
             match worker_state {
                 Ok(Ok(result)) => {
                     self.automation_worker = None;
+                    self.automation_progress = None;
                     match result {
                         AutomationWorkerResult::SavedCase {
                             case,
@@ -5562,10 +5588,12 @@ impl eframe::App for App {
                 }
                 Ok(Err(error)) => {
                     self.automation_worker = None;
+                    self.automation_progress = None;
                     self.status = format!("AUTOMATION FAILED · {error}");
                 }
                 Err(mpsc::TryRecvError::Disconnected) => {
                     self.automation_worker = None;
+                    self.automation_progress = None;
                     self.status =
                         "AUTOMATION FAILED · background worker stopped unexpectedly".into();
                 }
@@ -5581,6 +5609,14 @@ impl eframe::App for App {
                             ui.label("The window remains responsive. Editing is paused until the query finishes.");
                             if self.status.starts_with("AUTOMATION RUNNING") {
                                 ui.label("Automation saves a checkpoint after each job.");
+                            }
+                            if let Some(progress) = self
+                                .automation_progress
+                                .as_ref()
+                                .and_then(|progress| progress.lock().ok().map(|value| value.clone()))
+                            {
+                                ui.add_space(8.0);
+                                ui.label(progress);
                             }
                             ui.add_space(12.0);
                             ui.label(&self.status);
