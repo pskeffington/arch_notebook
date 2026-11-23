@@ -69,7 +69,7 @@ In **SQL Review**, comparisons default to the immediately preceding capture in t
 
 ### CLI snapshot export
 
-Export one immutable SQL capture without opening the desktop app. The output contains the captured connection fields plus snapshot provenance, query, typed parameter values, and skipped-row count on each record. An empty capture still exports its header row. A `.tsv` or `.tab` output path selects tab-separated output; other paths use CSV. Export is atomic and refuses to overwrite the case file or any saved SQLite source.
+Export one immutable SQL capture without opening the desktop app. The output contains the captured connection fields plus snapshot provenance, query, typed parameter values, SQLite schema version, and skipped-row count on each record. An empty capture still exports its header row. A `.tsv` or `.tab` output path selects tab-separated output; other paths use CSV. Export is atomic and refuses to overwrite the case file or any saved SQLite source.
 
 ```sh
 cargo run --offline -- --export-sql-snapshot harbor-light.case.json <snapshot-id> capture.csv --json

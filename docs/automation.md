@@ -1,6 +1,6 @@
 # Automated SQL ingestion
 
-Automation JSON outcomes expose `entity_properties_changed` and `connection_properties_changed` separately in snapshot delta counts. Entity-property changes describe SQL supplied source or target attributes; relationship-property changes describe connection attributes. Each changed record includes its current and previous values and the matching change kind. Run-history CSV/TSV exports include both entity-property and relationship-property counts; JSON deltas retain the before/current property values.
+Automation JSON outcomes expose `entity_properties_changed` and `connection_properties_changed` separately in snapshot delta counts. Entity-property changes describe SQL supplied source or target attributes; relationship-property changes describe connection attributes. Each changed record includes its current and previous values and the matching change kind. Run-history CSV/TSV exports include entity-property and relationship-property counts plus the current and baseline SQLite schema versions and a drift flag; JSON deltas retain the schema-version comparison and before/current property values.
 
 ## Review and preflight
 
