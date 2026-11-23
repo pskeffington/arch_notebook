@@ -7274,6 +7274,18 @@ impl eframe::App for App {
                             ui.horizontal(|ui|{ui.label("Case file");ui.add(egui::TextEdit::singleline(&mut self.case_path_input).desired_width(260.0));ui.label("Description");ui.add(egui::TextEdit::singleline(&mut self.case.description).desired_width(260.0));});
                             ui.horizontal(|ui|{ui.label("Import path");ui.add(egui::TextEdit::singleline(&mut self.import_path).desired_width(180.0));ui.label("Export path");ui.add(egui::TextEdit::singleline(&mut self.export_path).desired_width(180.0));ui.label("GraphML");ui.add(egui::TextEdit::singleline(&mut self.graphml_export_path).desired_width(180.0));});
                             if self.data_mode==DataMode::Automation {
+                                let automation_case_saved =
+                                    self.disk_case_json.is_some() && !self.has_unsaved_changes();
+                                if !automation_case_saved {
+                                    ui.horizontal(|ui| {
+                                        ui.label(egui::RichText::new(
+                                            "Save this case before running SQL automation.",
+                                        ).color(egui::Color32::from_rgb(237, 184, 88)));
+                                        if ui.button("Save case to run jobs").clicked() {
+                                            self.save();
+                                        }
+                                    });
+                                }
                                 let editing_saved_job = self.editing_automation_job.is_some_and(|id| {
                                     self.case.automation_jobs.iter().any(|job| job.id == id)
                                 });
@@ -7375,9 +7387,14 @@ impl eframe::App for App {
                                     ui.label(format!("Batch includes {enabled_job_count} enabled jobs"));
                                     if ui
                                         .add_enabled(
-                                            enabled_job_count > 0,
+                                            enabled_job_count > 0 && automation_case_saved,
                                             egui::Button::new("Run enabled jobs and save"),
                                         )
+                                        .on_disabled_hover_text(if automation_case_saved {
+                                            "Enable at least one job before running the batch."
+                                        } else {
+                                            "Save the case and job changes before running automation."
+                                        })
                                         .clicked()
                                     {
                                         self.start_enabled_automation_jobs();
@@ -7472,9 +7489,15 @@ impl eframe::App for App {
                                     ));
                                     if ui
                                         .add_enabled(
-                                            !visible_enabled_jobs.is_empty(),
+                                            !visible_enabled_jobs.is_empty()
+                                                && automation_case_saved,
                                             egui::Button::new("Run visible enabled jobs and save"),
                                         )
+                                        .on_disabled_hover_text(if automation_case_saved {
+                                            "Enable a visible job before running this batch."
+                                        } else {
+                                            "Save the case and job changes before running automation."
+                                        })
                                         .clicked()
                                     {
                                         self.start_automation_jobs(visible_enabled_jobs, true);
@@ -7535,7 +7558,7 @@ impl eframe::App for App {
                                         ui.label(format!("{} · {} · {} · min {} · max connections {} · max regressions {} · max skipped rows {}",job.name,job.series,job.database_path,job.minimum_connections,job.maximum_connections.map(|value|value.to_string()).unwrap_or_else(||"unlimited".into()),job.maximum_regressions.map(|value|value.to_string()).unwrap_or_else(||"unlimited".into()),job.maximum_skipped_rows.map(|value|value.to_string()).unwrap_or_else(||"unlimited".into())));
                                         if ui.small_button("Validate").clicked(){action=Some(("validate".into(),job.id));}
                                         if ui.small_button("Edit").clicked(){action=Some(("edit".into(),job.id));}
-                                        if ui.small_button("Run and save").clicked(){action=Some(("run".into(),job.id));}
+                                        if ui.add_enabled(automation_case_saved,egui::Button::new("Run and save")).on_disabled_hover_text("Save the case and job changes before running automation.").clicked(){action=Some(("run".into(),job.id));}
                                         if ui.small_button("Export").on_hover_text("Export this SQL job as a portable JSON package").clicked(){action=Some(("export".into(),job.id));}
                                         if let Some(run_id) = latest_run_id
                                             && ui.small_button("View latest run").clicked()
