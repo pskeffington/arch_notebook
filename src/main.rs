@@ -2907,8 +2907,10 @@ impl App {
                                     })
                                     .unwrap_or_default();
                                 format!(
-                                    "{} connections · {} skipped · {regressions} regressions",
-                                    snapshot.connections.len(), snapshot.skipped_rows
+                                    "{} connections · {} skipped · {} · {regressions} regressions",
+                                    snapshot.connections.len(),
+                                    snapshot.skipped_rows,
+                                    snapshot_result_quality_label(snapshot_result_quality(snapshot))
                                 )
                             },
                         );
@@ -5465,6 +5467,29 @@ fn snapshot_delta_json(
     })
 }
 
+fn snapshot_result_quality(snapshot: &ConnectionSnapshot) -> &'static str {
+    if snapshot.connections.is_empty() {
+        if snapshot.skipped_rows == 0 {
+            "empty_result"
+        } else {
+            "all_rows_skipped"
+        }
+    } else if snapshot.skipped_rows == 0 {
+        "usable"
+    } else {
+        "partially_skipped"
+    }
+}
+
+fn snapshot_result_quality_label(quality: &str) -> &'static str {
+    match quality {
+        "empty_result" => "EMPTY RESULT",
+        "all_rows_skipped" => "ALL ROWS SKIPPED",
+        "partially_skipped" => "PARTIAL SKIPS",
+        _ => "USABLE RESULT",
+    }
+}
+
 fn automation_outcome_json(
     job: &AutomationJob,
     success: bool,
@@ -5492,19 +5517,7 @@ fn automation_outcome_json(
             .unwrap_or_default() as usize;
     let connection_count = snapshot.map(|snapshot| snapshot.connections.len());
     let skipped_rows = snapshot.map(|snapshot| snapshot.skipped_rows);
-    let result_quality = snapshot.map(|snapshot| {
-        if snapshot.connections.is_empty() {
-            if snapshot.skipped_rows == 0 {
-                "empty_result"
-            } else {
-                "all_rows_skipped"
-            }
-        } else if snapshot.skipped_rows == 0 {
-            "usable"
-        } else {
-            "partially_skipped"
-        }
-    });
+    let result_quality = snapshot.map(snapshot_result_quality);
     serde_json::json!({
         "schema_version": 1,
         "status": if success { "PASS" } else { "FAIL" },
@@ -6150,9 +6163,18 @@ impl eframe::App for App {
                                 egui::ScrollArea::vertical().max_height(210.0).show(ui, |ui| {
                                     for run in self.case.automation_runs.iter().rev() {
                                         let result = if run.success { "PASS" } else { "FAIL" };
+                                        let snapshot = run
+                                            .snapshot_id
+                                            .and_then(|id| self.case.snapshots.iter().find(|snapshot| snapshot.id == id))
+                                            .or_else(|| run.snapshot_index.and_then(|index| self.case.snapshots.get(index)));
+                                        let quality = snapshot
+                                            .map(snapshot_result_quality)
+                                            .map(snapshot_result_quality_label)
+                                            .unwrap_or("NO SNAPSHOT");
                                         egui::CollapsingHeader::new(format!(
-                                            "{result} · {} · {}",
-                                            run.job_name, run.started_at
+                                            "{result} · {quality} · {} · {}",
+                                            run.job_name,
+                                            run.started_at
                                         ))
                                         .id_salt(("automation_run", run.id))
                                         .show(ui, |ui| {
