@@ -595,6 +595,8 @@ struct App {
     import_inspection_progress: Option<Arc<std::sync::atomic::AtomicUsize>>,
     import_column_mapping: ImportColumnMapping,
     import_spec_name: String,
+    import_design_package_path: String,
+    import_design_package_name: String,
     selected_import_spec: Option<Uuid>,
     show_import_wizard: bool,
     export_path: String,
@@ -990,6 +992,8 @@ impl Default for App {
             import_inspection_progress: None,
             import_column_mapping: ImportColumnMapping::default(),
             import_spec_name: String::new(),
+            import_design_package_path: String::new(),
+            import_design_package_name: String::new(),
             selected_import_spec: None,
             show_import_wizard: false,
             export_path: data_dir.join("chart-export.csv").to_string_lossy().into_owned(),
@@ -1287,6 +1291,8 @@ impl App {
             import_inspection_progress: None,
             import_column_mapping: ImportColumnMapping::default(),
             import_spec_name: String::new(),
+            import_design_package_path: String::new(),
+            import_design_package_name: String::new(),
             selected_import_spec: None,
             show_import_wizard: false,
             export_path: String::new(),
@@ -1767,6 +1773,20 @@ impl App {
             self.status = "IMPORT DESIGN NOT SAVED · enter a design name".into();
             return;
         }
+        let header_signature = delimited_header_signature(&self.import_headers);
+        if !import_design_mapping_matches_header_signature(
+            &self.import_column_mapping,
+            &header_signature,
+        ) || !import_row_filters_valid(
+            &self.import_column_mapping.row_filters,
+            &self.import_headers,
+        ) || !import_value_transforms_valid(
+            &self.import_column_mapping.value_transforms,
+            &self.import_headers,
+        ) {
+            self.status = "IMPORT DESIGN NOT SAVED · fix the column mapping, row filters, and value transforms".into();
+            return;
+        }
         if self.case.import_specifications.iter().any(|spec| {
             spec.name.eq_ignore_ascii_case(name) && Some(spec.id) != self.selected_import_spec
         }) {
@@ -1781,18 +1801,82 @@ impl App {
         }) {
             spec.name = name.to_owned();
             spec.mapping = self.import_column_mapping.clone();
-            spec.header_signature = delimited_header_signature(&self.import_headers);
+            spec.header_signature = header_signature;
             self.status = format!("IMPORT DESIGN UPDATED · {name}");
         } else {
             let spec = ImportSpecification {
                 id: Uuid::new_v4(),
                 name: name.to_owned(),
                 mapping: self.import_column_mapping.clone(),
-                header_signature: delimited_header_signature(&self.import_headers),
+                header_signature,
             };
             self.selected_import_spec = Some(spec.id);
             self.case.import_specifications.push(spec);
             self.status = format!("IMPORT DESIGN SAVED · {name}");
+        }
+    }
+
+    fn export_selected_import_design(&mut self) {
+        let output_path = self.import_design_package_path.trim();
+        if output_path.is_empty() {
+            self.status = "IMPORT DESIGN EXPORT FAILED · enter a package path".into();
+            return;
+        }
+        let Some(spec) = self
+            .selected_import_spec
+            .and_then(|id| {
+                self.case
+                    .import_specifications
+                    .iter()
+                    .find(|spec| spec.id == id)
+            })
+            .cloned()
+        else {
+            self.status = "IMPORT DESIGN EXPORT FAILED · select a saved design".into();
+            return;
+        };
+        match write_import_design_package(&self.case, &self.case_path, &spec, output_path) {
+            Ok(()) => {
+                self.status = format!("IMPORT DESIGN EXPORTED · {} · {output_path}", spec.name)
+            }
+            Err(error) => self.status = format!("IMPORT DESIGN EXPORT FAILED · {error}"),
+        }
+    }
+
+    fn import_import_design_package(&mut self) {
+        let input_path = self.import_design_package_path.trim().to_owned();
+        if input_path.is_empty() {
+            self.status = "IMPORT DESIGN IMPORT FAILED · enter a package path".into();
+            return;
+        }
+        let name_override = (!self.import_design_package_name.trim().is_empty())
+            .then(|| self.import_design_package_name.trim().to_owned());
+        let result = read_import_design_package(&input_path).and_then(|package| {
+            import_design_from_package(package.design, &self.case, name_override.as_deref())
+        });
+        match result {
+            Ok(spec) => {
+                let name = spec.name.clone();
+                let matches_current_headers = !self.import_headers.is_empty()
+                    && spec.header_signature == delimited_header_signature(&self.import_headers);
+                if matches_current_headers {
+                    self.selected_import_spec = Some(spec.id);
+                    self.import_spec_name = name.clone();
+                    self.import_column_mapping = spec.mapping.clone();
+                    remap_import_mapping_headers(
+                        &mut self.import_column_mapping,
+                        &self.import_headers,
+                    );
+                }
+                self.case.import_specifications.push(spec);
+                self.import_design_package_name.clear();
+                self.status = if matches_current_headers {
+                    format!("IMPORT DESIGN IMPORTED AND APPLIED · {name}")
+                } else {
+                    format!("IMPORT DESIGN IMPORTED · {name} · SELECT IT FOR MATCHING FILE HEADERS")
+                };
+            }
+            Err(error) => self.status = format!("IMPORT DESIGN IMPORT FAILED · {error}"),
         }
     }
 
@@ -9731,6 +9815,8 @@ impl eframe::App for App {
             let mut import_now = false;
             let mut cancel_import = false;
             let mut save_import_spec = false;
+            let mut import_design_package = false;
+            let mut export_import_design = false;
             let import_specs = self.case.import_specifications.clone();
             egui::Window::new("Import design")
                 .open(&mut open)
@@ -9749,6 +9835,19 @@ impl eframe::App for App {
                         &mut self.import_column_mapping.trim_whitespace,
                         "Trim whitespace from imported values",
                     );
+                    let design_ready = !self.import_headers.is_empty()
+                        && import_design_mapping_matches_header_signature(
+                            &self.import_column_mapping,
+                            &delimited_header_signature(&self.import_headers),
+                        )
+                        && import_row_filters_valid(
+                            &self.import_column_mapping.row_filters,
+                            &self.import_headers,
+                        )
+                        && import_value_transforms_valid(
+                            &self.import_column_mapping.value_transforms,
+                            &self.import_headers,
+                        );
                     ui.horizontal(|ui| {
                         ui.label("Saved design");
                         egui::ComboBox::from_id_salt("saved_import_design")
@@ -9771,8 +9870,39 @@ impl eframe::App for App {
                             });
                         ui.label("Design name");
                         ui.add(egui::TextEdit::singleline(&mut self.import_spec_name).desired_width(180.0));
-                        if ui.button("Save design").clicked() {
+                        if ui
+                            .add_enabled(design_ready, egui::Button::new("Save design"))
+                            .on_disabled_hover_text(
+                                "Fix the column mapping, row filters, and value transforms first.",
+                            )
+                            .clicked()
+                        {
                             save_import_spec = true;
+                        }
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Design package");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.import_design_package_path)
+                                .hint_text("Path to .json package")
+                                .desired_width(300.0),
+                        );
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.import_design_package_name)
+                                .hint_text("Optional imported name")
+                                .desired_width(170.0),
+                        );
+                        if ui.button("Import package").clicked() {
+                            import_design_package = true;
+                        }
+                        if ui
+                            .add_enabled(
+                                self.selected_import_spec.is_some(),
+                                egui::Button::new("Export selected"),
+                            )
+                            .clicked()
+                        {
+                            export_import_design = true;
                         }
                     });
                     egui::CollapsingHeader::new("Preview first rows")
@@ -10117,6 +10247,12 @@ impl eframe::App for App {
             self.show_import_wizard = open;
             if save_import_spec {
                 self.save_import_specification();
+            }
+            if import_design_package {
+                self.import_import_design_package();
+            }
+            if export_import_design {
+                self.export_selected_import_design();
             }
             if import_now {
                 self.import_delimited();
@@ -13125,7 +13261,7 @@ fn export_sql_comparison_cli(
     Ok(())
 }
 
-fn lock_automation_case(path: &Path) -> Result<fs::File, String> {
+fn automation_lock_path(path: &Path) -> Result<PathBuf, String> {
     if path.as_os_str().is_empty() {
         return Err("case path cannot be empty".into());
     }
@@ -13155,6 +13291,11 @@ fn lock_automation_case(path: &Path) -> Result<fs::File, String> {
     lock_name.push(".automation.lock");
     let mut lock_path = case_path;
     lock_path.set_file_name(lock_name);
+    Ok(lock_path)
+}
+
+fn lock_automation_case(path: &Path) -> Result<fs::File, String> {
+    let lock_path = automation_lock_path(path)?;
     let lock_file = fs::OpenOptions::new()
         .read(true)
         .write(true)
@@ -13611,6 +13752,10 @@ fn write_automation_job_package(
     if paths_refer_to_same_file(case_path, output_path) {
         return Err("job package output cannot replace its case file".into());
     }
+    let lock_path = automation_lock_path(Path::new(case_path))?;
+    if paths_refer_to_same_file(&lock_path.to_string_lossy(), output_path) {
+        return Err("job package output cannot replace the case automation lock".into());
+    }
     let output_replaces_source = case.automation_jobs.iter().any(|job| {
         let source = sqlite_database_identity_path(&job.database_path, case_path);
         paths_refer_to_same_file(&source.to_string_lossy(), output_path)
@@ -13670,13 +13815,112 @@ fn import_design_from_package(
         .into_iter()
         .map(|header| header.trim().to_ascii_lowercase())
         .collect();
+    if header_signature.iter().any(String::is_empty) {
+        return Err("import design package contains a blank column header".into());
+    }
+    if header_signature.is_empty() {
+        return Err("import design package must include a header signature".into());
+    }
     header_signature.sort();
-    header_signature.dedup();
+    if header_signature.windows(2).any(|pair| pair[0] == pair[1]) {
+        return Err("import design package contains duplicate column headers".into());
+    }
+    if !import_design_mapping_matches_header_signature(&definition.mapping, &header_signature) {
+        return Err(
+            "import design package mapping refers to a column outside its header signature".into(),
+        );
+    }
     Ok(ImportSpecification {
         id: Uuid::new_v4(),
         name: definition.name,
         mapping: definition.mapping,
         header_signature,
+    })
+}
+
+fn import_design_mapping_matches_header_signature(
+    mapping: &ImportColumnMapping,
+    header_signature: &[String],
+) -> bool {
+    let available: HashSet<&str> = header_signature.iter().map(String::as_str).collect();
+    let source_present = if mapping.source.trim().is_empty() {
+        ["source", "from", "entity_a"]
+            .iter()
+            .any(|alias| available.contains(alias))
+    } else {
+        available.contains(mapping.source.trim().to_ascii_lowercase().as_str())
+    };
+    let target_present = if mapping.target.trim().is_empty() {
+        ["target", "to", "entity_b"]
+            .iter()
+            .any(|alias| available.contains(alias))
+    } else {
+        available.contains(mapping.target.trim().to_ascii_lowercase().as_str())
+    };
+    let record_type_present = if mapping.record_type.trim().is_empty() {
+        available.contains("record_type")
+    } else {
+        available.contains(mapping.record_type.trim().to_ascii_lowercase().as_str())
+    };
+    if !source_present || (!target_present && !record_type_present) {
+        return false;
+    }
+    let mut mapped_columns = vec![
+        mapping.source.as_str(),
+        mapping.target.as_str(),
+        mapping.source_type.as_str(),
+        mapping.target_type.as_str(),
+        mapping.relationship.as_str(),
+        mapping.date.as_str(),
+        mapping.confidence.as_str(),
+        mapping.direction.as_str(),
+        mapping.connection_id.as_str(),
+        mapping.notes.as_str(),
+        mapping.source_notes.as_str(),
+        mapping.source_reference.as_str(),
+        mapping.ingest_source.as_str(),
+        mapping.record_type.as_str(),
+        mapping.source_entity_id.as_str(),
+        mapping.target_entity_id.as_str(),
+        mapping.source_external_ids.as_str(),
+        mapping.target_external_ids.as_str(),
+        mapping.source_detail.as_str(),
+        mapping.target_detail.as_str(),
+        mapping.source_aliases.as_str(),
+        mapping.target_aliases.as_str(),
+        mapping.source_color.as_str(),
+        mapping.target_color.as_str(),
+        mapping.source_x.as_str(),
+        mapping.source_y.as_str(),
+        mapping.target_x.as_str(),
+        mapping.target_y.as_str(),
+        mapping.source_position_locked.as_str(),
+        mapping.target_position_locked.as_str(),
+    ];
+    mapped_columns.extend(
+        mapping
+            .entity_attributes
+            .iter()
+            .map(|attribute| attribute.column.as_str()),
+    );
+    mapped_columns.extend(
+        mapping
+            .row_filters
+            .iter()
+            .map(|filter| filter.column.as_str()),
+    );
+    mapped_columns.extend(
+        mapping
+            .value_transforms
+            .iter()
+            .map(|transform| transform.column.as_str()),
+    );
+    mapped_columns.into_iter().all(|column| {
+        if column.trim().is_empty() {
+            return true;
+        }
+        let normalized = column.trim().to_ascii_lowercase();
+        available.contains(normalized.as_str())
     })
 }
 
@@ -13688,6 +13932,10 @@ fn write_import_design_package(
 ) -> Result<(), String> {
     if paths_refer_to_same_file(case_path, output_path) {
         return Err("import design package output cannot replace its case file".into());
+    }
+    let lock_path = automation_lock_path(Path::new(case_path))?;
+    if paths_refer_to_same_file(&lock_path.to_string_lossy(), output_path) {
+        return Err("import design package output cannot replace the case automation lock".into());
     }
     let output_replaces_source = case.automation_jobs.iter().any(|job| {
         let source = sqlite_database_identity_path(&job.database_path, case_path);
