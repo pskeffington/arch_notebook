@@ -8226,6 +8226,17 @@ impl eframe::App for App {
                                     .unwrap_or_else(|| source_filter.clone());
                                 ui.horizontal(|ui| {
                                     ui.label(egui::RichText::new(format!("SQL source filter · {label}")).small().color(cyan));
+                                    if ui.small_button("Review SQL snapshots").clicked() {
+                                        self.sql_snapshot_source = Some(source_filter.clone());
+                                        self.sql_snapshot_index = self
+                                            .case
+                                            .snapshots
+                                            .iter()
+                                            .rposition(|snapshot| snapshot.source_key == source_filter);
+                                        self.sql_delta_filter = SnapshotDeltaFilter::All;
+                                        self.sql_delta_search.clear();
+                                        self.data_mode = DataMode::SqlRegressions;
+                                    }
                                     if ui.small_button("Clear source filter").clicked() {
                                         self.data_source_filter = None;
                                     }
@@ -9497,17 +9508,28 @@ impl eframe::App for App {
                     });
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
-                        let import_rules_valid = import_row_filters_valid(
+                        let import_mapping_valid = import_endpoint_columns_valid(
+                            &self.import_column_mapping,
+                            &self.import_headers,
+                        );
+                        let import_rules_valid = import_mapping_valid
+                            && import_row_filters_valid(
                             &self.import_column_mapping.row_filters,
                             &self.import_headers,
                         ) && import_value_transforms_valid(
                             &self.import_column_mapping.value_transforms,
                             &self.import_headers,
                         );
+                        if !import_mapping_valid {
+                            ui.colored_label(
+                                egui::Color32::from_rgb(236, 174, 83),
+                                "Choose a source column and a target column or record type.",
+                            );
+                        }
                         if ui
                             .add_enabled(import_rules_valid, egui::Button::new("Import into chart"))
                             .on_disabled_hover_text(
-                                "Fix incomplete row filters or value transforms before importing.",
+                                "Fix the endpoint mapping, row filters, or value transforms before importing.",
                             )
                             .clicked()
                         {
@@ -9795,6 +9817,23 @@ where
         }
     }
     Ok(())
+}
+
+fn import_endpoint_columns_valid(mapping: &ImportColumnMapping, headers: &[String]) -> bool {
+    let column_present = |selected: &str, aliases: &[&str]| {
+        if selected.is_empty() {
+            headers.iter().any(|header| {
+                aliases
+                    .iter()
+                    .any(|alias| header.eq_ignore_ascii_case(alias))
+            })
+        } else {
+            headers.iter().any(|header| header == selected)
+        }
+    };
+    column_present(&mapping.source, &["source", "from", "entity_a"])
+        && (column_present(&mapping.target, &["target", "to", "entity_b"])
+            || column_present(&mapping.record_type, &["record_type"]))
 }
 
 fn import_row_filters_valid(filters: &[ImportRowFilter], headers: &[String]) -> bool {
