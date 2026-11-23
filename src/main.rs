@@ -10148,7 +10148,7 @@ impl eframe::App for App {
                                 .into_iter()
                                 .map(|(index, point)| (index, point.distance(pos)))
                                 .min_by(|a, b| a.1.total_cmp(&b.1))
-                                .filter(|(_, distance)| *distance < 20.0)
+                                .filter(|(_, distance)| *distance < 24.0)
                                 .map(|(index, _)| index);
                                 self.selected = None;
                             } else {
@@ -10204,8 +10204,29 @@ impl eframe::App for App {
                         if self.show_timeline {
                             let tr=egui::Rect::from_min_size(rect.left_bottom()-egui::vec2(0.0,105.0),egui::vec2(rect.width(),105.0));
                             p.rect_filled(tr,4.0,egui::Color32::from_rgb(20,32,43));p.text(tr.left_top()+egui::vec2(14.0,14.0),egui::Align2::LEFT_TOP,"EVENT TIMELINE",egui::FontId::proportional(10.0),cyan);
-                            let y=tr.center().y+12.0;p.line_segment([egui::pos2(tr.left()+25.0,y),egui::pos2(tr.right()-25.0,y)],(1.0,muted));
-                            for (index,point) in timeline_event_positions(&self.case.links,tr){let l=&self.case.links[index];let event_color=if self.selected_link==Some(index){cyan}else if l.confidence==1{egui::Color32::from_rgb(223,137,105)}else{egui::Color32::from_rgb(236,174,83)};p.circle_filled(point,5.0,event_color);p.text(point-egui::vec2(0.0,8.0),egui::Align2::CENTER_BOTTOM,&l.label,egui::FontId::proportional(7.0),muted);p.text(point+egui::vec2(0.0,8.0),egui::Align2::CENTER_TOP,&l.date,egui::FontId::proportional(8.0),muted);}
+                            let y=tr.center().y+5.0;p.line_segment([egui::pos2(tr.left()+25.0,y),egui::pos2(tr.right()-25.0,y)],(1.0,muted));
+                            let timeline_events = timeline_event_positions(&self.case.links,tr);
+                            if let Some((first, last)) = timeline_date_bounds(&self.case.links) {
+                                p.text(egui::pos2(tr.left()+25.0,tr.bottom()-6.0),egui::Align2::LEFT_BOTTOM,first,egui::FontId::proportional(8.0),muted);
+                                p.text(egui::pos2(tr.right()-25.0,tr.bottom()-6.0),egui::Align2::RIGHT_BOTTOM,last,egui::FontId::proportional(8.0),muted);
+                            } else {
+                                p.text(egui::pos2(tr.left()+25.0,tr.bottom()-6.0),egui::Align2::LEFT_BOTTOM,"Approximate order · records without valid ISO dates",egui::FontId::proportional(8.0),muted);
+                            }
+                            for (index,point) in timeline_events {let l=&self.case.links[index];let event_color=if self.selected_link==Some(index){cyan}else if l.confidence==1{egui::Color32::from_rgb(223,137,105)}else{egui::Color32::from_rgb(236,174,83)};p.circle_filled(point,5.0,event_color);if self.selected_link==Some(index){p.text(point-egui::vec2(0.0,7.0),egui::Align2::CENTER_BOTTOM,format!("{} · {}",l.date,l.label),egui::FontId::proportional(8.0),egui::Color32::WHITE);}}
+                            if let Some(index) = self.selected_link
+                                && let Some(link) = self.case.links.get(index)
+                            {
+                                let endpoint_name = |id| {
+                                    self.case
+                                        .entities
+                                        .iter()
+                                        .find(|entity| entity.id == id)
+                                        .map(|entity| entity.name.as_str())
+                                        .unwrap_or("(missing entity)")
+                                };
+                                let selected_event = format!("{} · {} · {} · confidence {} · evidence {}", endpoint_name(link.from), link.label, endpoint_name(link.to), link.confidence, if link.source_reference.is_empty() { "none" } else { &link.source_reference });
+                                p.text(egui::pos2(tr.center().x,tr.bottom()-15.0),egui::Align2::CENTER_BOTTOM,selected_event,egui::FontId::proportional(8.0),egui::Color32::WHITE);
+                            }
                         }
                     });
                     ui.allocate_ui_with_layout(egui::vec2(right,avail.y),egui::Layout::top_down(egui::Align::Min),|ui|{
@@ -11376,7 +11397,7 @@ fn timeline_event_positions(links: &[Link], rect: egui::Rect) -> Vec<(usize, egu
     let latest = ordinals.iter().flatten().copied().max();
     let proportional = all_dated && earliest.zip(latest).is_some();
     let fallback_denominator = events.len().saturating_sub(1).max(1) as f32;
-    let mut same_day_occurrences: HashMap<i64, usize> = HashMap::new();
+    let mut same_day_occurrences: HashMap<Option<i64>, usize> = HashMap::new();
     events
         .into_iter()
         .enumerate()
@@ -11394,20 +11415,32 @@ fn timeline_event_positions(links: &[Link], rect: egui::Rect) -> Vec<(usize, egu
             } else {
                 rect.left() + 25.0 + rank as f32 * (rect.width() - 50.0) / fallback_denominator
             };
-            let lane = if proportional {
-                let occurrence = same_day_occurrences
-                    .entry(ordinals[rank].unwrap())
-                    .or_insert(0);
-                let lane = *occurrence;
-                *occurrence += 1;
-                lane % 3
+            let occurrence_key = if proportional {
+                ordinals[rank]
             } else {
-                0
+                Some(rank as i64)
             };
-            let y = rect.center().y + 12.0 + lane as f32 * 7.0;
+            let occurrence = same_day_occurrences.entry(occurrence_key).or_insert(0);
+            let lane = *occurrence;
+            *occurrence += 1;
+            let lane = if proportional { lane } else { 0 };
+            let lane_step =
+                6.0_f32.min((rect.bottom() - rect.center().y - 21.0).max(2.0) / lane.max(1) as f32);
+            let y = rect.center().y + 5.0 + lane as f32 * lane_step;
             (index, egui::pos2(x, y))
         })
         .collect()
+}
+
+fn timeline_date_bounds(links: &[Link]) -> Option<(&str, &str)> {
+    let mut dated: Vec<(&str, i64)> = links
+        .iter()
+        .filter_map(|link| {
+            parse_iso_date_ordinal(&link.date).map(|ordinal| (link.date.as_str(), ordinal))
+        })
+        .collect();
+    dated.sort_by_key(|(_, ordinal)| *ordinal);
+    Some((dated.first()?.0, dated.last()?.0))
 }
 
 fn save_case_atomically(path: &Path, case: &CaseFile) -> Result<(), String> {
