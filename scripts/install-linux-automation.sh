@@ -33,6 +33,49 @@ if [[ "${1:-}" == "--remove" ]]; then
   exit 0
 fi
 
+if [[ "${1:-}" == "--status" ]]; then
+  if [[ $# -ne 1 ]]; then
+    echo "Usage: $0 --status" >&2
+    exit 2
+  fi
+  home_dir="${HOME:?HOME must be set}"
+  case "$home_dir" in
+    /*) ;;
+    *) echo "HOME must be an absolute path." >&2; exit 1 ;;
+  esac
+  config_home="${XDG_CONFIG_HOME:-$home_dir/.config}"
+  case "$config_home" in
+    /*) ;;
+    *) echo "XDG_CONFIG_HOME must be an absolute path." >&2; exit 1 ;;
+  esac
+  timer_file="$config_home/systemd/user/arch-notebook-automation.timer"
+  if [[ ! -r "$timer_file" ]]; then
+    echo "No Arch Notebook SQL automation schedule is installed for this user."
+    exit 0
+  fi
+  cadence="$(awk -F= '/^OnCalendar=/ { print $2; exit }' "$timer_file")"
+  if [[ -z "$cadence" ]]; then cadence="unknown cadence"; fi
+  if command -v systemctl >/dev/null 2>&1; then
+    enabled=0
+    active=0
+    if systemctl --user is-enabled --quiet arch-notebook-automation.timer; then enabled=1; fi
+    if systemctl --user is-active --quiet arch-notebook-automation.timer; then active=1; fi
+    if (( enabled && active )); then
+      state="active and enabled"
+    elif (( active )); then
+      state="active but not enabled"
+    elif (( enabled )); then
+      state="enabled but not active"
+    else
+      state="configured but not active or enabled"
+    fi
+  else
+    state="configured; systemctl is unavailable"
+  fi
+  echo "Arch Notebook SQL schedule: $cadence; $state."
+  exit 0
+fi
+
 if [[ $# -gt 2 ]]; then
   echo "Usage: $0 [case-file] [arch-notebook-binary]" >&2
   exit 2

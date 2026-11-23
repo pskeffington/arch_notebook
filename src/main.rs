@@ -170,6 +170,69 @@ fn remove_automation_schedule_command() -> Result<String, String> {
     }
 }
 
+fn check_automation_schedule_command() -> Result<String, String> {
+    let executable =
+        env::current_exe().map_err(|error| format!("cannot locate app executable: {error}"))?;
+    let mut command: Command;
+    #[cfg(target_os = "linux")]
+    {
+        let packaged_installer = executable
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join("arch-notebook-install-automation");
+        if packaged_installer.is_file() {
+            command = Command::new(packaged_installer);
+            command.arg("--status");
+        } else {
+            command = Command::new("bash");
+            command
+                .arg(
+                    Path::new(env!("CARGO_MANIFEST_DIR"))
+                        .join("scripts/install-linux-automation.sh"),
+                )
+                .arg("--status");
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let contents = executable
+            .parent()
+            .and_then(Path::parent)
+            .ok_or_else(|| "app executable is not inside an application bundle".to_string())?;
+        let packaged_installer = contents.join("Resources/install-macos-automation.sh");
+        let installer = if packaged_installer.is_file() {
+            packaged_installer
+        } else {
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/install-macos-automation.sh")
+        };
+        command = Command::new("bash");
+        command.arg(installer).arg("--status");
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = executable;
+        return Err("scheduled SQL automation is supported on Linux and macOS".into());
+    }
+    let output = command
+        .output()
+        .map_err(|error| format!("could not check schedule status: {error}"))?;
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if output.status.success() {
+        Ok(if stdout.is_empty() {
+            "SQL AUTOMATION SCHEDULE STATUS UNAVAILABLE".into()
+        } else {
+            stdout
+        })
+    } else {
+        Err(if stderr.is_empty() {
+            format!("schedule status command exited with {}", output.status)
+        } else {
+            stderr
+        })
+    }
+}
+
 struct SqlQueryDeadline {
     cancel: mpsc::Sender<()>,
     worker: Option<thread::JoinHandle<()>>,
@@ -1215,6 +1278,19 @@ impl App {
         self.status = "REMOVING SQL AUTOMATION SCHEDULE".into();
         thread::spawn(move || {
             let result = remove_automation_schedule_command();
+            let _ = sender.send(result);
+        });
+    }
+
+    fn check_automation_schedule(&mut self) {
+        if self.automation_worker.is_some() || self.automation_schedule_worker.is_some() {
+            return;
+        }
+        let (sender, receiver) = mpsc::channel();
+        self.automation_schedule_worker = Some(receiver);
+        self.status = "CHECKING SQL AUTOMATION SCHEDULE".into();
+        thread::spawn(move || {
+            let result = check_automation_schedule_command();
             let _ = sender.send(result);
         });
     }
@@ -6489,6 +6565,8 @@ impl eframe::App for App {
                 Ok(Err(error)) => {
                     let verb = if self.status.starts_with("REMOVING") {
                         "SCHEDULE REMOVE FAILED"
+                    } else if self.status.starts_with("CHECKING") {
+                        "SCHEDULE CHECK FAILED"
                     } else {
                         "SCHEDULE INSTALL FAILED"
                     };
@@ -6498,6 +6576,8 @@ impl eframe::App for App {
                 Err(mpsc::TryRecvError::Disconnected) => {
                     let verb = if self.status.starts_with("REMOVING") {
                         "SCHEDULE REMOVE FAILED"
+                    } else if self.status.starts_with("CHECKING") {
+                        "SCHEDULE CHECK FAILED"
                     } else {
                         "SCHEDULE INSTALL FAILED"
                     };
@@ -6511,6 +6591,8 @@ impl eframe::App for App {
                             ui.add_space(ui.available_height() * 0.35);
                             ui.heading(if self.status.starts_with("REMOVING") {
                                 "Removing SQL schedule"
+                            } else if self.status.starts_with("CHECKING") {
+                                "Checking SQL schedule"
                             } else {
                                 "Installing SQL schedule"
                             });
@@ -6519,6 +6601,8 @@ impl eframe::App for App {
                             ui.add_space(10.0);
                             ui.label(if self.status.starts_with("REMOVING") {
                                 "The app is disabling and removing its per-user schedule."
+                            } else if self.status.starts_with("CHECKING") {
+                                "The app is checking the per-user scheduler and installed cadence."
                             } else {
                                 "The installer is checking enabled SQL jobs and updating your user schedule."
                             });
@@ -7077,6 +7161,16 @@ impl eframe::App for App {
                                         && Path::new(self.case_path.trim()).is_file();
                                     if ui.add_enabled(ready, egui::Button::new("Install/update schedule")).clicked() {
                                         self.install_automation_schedule();
+                                    }
+                                    if ui
+                                        .add_enabled(
+                                            self.automation_worker.is_none()
+                                                && self.automation_schedule_worker.is_none(),
+                                            egui::Button::new("Check schedule"),
+                                        )
+                                        .clicked()
+                                    {
+                                        self.check_automation_schedule();
                                     }
                                     if ui
                                         .add_enabled(

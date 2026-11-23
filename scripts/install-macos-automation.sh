@@ -24,6 +24,44 @@ if [[ "${1:-}" == "--remove" ]]; then
   exit 0
 fi
 
+if [[ "${1:-}" == "--status" ]]; then
+  if [[ $# -ne 1 ]]; then
+    echo "Usage: $0 --status" >&2
+    exit 2
+  fi
+  home_dir="${HOME:?HOME must be set}"
+  case "$home_dir" in
+    /*) ;;
+    *) echo "HOME must be an absolute path." >&2; exit 1 ;;
+  esac
+  label="com.archnotebook.automation"
+  plist_path="$home_dir/Library/LaunchAgents/$label.plist"
+  if [[ ! -r "$plist_path" ]]; then
+    echo "No Arch Notebook SQL automation schedule is installed for this user."
+    exit 0
+  fi
+  python3 - "$plist_path" "$label" "gui/$(id -u)" <<'PY'
+import plistlib
+import subprocess
+import sys
+
+plist_path, label, domain = sys.argv[1:]
+with open(plist_path, "rb") as source:
+    settings = plistlib.load(source)
+seconds = settings.get("StartInterval")
+cadence = {3600: "hourly", 86400: "daily", 604800: "weekly"}.get(seconds, f"every {seconds} seconds")
+loaded = subprocess.run(
+    ["launchctl", "print", f"{domain}/{label}"],
+    stdout=subprocess.DEVNULL,
+    stderr=subprocess.DEVNULL,
+    check=False,
+).returncode == 0
+state = "loaded" if loaded else "configured but not loaded in the user LaunchAgent domain"
+print(f"Arch Notebook SQL schedule: {cadence}; {state}.")
+PY
+  exit $?
+fi
+
 if [[ $# -lt 1 || $# -gt 2 ]]; then
   echo "Usage: $0 <case-file> [app-bundle]" >&2
   exit 2
