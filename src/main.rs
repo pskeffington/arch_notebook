@@ -4030,6 +4030,7 @@ impl App {
                         for (label, alias) in [
                             ("Source type", "source_type"),
                             ("Target type", "target_type"),
+                            ("Connection ID", "connection_id"),
                             ("Relationship", "relationship"),
                             ("Date", "date"),
                             ("Confidence", "confidence"),
@@ -4042,11 +4043,27 @@ impl App {
                                 if let Some(expression) = sqlite_query_projection(query, alias) {
                                     ui.monospace(expression);
                                 } else {
-                                    ui.label("Not detected");
+                                    ui.label(match alias {
+                                        "connection_id" => {
+                                            "Not detected · identity derived from typed endpoints, relationship, and direction; duplicate parallel rows fail"
+                                        }
+                                        "relationship" => "Not detected · default: ASSOCIATED WITH",
+                                        "confidence" => "Not detected · default: 2",
+                                        "directed" => "Not detected · default: directed",
+                                        "source_type" | "target_type" => {
+                                            "Not detected · default: ENTITY"
+                                        }
+                                        _ => "Not detected · stored as blank",
+                                    });
                                 }
                             });
                         }
                     });
+                    if query.contains("LEFT JOIN ") {
+                        ui.label(
+                            "Rows whose endpoint expressions evaluate to NULL (including unmatched joined display values) are counted as skipped. Validate to inspect affected records.",
+                        );
+                    }
                     let attribute_projections = sqlite_query_attribute_projections(query);
                     ui.add_space(4.0);
                     if attribute_projections.is_empty() {
