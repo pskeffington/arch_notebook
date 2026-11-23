@@ -3,7 +3,7 @@ use quick_xml::{
     Reader as XmlReader, escape::resolve_predefined_entity, events::Event as XmlEvent,
 };
 use rusqlite::{
-    Connection, OpenFlags, TransactionBehavior, params_from_iter,
+    Connection, InterruptHandle, OpenFlags, TransactionBehavior, params_from_iter,
     types::{Value, ValueRef},
 };
 use serde::{Deserialize, Serialize};
@@ -14,6 +14,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
         mpsc::{self, Receiver},
     },
     thread,
@@ -22,6 +23,50 @@ use std::{
 use uuid::Uuid;
 
 const CURRENT_CASE_FORMAT_VERSION: u32 = 10;
+const SQL_QUERY_TIMEOUT_MINUTES: u64 = 15;
+const SQL_QUERY_TIMEOUT: Duration = Duration::from_secs(SQL_QUERY_TIMEOUT_MINUTES * 60);
+
+fn sql_query_timeout_message() -> String {
+    format!("SQL query exceeded the {SQL_QUERY_TIMEOUT_MINUTES} minute execution limit")
+}
+
+struct SqlQueryDeadline {
+    cancel: mpsc::Sender<()>,
+    worker: Option<thread::JoinHandle<()>>,
+    expired: Arc<AtomicBool>,
+}
+
+impl SqlQueryDeadline {
+    fn new(interrupt: InterruptHandle) -> Self {
+        let (cancel, cancelled) = mpsc::channel();
+        let expired = Arc::new(AtomicBool::new(false));
+        let worker_expired = Arc::clone(&expired);
+        let worker = thread::spawn(move || {
+            if cancelled.recv_timeout(SQL_QUERY_TIMEOUT).is_err() {
+                worker_expired.store(true, Ordering::Release);
+                interrupt.interrupt();
+            }
+        });
+        Self {
+            cancel,
+            worker: Some(worker),
+            expired,
+        }
+    }
+
+    fn expired(&self) -> bool {
+        self.expired.load(Ordering::Acquire)
+    }
+}
+
+impl Drop for SqlQueryDeadline {
+    fn drop(&mut self) {
+        let _ = self.cancel.send(());
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
+}
 
 #[derive(Clone, Serialize, Deserialize)]
 struct Entity {
@@ -1926,6 +1971,7 @@ impl App {
             connection
                 .busy_timeout(Duration::from_secs(5))
                 .map_err(|error| error.to_string())?;
+            let interrupt_handle = connection.get_interrupt_handle();
             let transaction = connection
                 .transaction_with_behavior(TransactionBehavior::Deferred)
                 .map_err(|error| error.to_string())?;
@@ -2017,10 +2063,25 @@ impl App {
             let mut facts = Vec::new();
             let mut explicit_ids = HashSet::new();
             let mut skipped_rows = 0;
+            let query_deadline = SqlQueryDeadline::new(interrupt_handle);
             let mut rows = statement
                 .query(params_from_iter(parameter_values.iter()))
-                .map_err(|e| e.to_string())?;
-            while let Some(row) = rows.next().map_err(|e| e.to_string())? {
+                .map_err(|error| {
+                    if query_deadline.expired() {
+                        sql_query_timeout_message()
+                    } else {
+                        error.to_string()
+                    }
+                })?;
+            loop {
+                let row = match rows.next() {
+                    Ok(Some(row)) => row,
+                    Ok(None) => break,
+                    Err(_error) if query_deadline.expired() => {
+                        return Err(sql_query_timeout_message());
+                    }
+                    Err(error) => return Err(error.to_string()),
+                };
                 let source_name = sql_value(row, Some(source))
                     .map_err(|e| e.to_string())?
                     .trim()
@@ -2138,6 +2199,10 @@ impl App {
                     notes,
                 });
             }
+            if query_deadline.expired() {
+                return Err(sql_query_timeout_message());
+            }
+            drop(query_deadline);
             drop(rows);
             drop(statement);
             transaction.commit().map_err(|error| error.to_string())?;
@@ -9274,16 +9339,37 @@ fn sqlite_foreign_key_for_column<'a>(
     link_object: &'a serde_json::Value,
     column: &str,
 ) -> Option<&'a serde_json::Value> {
-    let mut matching = link_object["foreign_keys"]
-        .as_array()?
+    sqlite_foreign_key_group_for_column(link_object, column)?
+        .into_iter()
+        .next()
+}
+
+fn sqlite_foreign_key_group_for_column<'a>(
+    link_object: &'a serde_json::Value,
+    column: &str,
+) -> Option<Vec<&'a serde_json::Value>> {
+    let foreign_keys = link_object["foreign_keys"].as_array()?;
+    let mut matching_groups = foreign_keys
         .iter()
         .filter(|key| {
             key["from"]
                 .as_str()
                 .is_some_and(|name| name.eq_ignore_ascii_case(column))
-        });
-    let foreign_key = matching.next()?;
-    matching.next().is_none().then_some(foreign_key)
+        })
+        .filter_map(|key| key["id"].as_i64())
+        .collect::<Vec<_>>();
+    matching_groups.sort_unstable();
+    matching_groups.dedup();
+    if matching_groups.len() != 1 {
+        return None;
+    }
+    let foreign_key_id = matching_groups[0];
+    let mut group = foreign_keys
+        .iter()
+        .filter(|key| key["id"].as_i64() == Some(foreign_key_id))
+        .collect::<Vec<_>>();
+    group.sort_by_key(|key| key["sequence"].as_i64().unwrap_or_default());
+    (!group.is_empty()).then_some(group)
 }
 
 fn sqlite_declared_endpoint(
@@ -9291,36 +9377,51 @@ fn sqlite_declared_endpoint(
     schema: &[serde_json::Value],
     link_column: &str,
     join_alias: &str,
-) -> Option<(String, String, Option<String>)> {
-    let foreign_keys = link_object["foreign_keys"].as_array()?;
-    let foreign_key = sqlite_foreign_key_for_column(link_object, link_column)?;
-    let foreign_key_id = foreign_key["id"].as_i64()?;
-    if foreign_keys
-        .iter()
-        .filter(|key| key["id"].as_i64() == Some(foreign_key_id))
-        .count()
-        != 1
-    {
+) -> Option<(String, String, Option<String>, String)> {
+    let foreign_key_group = sqlite_foreign_key_group_for_column(link_object, link_column)?;
+    let foreign_key = *foreign_key_group.first()?;
+    let target_table = foreign_key["table"].as_str()?;
+    if foreign_key_group.iter().any(|key| {
+        key["table"]
+            .as_str()
+            .is_none_or(|table| !table.eq_ignore_ascii_case(target_table))
+    }) {
         return None;
     }
-    let target_table = foreign_key["table"].as_str()?;
     let target_object = schema.iter().find(|object| {
         object["name"]
             .as_str()
             .is_some_and(|name| name.eq_ignore_ascii_case(target_table))
     })?;
-    let target_key = foreign_key["to"]
-        .as_str()
-        .filter(|column| !column.is_empty())
-        .or_else(|| {
-            let primary_keys: Vec<&str> = target_object["columns"]
-                .as_array()?
-                .iter()
-                .filter(|column| column["primary_key_order"].as_i64().unwrap_or_default() > 0)
-                .filter_map(|column| column["name"].as_str())
-                .collect();
-            (primary_keys.len() == 1).then(|| primary_keys[0])
-        })?;
+    let declared_target_keys = foreign_key_group
+        .iter()
+        .map(|key| key["to"].as_str().filter(|column| !column.is_empty()))
+        .collect::<Vec<_>>();
+    let target_keys = if declared_target_keys.iter().all(Option::is_none) {
+        let mut primary_keys = target_object["columns"]
+            .as_array()?
+            .iter()
+            .filter(|column| column["primary_key_order"].as_i64().unwrap_or_default() > 0)
+            .filter_map(|column| {
+                Some((
+                    column["primary_key_order"].as_i64()?,
+                    column["name"].as_str()?,
+                ))
+            })
+            .collect::<Vec<_>>();
+        primary_keys.sort_by_key(|(order, _)| *order);
+        primary_keys
+            .into_iter()
+            .map(|(_, name)| name)
+            .collect::<Vec<_>>()
+    } else if declared_target_keys.iter().all(Option::is_some) {
+        declared_target_keys.into_iter().flatten().collect()
+    } else {
+        return None;
+    };
+    if target_keys.len() != foreign_key_group.len() {
+        return None;
+    }
     let name_column = schema_column(
         target_object,
         &[
@@ -9338,16 +9439,41 @@ fn sqlite_declared_endpoint(
     )?;
     let link_alias = quote_sql_identifier("link_row");
     let entity_alias = quote_sql_identifier(join_alias);
+    let join_conditions = foreign_key_group
+        .iter()
+        .zip(&target_keys)
+        .map(|(foreign_key, target_key)| {
+            let source_key = foreign_key["from"].as_str()?;
+            Some(format!(
+                "{entity_alias}.{} = {link_alias}.{}",
+                quote_sql_identifier(target_key),
+                quote_sql_identifier(source_key),
+            ))
+        })
+        .collect::<Option<Vec<_>>>()?;
     let join = format!(
-        "LEFT JOIN {} AS {entity_alias} ON {entity_alias}.{} = {link_alias}.{}",
+        "LEFT JOIN {} AS {entity_alias} ON {}",
         quote_sql_identifier(target_table),
-        quote_sql_identifier(target_key),
-        quote_sql_identifier(link_column),
+        join_conditions.join(" AND "),
     );
     let expression = format!("{entity_alias}.{}", quote_sql_identifier(name_column));
     let type_expression = schema_column(target_object, &["entity_type", "type", "kind"])
         .map(|column| format!("{entity_alias}.{}", quote_sql_identifier(column)));
-    Some((expression, join, type_expression))
+    let identity_expression = if foreign_key_group.len() == 1 {
+        format!("{link_alias}.{}", quote_sql_identifier(link_column))
+    } else {
+        let encoded = foreign_key_group
+            .iter()
+            .map(|key| {
+                let column = key["from"].as_str()?;
+                let value = format!("quote({link_alias}.{0})", quote_sql_identifier(column));
+                Some(format!("CAST(length({value}) AS TEXT) || ':' || {value}"))
+            })
+            .collect::<Option<Vec<_>>>()?
+            .join(" || ':' || ");
+        format!("({encoded})")
+    };
+    Some((expression, join, type_expression, identity_expression))
 }
 
 fn sqlite_endpoint_expression(
@@ -9361,14 +9487,14 @@ fn sqlite_endpoint_expression(
     if let Some(column) = schema_column(link_object, direct_aliases) {
         let direct_expression = format!("{link_alias}.{}", quote_sql_identifier(column));
         if sqlite_foreign_key_for_column(link_object, column).is_some() {
-            if let Some((expression, join, type_expression)) =
+            if let Some((expression, join, type_expression, identity_expression)) =
                 sqlite_declared_endpoint(link_object, schema, column, join_alias)
             {
                 return Some((
                     expression,
                     Some(join),
                     type_expression,
-                    Some(direct_expression),
+                    Some(identity_expression),
                 ));
             }
             return Some((
@@ -9397,14 +9523,14 @@ fn sqlite_endpoint_expression(
         ))
     };
     if sqlite_foreign_key_for_column(link_object, id_column).is_some() {
-        if let Some((expression, join, type_expression)) =
+        if let Some((expression, join, type_expression, identity_expression)) =
             sqlite_declared_endpoint(link_object, schema, id_column, join_alias)
         {
             return Some((
                 expression,
                 Some(join),
                 type_expression,
-                Some(raw_expression.clone()),
+                Some(identity_expression),
             ));
         }
         return raw_endpoint();
