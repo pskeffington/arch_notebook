@@ -7780,6 +7780,23 @@ impl eframe::App for App {
                                 ui.label(egui::RichText::new("Named SQL parameters · name=value per line; bind as text with :name, @name, or $name").small().color(muted));
                                 ui.add(egui::TextEdit::multiline(&mut self.sql_parameter_text).desired_width(canvas_w-20.0).desired_rows(2).code_editor());
                                 ui.horizontal(|ui|{if ui.button("Build query from schema").clicked(){self.build_sql_query_from_schema();}if ui.button("Validate query").clicked(){self.start_sql_validation();}if ui.button("Ingest SQL snapshot").clicked(){self.start_sql_ingestion();}});
+                                ui.horizontal(|ui| {
+                                    ui.label("Save this query as an automation job");
+                                    ui.add(
+                                        egui::TextEdit::singleline(&mut self.automation_job_name)
+                                            .hint_text("Job name")
+                                            .desired_width(220.0),
+                                    );
+                                    if ui
+                                        .add_enabled(
+                                            self.editing_automation_job.is_none(),
+                                            egui::Button::new("Save and review in Automation"),
+                                        )
+                                        .clicked()
+                                    {
+                                        self.save_sql_as_automation_job();
+                                    }
+                                });
                                 if self.sql_schema_templates.len() > 1 {
                                     ui.horizontal(|ui| {
                                         ui.label("Query source table or view");

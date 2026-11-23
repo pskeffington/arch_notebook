@@ -48,7 +48,7 @@ Select `/tmp/sample_connections.sqlite` as the source for the disposable copy, o
 
 ## Automate repeatable ingestion
 
-The validated query preview shows up to eight rows with endpoint names and source IDs, relationship, direction, date, confidence, evidence, and SQL supplied source notes. A prominent result-quality label distinguishes usable results, partial skips, empty results, and cases where every row was skipped, even when a zero-row query passes configured limits. The preview is horizontally scrollable for wide schemas.
+The validated query preview shows up to eight rows with endpoint names and source IDs, relationship, direction, date, confidence, evidence, and SQL supplied source notes. A prominent result-quality label distinguishes usable results, partial skips, empty results, and cases where every row was skipped, even when a zero-row query passes configured limits. The preview is horizontally scrollable for wide schemas. In **SQL regressions**, enter a job name and use **Save and review in Automation** to carry the current database, series, query, parameters, and capture limits into a repeatable job without re-entering them.
 
 In both the automation editor and one-off SQL snapshot panel, **Build query from schema** inspects the configured SQLite file read-only and generates an editable `SELECT` from the first table or view with recognizable source and target columns. Review and adjust the selected columns before validating or saving the query.
 
