@@ -22,7 +22,7 @@ Export one immutable SQL capture without opening the desktop app. The output con
 cargo run --offline -- --export-sql-snapshot harbor-light.case.json <snapshot-id> capture.csv --json
 ```
 
-Get a snapshot UUID from `--list-runs --json` or the saved case's snapshot records. The JSON response reports output format, snapshot ID, captured time, connection count, and skipped-row count.
+Get a snapshot UUID from `--list-runs --json` or the saved case's snapshot records. The JSON response reports output format, capture counts, source key and paths, series, query, and typed parameter values, so an empty capture still has its complete provenance in the response.
 
 ### CLI comparison export
 

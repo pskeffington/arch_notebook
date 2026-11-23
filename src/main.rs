@@ -14725,6 +14725,12 @@ fn export_sql_snapshot_cli(
                 "captured_at": snapshot.captured_at,
                 "connections": snapshot.connections.len(),
                 "skipped_rows": snapshot.skipped_rows,
+                "source_key": snapshot.source_key,
+                "database_path": snapshot.database_path,
+                "configured_database_path": snapshot.configured_database_path,
+                "series": snapshot.series,
+                "query": snapshot.query,
+                "parameters": snapshot.parameters,
             }))
             .map_err(|error| error.to_string())?
         );
