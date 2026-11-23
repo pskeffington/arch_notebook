@@ -550,6 +550,8 @@ struct ConnectionSnapshot {
     #[serde(default)]
     parameters: Vec<(String, String)>,
     captured_at: String,
+    #[serde(default)]
+    sqlite_schema_version: Option<i64>,
     connections: Vec<ConnectionFact>,
     #[serde(default)]
     skipped_rows: usize,
@@ -790,6 +792,39 @@ struct SqlPlanStep {
     id: i64,
     parent: i64,
     detail: String,
+}
+
+#[derive(Default)]
+struct SqlPlanSummary {
+    scan_steps: usize,
+    unindexed_scan_steps: usize,
+    indexed_search_steps: usize,
+    indexed_scan_steps: usize,
+}
+
+fn sql_plan_summary(steps: &[SqlPlanStep]) -> SqlPlanSummary {
+    let mut summary = SqlPlanSummary::default();
+    for step in steps {
+        let detail = step.detail.to_ascii_uppercase();
+        let is_scan = detail.contains("SCAN ");
+        let uses_index = detail.contains("USING INDEX")
+            || detail.contains("USING COVERING INDEX")
+            || detail.contains("AUTOMATIC INDEX")
+            || detail.contains("AUTOMATIC COVERING INDEX")
+            || detail.contains("USING INTEGER PRIMARY KEY")
+            || detail.contains("USING PRIMARY KEY");
+        if is_scan {
+            summary.scan_steps += 1;
+            if uses_index {
+                summary.indexed_scan_steps += 1;
+            } else if !detail.contains("VIRTUAL TABLE INDEX") && !detail.contains("CONSTANT ROW") {
+                summary.unindexed_scan_steps += 1;
+            }
+        } else if detail.starts_with("SEARCH ") && uses_index {
+            summary.indexed_search_steps += 1;
+        }
+    }
+    summary
 }
 
 fn sql_plan_step_depths(steps: &[SqlPlanStep]) -> Vec<usize> {
@@ -3421,6 +3456,9 @@ impl App {
                     row.get(0)
                 })
                 .map_err(|error| sqlite_capture_error(error, &retryable_lock_error))?;
+            let sqlite_schema_version: i64 = transaction
+                .query_row("PRAGMA schema_version", [], |row| row.get(0))
+                .map_err(|error| sqlite_capture_error(error, &retryable_lock_error))?;
             let mut statement = transaction
                 .prepare(&query)
                 .map_err(|error| sqlite_capture_error(error, &retryable_lock_error))?;
@@ -3852,6 +3890,7 @@ impl App {
                 query,
                 parameters,
                 captured_at,
+                sqlite_schema_version: Some(sqlite_schema_version),
                 connections: facts,
                 skipped_rows,
             };
@@ -6968,6 +7007,7 @@ impl App {
                         "series": latest.map(|snapshot| snapshot.series.as_str()),
                         "latest_snapshot_id": latest.map(|snapshot| snapshot.id),
                         "latest_captured_at": latest.map(|snapshot| snapshot.captured_at.as_str()),
+                        "latest_sqlite_schema_version": latest.and_then(|snapshot| snapshot.sqlite_schema_version),
                         "snapshot_ids": snapshots.iter().map(|snapshot| snapshot.id).collect::<Vec<_>>(),
                         "snapshot_count": snapshots.len(),
                         "link_count": link_count,
@@ -6975,6 +7015,7 @@ impl App {
                         "captures": snapshots.iter().map(|snapshot| serde_json::json!({
                             "snapshot_id": snapshot.id,
                             "captured_at": snapshot.captured_at,
+                            "sqlite_schema_version": snapshot.sqlite_schema_version,
                             "connection_count": snapshot.connections.len(),
                             "skipped_rows": snapshot.skipped_rows,
                         })).collect::<Vec<_>>(),
@@ -7196,9 +7237,12 @@ impl App {
                     "series",
                     "baseline_snapshot_id",
                     "baseline_captured_at",
+                    "baseline_sqlite_schema_version",
+                    "sqlite_schema_version_changed",
                     "baseline_skipped_rows",
                     "current_snapshot_id",
                     "current_captured_at",
+                    "current_sqlite_schema_version",
                     "current_skipped_rows",
                 ])
                 .map_err(|error| error.to_string())?;
@@ -7294,9 +7338,20 @@ impl App {
                     current.series.clone(),
                     baseline.id.to_string(),
                     baseline.captured_at.clone(),
+                    baseline
+                        .sqlite_schema_version
+                        .map(|version| version.to_string())
+                        .unwrap_or_default(),
+                    snapshot_sqlite_schema_version_change(baseline, current)
+                        .is_some()
+                        .to_string(),
                     baseline.skipped_rows.to_string(),
                     current.id.to_string(),
                     current.captured_at.clone(),
+                    current
+                        .sqlite_schema_version
+                        .map(|version| version.to_string())
+                        .unwrap_or_default(),
                     current.skipped_rows.to_string(),
                 ]);
                 writer
@@ -10223,6 +10278,15 @@ fn snapshot_sql_configuration_changes(
     (query_changed, baseline_parameters != current_parameters)
 }
 
+fn snapshot_sqlite_schema_version_change(
+    baseline: &ConnectionSnapshot,
+    current: &ConnectionSnapshot,
+) -> Option<(i64, i64)> {
+    let baseline_version = baseline.sqlite_schema_version?;
+    let current_version = current.sqlite_schema_version?;
+    (baseline_version != current_version).then_some((baseline_version, current_version))
+}
+
 fn source_entity_ids(case: &CaseFile, source_key: &str) -> HashSet<Uuid> {
     let database_path = case
         .snapshots
@@ -10266,6 +10330,11 @@ fn snapshot_delta_json(
         return serde_json::json!({
             "baseline": true,
             "compared_to_snapshot_id": null,
+            "sqlite_schema_version_changed": false,
+            "sqlite_schema_versions": {
+                "baseline": null,
+                "current": current.sqlite_schema_version
+            },
             "configuration_changed": false,
             "configuration_changes": {"query": false, "parameters": false},
             "counts": {
@@ -10287,6 +10356,8 @@ fn snapshot_delta_json(
         });
     };
     let (query_changed, parameters_changed) = snapshot_sql_configuration_changes(previous, current);
+    let sqlite_schema_version_changed =
+        snapshot_sqlite_schema_version_change(previous, current).is_some();
     let deltas = compare_snapshots(previous, current);
     let count = |kind| {
         deltas
@@ -10356,6 +10427,11 @@ fn snapshot_delta_json(
     serde_json::json!({
         "baseline": false,
         "compared_to_snapshot_id": previous.id,
+        "sqlite_schema_version_changed": sqlite_schema_version_changed,
+        "sqlite_schema_versions": {
+            "baseline": previous.sqlite_schema_version,
+            "current": current.sqlite_schema_version
+        },
         "configuration_changed": query_changed || parameters_changed,
         "configuration_changes": {
             "query": query_changed,
@@ -12603,8 +12679,16 @@ impl eframe::App for App {
                                             ui.label(format!("SQLite source · {database_path}"));
                                             match result {
                                                 Ok(steps) => {
-                                                    let scans = steps.iter().filter(|step| step.detail.to_ascii_uppercase().contains("SCAN ")).count();
-                                                    ui.label(format!("{} planner steps · {scans} scan steps. Planner output only; query rows were not read.", steps.len()));
+                                                    let summary = sql_plan_summary(steps);
+                                                    ui.label(format!(
+                                                        "{} planner steps · {} scans ({} unindexed) · {} index-backed searches · {} index-backed scans",
+                                                        steps.len(),
+                                                        summary.scan_steps,
+                                                        summary.unindexed_scan_steps,
+                                                        summary.indexed_search_steps,
+                                                        summary.indexed_scan_steps,
+                                                    ));
+                                                    ui.label("Plan estimates only; query rows were not read. Unindexed scans may be appropriate for small tables.").on_hover_text("EXPLAIN QUERY PLAN describes SQLite's chosen strategy; it does not measure actual runtime or row counts.");
                                                     let depths = sql_plan_step_depths(steps);
                                                     egui::ScrollArea::vertical().max_height(120.0).show(ui, |ui| {
                                                         for (step, depth) in steps.iter().zip(depths) {
@@ -13733,7 +13817,11 @@ impl eframe::App for App {
                                     } else {
                                         format!(" · {} rows skipped", current.skipped_rows)
                                     };
-                                    ui.label(format!("{capture_label} #{}: {} · {} · {} connections{skipped}",selected_index.map(|index|index+1).unwrap_or_default(),current.captured_at,current.series,current.connections.len()));
+                                    let schema_version = current
+                                        .sqlite_schema_version
+                                        .map(|version| format!(" · SQLite schema version {version}"))
+                                        .unwrap_or_default();
+                                    ui.label(format!("{capture_label} #{}: {} · {} · {} connections{skipped}{schema_version}",selected_index.map(|index|index+1).unwrap_or_default(),current.captured_at,current.series,current.connections.len()));
                                     ui.horizontal(|ui| {
                                         if ui.small_button("Highlight source on chart").clicked() {
                                             self.highlight_sql_source_on_chart(current.source_key.clone());
@@ -13856,6 +13944,14 @@ impl eframe::App for App {
                                         let added=count(DeltaKind::Added);
                                         let increased=count(DeltaKind::ConfidenceIncreased);
                                         ui.label(egui::RichText::new(format!("Baseline {} → current {} · {removed} removed · {declined} confidence declines · {dates} date changes · {identity_changes} endpoint identity changes · {entity_property_changes} entity property changes · {property_changes} relationship property changes · {updated} connection detail changes · {direction} direction changes · {evidence} evidence changes · {source_notes} source note changes · {added} added · {increased} confidence increases",base.captured_at,current.captured_at)).strong().color(if removed+declined>0{egui::Color32::from_rgb(238,139,115)}else{cyan}));
+                                        if let Some((baseline_version, current_version)) =
+                                            snapshot_sqlite_schema_version_change(&base, &current)
+                                        {
+                                            ui.colored_label(
+                                                egui::Color32::from_rgb(236, 174, 83),
+                                                format!("SQLITE SCHEMA VERSION CHANGED · {baseline_version} → {current_version} · review source schema before attributing all data changes to the query"),
+                                            );
+                                        }
                                         ui.horizontal(|ui| {
                                             egui::ComboBox::from_id_salt("sql_delta_filter")
                                                 .selected_text(match self.sql_delta_filter {
@@ -13971,7 +14067,7 @@ impl eframe::App for App {
                                             == Some(snapshot.source_key.as_str())
                                             && (snapshot_filter.is_empty()
                                                 || format!(
-                                                    "{} {} {} {} {} {} {} {} {}",
+                                                    "{} {} {} {} {} {} {} {} {} {}",
                                                     snapshot.id,
                                                     snapshot.captured_at,
                                                     snapshot.series,
@@ -13981,6 +14077,10 @@ impl eframe::App for App {
                                                     snapshot.connections.len(),
                                                     snapshot.skipped_rows,
                                                     snapshot_result_quality(snapshot),
+                                                    snapshot
+                                                        .sqlite_schema_version
+                                                        .map(|version| version.to_string())
+                                                        .unwrap_or_default(),
                                                 )
                                                 .to_lowercase()
                                                 .contains(&snapshot_filter))
@@ -14010,10 +14110,14 @@ impl eframe::App for App {
                                     } else {
                                         format!(" · {} skipped", snapshot.skipped_rows)
                                     };
+                                    let schema_version = snapshot
+                                        .sqlite_schema_version
+                                        .map(|version| format!(" · schema v{version}"))
+                                        .unwrap_or_default();
                                     if ui.selectable_label(
                                         selected_index == Some(index),
                                         format!(
-                                            "Snapshot #{} · {} · {} · {} · {} connections{skipped} · {}",
+                                            "Snapshot #{} · {} · {} · {} · {} connections{skipped}{schema_version} · {}",
                                             index + 1,
                                             snapshot.captured_at,
                                             snapshot_result_quality_label(snapshot_result_quality(snapshot)),
@@ -18530,6 +18634,7 @@ fn merge_graphml_source_catalog(existing: &mut serde_json::Value, incoming: &ser
             "series",
             "latest_snapshot_id",
             "latest_captured_at",
+            "latest_sqlite_schema_version",
             "link_count",
             "entity_count",
         ] {
@@ -21938,6 +22043,10 @@ fn export_sql_comparison_cli(
                 "format": delimited_text_format(output_path),
                 "baseline_snapshot_id": baseline_id,
                 "current_snapshot_id": current_id,
+                "sqlite_schema_version_changed":
+                    snapshot_sqlite_schema_version_change(&baseline, &current).is_some(),
+                "baseline_sqlite_schema_version": baseline.sqlite_schema_version,
+                "current_sqlite_schema_version": current.sqlite_schema_version,
                 "changes": change_count,
             }))
             .map_err(|error| error.to_string())?
@@ -21966,6 +22075,7 @@ fn write_sql_snapshots_csv<W: Write>(
             "query",
             "parameters_json",
             "captured_at",
+            "sqlite_schema_version",
             "skipped_rows",
             "connection_id",
             "source_entity_id",
@@ -22005,6 +22115,10 @@ fn write_sql_snapshots_csv<W: Write>(
                     snapshot.query.clone(),
                     parameters_json.clone(),
                     snapshot.captured_at.clone(),
+                    snapshot
+                        .sqlite_schema_version
+                        .map(|version| version.to_string())
+                        .unwrap_or_default(),
                     snapshot.skipped_rows.to_string(),
                     connection.connection_id.clone(),
                     connection.source_entity_id.clone(),
@@ -22149,6 +22263,9 @@ fn write_automation_runs_csv_atomically(
                 "snapshot_id",
                 "source_key",
                 "captured_at",
+                "sqlite_schema_version",
+                "baseline_sqlite_schema_version",
+                "sqlite_schema_version_changed",
                 "result_quality",
                 "configuration_changed",
                 "query_changed",
@@ -22272,6 +22389,15 @@ fn write_automation_runs_csv_atomically(
                         .map(|snapshot| snapshot.captured_at.clone())
                         .unwrap_or_default(),
                     snapshot
+                        .and_then(|snapshot| snapshot.sqlite_schema_version)
+                        .map(|version| version.to_string())
+                        .unwrap_or_default(),
+                    previous
+                        .and_then(|snapshot| snapshot.sqlite_schema_version)
+                        .map(|version| version.to_string())
+                        .unwrap_or_default(),
+                    configuration_flag("/sqlite_schema_version_changed"),
+                    snapshot
                         .map(snapshot_result_quality)
                         .map(snapshot_result_quality_label)
                         .unwrap_or("NO SNAPSHOT")
@@ -22373,6 +22499,7 @@ fn export_sql_snapshot_cli(
                 "format": delimited_text_format(output_path),
                 "snapshot_id": snapshot.id,
                 "captured_at": snapshot.captured_at,
+                "sqlite_schema_version": snapshot.sqlite_schema_version,
                 "connections": snapshot.connections.len(),
                 "skipped_rows": snapshot.skipped_rows,
                 "source_key": snapshot.source_key,
@@ -22441,6 +22568,7 @@ fn export_sql_series_cli(
                     "series": snapshot.series,
                     "query": snapshot.query,
                     "captured_at": snapshot.captured_at,
+                    "sqlite_schema_version": snapshot.sqlite_schema_version,
                     "connections": snapshot.connections.len(),
                     "skipped_rows": snapshot.skipped_rows,
                     "parameters": snapshot.parameters,
@@ -22755,10 +22883,7 @@ fn explain_automation_job_cli(
     let (database_path, steps) =
         inspect_sql_query_plan(&job.database_path, case_path, &job.query, &job.parameters)?;
     let depths = sql_plan_step_depths(&steps);
-    let scan_step_count = steps
-        .iter()
-        .filter(|step| step.detail.to_ascii_uppercase().contains("SCAN "))
-        .count();
+    let summary = sql_plan_summary(&steps);
     if json_output {
         println!(
             "{}",
@@ -22774,7 +22899,10 @@ fn explain_automation_job_cli(
                 "series": job.series,
                 "query": job.query,
                 "parameters": job.parameters,
-                "scan_steps": scan_step_count,
+                "scan_steps": summary.scan_steps,
+                "unindexed_scan_steps": summary.unindexed_scan_steps,
+                "indexed_search_steps": summary.indexed_search_steps,
+                "indexed_scan_steps": summary.indexed_scan_steps,
                 "steps": steps.iter().zip(&depths).map(|(step, depth)| serde_json::json!({
                     "id": step.id,
                     "parent": step.parent,
@@ -22790,8 +22918,11 @@ fn explain_automation_job_cli(
             println!("  {}{}", "  ".repeat(depth), step.detail);
         }
         println!(
-            "{} scan steps · planner output only; query rows were not read",
-            scan_step_count
+            "{} scan steps · {} unindexed · {} index-backed searches · {} index-backed scans · plan only; query rows were not read",
+            summary.scan_steps,
+            summary.unindexed_scan_steps,
+            summary.indexed_search_steps,
+            summary.indexed_scan_steps,
         );
     }
     Ok(())
@@ -25584,6 +25715,7 @@ mod tests {
             query: String::new(),
             parameters: Vec::new(),
             captured_at: String::new(),
+            sqlite_schema_version: None,
             connections: vec![fact(key)],
             skipped_rows: 0,
         };
