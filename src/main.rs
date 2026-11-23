@@ -1806,40 +1806,8 @@ impl App {
                     .ok_or_else(|| format!("row filter column is missing: {}", filter.column))?;
                 row_filters.push((index, filter.operator, filter.value.clone()));
             }
-            let mut value_transforms = Vec::new();
-            for transform in &mapping.value_transforms {
-                if transform.column.is_empty()
-                    && transform.find.is_empty()
-                    && transform.replace.is_empty()
-                {
-                    continue;
-                }
-                if transform.column.is_empty() {
-                    return Err("value transforms need a column".into());
-                }
-                let index = headers
-                    .iter()
-                    .position(|header| header.eq_ignore_ascii_case(&transform.column))
-                    .ok_or_else(|| {
-                        format!("value transform column is missing: {}", transform.column)
-                    })?;
-                if matches!(
-                    transform.operation,
-                    ImportTransformOperation::Replace | ImportTransformOperation::ReplaceExact
-                ) && transform.find.is_empty()
-                {
-                    return Err(format!(
-                        "replace transform for {} needs text to find",
-                        transform.column
-                    ));
-                }
-                value_transforms.push((
-                    index,
-                    transform.operation,
-                    transform.find.clone(),
-                    transform.replace.clone(),
-                ));
-            }
+            let value_transforms =
+                compile_import_value_transforms(headers.iter(), &mapping.value_transforms)?;
             let mut created = 0;
             let mut updated = 0;
             let mut skipped = 0;
@@ -1903,18 +1871,7 @@ impl App {
                         }
                     })
                     .collect();
-                for (index, operation, find, replace) in &value_transforms {
-                    let value = values.get_mut(*index).ok_or_else(|| {
-                        format!("value transform column index is out of range: {index}")
-                    })?;
-                    *value = match operation {
-                        ImportTransformOperation::Replace => value.replace(find, replace),
-                        ImportTransformOperation::ReplaceExact if value == find => replace.clone(),
-                        ImportTransformOperation::ReplaceExact => value.clone(),
-                        ImportTransformOperation::Lowercase => value.to_lowercase(),
-                        ImportTransformOperation::Uppercase => value.to_uppercase(),
-                    };
-                }
+                apply_import_value_transforms(&mut values, &value_transforms)?;
                 let row = csv::StringRecord::from(values);
                 let included = row_filters.iter().all(|(index, operator, expected)| {
                     import_filter_matches(row.get(*index).unwrap_or(""), *operator, expected)
@@ -9246,53 +9203,31 @@ impl eframe::App for App {
                                     ui.separator();
                                 }
                             });
+                            let preview_transforms = compile_import_value_transforms(
+                                self.import_headers.iter().map(String::as_str),
+                                &self.import_column_mapping.value_transforms,
+                            );
                             for row in &self.import_preview {
-                                let normalized_values: Vec<String> = row
+                                let mut normalized_values: Vec<String> = row
                                     .iter()
-                                    .enumerate()
-                                    .map(|(column_index, value)| {
-                                        let mut normalized =
-                                            if self.import_column_mapping.trim_whitespace {
-                                                value.trim().to_owned()
-                                            } else {
-                                                value.clone()
-                                            };
-                                        for transform in
-                                            &self.import_column_mapping.value_transforms
-                                        {
-                                            if self.import_headers.get(column_index).is_some_and(
-                                                |header| {
-                                                    header.eq_ignore_ascii_case(&transform.column)
-                                                },
-                                            ) {
-                                                normalized = match transform.operation {
-                                                    ImportTransformOperation::Replace
-                                                        if !transform.find.is_empty() =>
-                                                    {
-                                                        normalized
-                                                            .replace(&transform.find, &transform.replace)
-                                                    }
-                                                    ImportTransformOperation::Replace => normalized,
-                                                    ImportTransformOperation::ReplaceExact
-                                                        if normalized == transform.find =>
-                                                    {
-                                                        transform.replace.clone()
-                                                    }
-                                                    ImportTransformOperation::ReplaceExact => {
-                                                        normalized
-                                                    }
-                                                    ImportTransformOperation::Lowercase => {
-                                                        normalized.to_lowercase()
-                                                    }
-                                                    ImportTransformOperation::Uppercase => {
-                                                        normalized.to_uppercase()
-                                                    }
-                                                };
-                                            }
+                                    .map(|value| {
+                                        if self.import_column_mapping.trim_whitespace {
+                                            value.trim().to_owned()
+                                        } else {
+                                            value.clone()
                                         }
-                                        normalized
                                     })
                                     .collect();
+                                let preview_transforms_valid = match &preview_transforms {
+                                    Ok(transforms) => {
+                                        apply_import_value_transforms(
+                                            &mut normalized_values,
+                                            transforms,
+                                        )
+                                        .is_ok()
+                                    }
+                                    Err(_) => false,
+                                };
                                 let preview_filters: Vec<(&ImportRowFilter, Option<usize>)> =
                                     self.import_column_mapping
                                         .row_filters
@@ -9309,33 +9244,10 @@ impl eframe::App for App {
                                             )
                                         })
                                         .collect();
-                                let preview_filters_valid = preview_filters.iter().all(
-                                    |(filter, index)| {
-                                        (filter.column.is_empty() && filter.value.is_empty())
-                                            || index.is_some()
-                                    },
+                                let preview_filters_valid = import_row_filters_valid(
+                                    &self.import_column_mapping.row_filters,
+                                    &self.import_headers,
                                 );
-                                let preview_transforms_valid = self
-                                    .import_column_mapping
-                                    .value_transforms
-                                    .iter()
-                                    .all(|transform| {
-                                        if transform.column.is_empty()
-                                            && transform.find.is_empty()
-                                            && transform.replace.is_empty()
-                                        {
-                                            return true;
-                                        }
-                                        !transform.column.is_empty()
-                                            && self.import_headers.iter().any(|header| {
-                                                header.eq_ignore_ascii_case(&transform.column)
-                                            })
-                                            && (!matches!(
-                                                transform.operation,
-                                                ImportTransformOperation::Replace
-                                                    | ImportTransformOperation::ReplaceExact
-                                            ) || !transform.find.is_empty())
-                                    });
                                 let included = preview_filters_valid
                                     && preview_transforms_valid
                                     && preview_filters.iter().all(|(filter, index)| {
@@ -9585,7 +9497,20 @@ impl eframe::App for App {
                     });
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
-                        if ui.button("Import into chart").clicked() {
+                        let import_rules_valid = import_row_filters_valid(
+                            &self.import_column_mapping.row_filters,
+                            &self.import_headers,
+                        ) && import_value_transforms_valid(
+                            &self.import_column_mapping.value_transforms,
+                            &self.import_headers,
+                        );
+                        if ui
+                            .add_enabled(import_rules_valid, egui::Button::new("Import into chart"))
+                            .on_disabled_hover_text(
+                                "Fix incomplete row filters or value transforms before importing.",
+                            )
+                            .clicked()
+                        {
                             import_now = true;
                         }
                         if ui.button("Cancel").clicked() {
@@ -9868,6 +9793,78 @@ where
                 header.trim()
             ));
         }
+    }
+    Ok(())
+}
+
+fn import_row_filters_valid(filters: &[ImportRowFilter], headers: &[String]) -> bool {
+    filters.iter().all(|filter| {
+        (filter.column.is_empty() && filter.value.is_empty())
+            || headers
+                .iter()
+                .any(|header| header.eq_ignore_ascii_case(&filter.column))
+    })
+}
+
+fn import_value_transforms_valid(transforms: &[ImportValueTransform], headers: &[String]) -> bool {
+    compile_import_value_transforms(headers.iter().map(String::as_str), transforms).is_ok()
+}
+
+type CompiledImportValueTransform = (usize, ImportTransformOperation, String, String);
+
+fn compile_import_value_transforms<'a>(
+    headers: impl IntoIterator<Item = &'a str>,
+    transforms: &[ImportValueTransform],
+) -> Result<Vec<CompiledImportValueTransform>, String> {
+    let headers: Vec<&str> = headers.into_iter().collect();
+    let mut compiled = Vec::new();
+    for transform in transforms {
+        if transform.column.is_empty() && transform.find.is_empty() && transform.replace.is_empty()
+        {
+            continue;
+        }
+        if transform.column.is_empty() {
+            return Err("value transforms need a column".into());
+        }
+        let index = headers
+            .iter()
+            .position(|header| header.eq_ignore_ascii_case(&transform.column))
+            .ok_or_else(|| format!("value transform column is missing: {}", transform.column))?;
+        if matches!(
+            transform.operation,
+            ImportTransformOperation::Replace | ImportTransformOperation::ReplaceExact
+        ) && transform.find.is_empty()
+        {
+            return Err(format!(
+                "replace transform for {} needs text to find",
+                transform.column
+            ));
+        }
+        compiled.push((
+            index,
+            transform.operation,
+            transform.find.clone(),
+            transform.replace.clone(),
+        ));
+    }
+    Ok(compiled)
+}
+
+fn apply_import_value_transforms(
+    values: &mut [String],
+    transforms: &[CompiledImportValueTransform],
+) -> Result<(), String> {
+    for (index, operation, find, replace) in transforms {
+        let value = values
+            .get_mut(*index)
+            .ok_or_else(|| format!("value transform column index is out of range: {index}"))?;
+        *value = match operation {
+            ImportTransformOperation::Replace => value.replace(find, replace),
+            ImportTransformOperation::ReplaceExact if value == find => replace.clone(),
+            ImportTransformOperation::ReplaceExact => value.clone(),
+            ImportTransformOperation::Lowercase => value.to_lowercase(),
+            ImportTransformOperation::Uppercase => value.to_uppercase(),
+        };
     }
     Ok(())
 }
