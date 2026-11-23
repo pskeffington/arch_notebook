@@ -3,7 +3,7 @@ use quick_xml::{
     Reader as XmlReader, escape::resolve_predefined_entity, events::Event as XmlEvent,
 };
 use rusqlite::{
-    Connection, InterruptHandle, OpenFlags, TransactionBehavior, params_from_iter,
+    Connection, ErrorCode, InterruptHandle, OpenFlags, TransactionBehavior, params_from_iter,
     types::{Value, ValueRef},
 };
 use serde::{Deserialize, Serialize};
@@ -26,6 +26,19 @@ use uuid::Uuid;
 const CURRENT_CASE_FORMAT_VERSION: u32 = 11;
 const SQL_QUERY_TIMEOUT_MINUTES: u64 = 15;
 const SQL_QUERY_TIMEOUT: Duration = Duration::from_secs(SQL_QUERY_TIMEOUT_MINUTES * 60);
+const SQLITE_LOCK_RETRY_ATTEMPTS: usize = 3;
+const SQLITE_LOCK_RETRY_DELAY: Duration = Duration::from_secs(2);
+
+fn sqlite_capture_error(error: rusqlite::Error, retryable_lock: &AtomicBool) -> String {
+    if matches!(
+        &error,
+        rusqlite::Error::SqliteFailure(failure, _)
+            if matches!(failure.code, ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked)
+    ) {
+        retryable_lock.store(true, Ordering::Release);
+    }
+    error.to_string()
+}
 
 fn sql_query_timeout_message() -> String {
     format!("SQL query exceeded the {SQL_QUERY_TIMEOUT_MINUTES} minute execution limit")
@@ -2598,6 +2611,27 @@ impl App {
     }
 
     fn ingest_sqlite_snapshot(&mut self) {
+        for attempt in 1..=SQLITE_LOCK_RETRY_ATTEMPTS {
+            let Some(lock_error) = self.ingest_sqlite_snapshot_attempt() else {
+                return;
+            };
+            if attempt == SQLITE_LOCK_RETRY_ATTEMPTS {
+                self.status = format!(
+                    "SQL INGEST FAILED · source remained locked after {attempt} attempts · {lock_error}"
+                );
+                return;
+            }
+            self.status = format!(
+                "SQL SOURCE BUSY · RETRYING ATTEMPT {} OF {} IN {} SECONDS",
+                attempt + 1,
+                SQLITE_LOCK_RETRY_ATTEMPTS,
+                SQLITE_LOCK_RETRY_DELAY.as_secs()
+            );
+            thread::sleep(SQLITE_LOCK_RETRY_DELAY);
+        }
+    }
+
+    fn ingest_sqlite_snapshot_attempt(&mut self) -> Option<String> {
         self.sql_validation_preview = None;
         let configured_path = self.sql_path.trim().to_string();
         let case_path = self.case_path.clone();
@@ -2608,6 +2642,7 @@ impl App {
             .selected_link
             .and_then(|index| self.case.links.get(index))
             .cloned();
+        let retryable_lock_error = AtomicBool::new(false);
         let result = (|| -> Result<(Vec<Entity>, Vec<Link>, ConnectionSnapshot), String> {
             if configured_path.is_empty() {
                 return Err("database path cannot be empty".into());
@@ -2624,20 +2659,22 @@ impl App {
             // Enforce read-only access at the SQLite open boundary for every configured job.
             let mut connection =
                 Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY)
-                    .map_err(|e| e.to_string())?;
+                    .map_err(|error| sqlite_capture_error(error, &retryable_lock_error))?;
             connection
                 .busy_timeout(Duration::from_secs(5))
-                .map_err(|error| error.to_string())?;
+                .map_err(|error| sqlite_capture_error(error, &retryable_lock_error))?;
             let interrupt_handle = connection.get_interrupt_handle();
             let transaction = connection
                 .transaction_with_behavior(TransactionBehavior::Deferred)
-                .map_err(|error| error.to_string())?;
+                .map_err(|error| sqlite_capture_error(error, &retryable_lock_error))?;
             let captured_at: String = transaction
                 .query_row("SELECT strftime('%Y-%m-%dT%H:%M:%fZ','now')", [], |row| {
                     row.get(0)
                 })
-                .map_err(|e| e.to_string())?;
-            let mut statement = transaction.prepare(&query).map_err(|e| e.to_string())?;
+                .map_err(|error| sqlite_capture_error(error, &retryable_lock_error))?;
+            let mut statement = transaction
+                .prepare(&query)
+                .map_err(|error| sqlite_capture_error(error, &retryable_lock_error))?;
             if !statement.readonly() {
                 return Err("SQL query must be read-only".into());
             }
@@ -2727,7 +2764,7 @@ impl App {
                     if query_deadline.expired() {
                         sql_query_timeout_message()
                     } else {
-                        error.to_string()
+                        sqlite_capture_error(error, &retryable_lock_error)
                     }
                 })?;
             loop {
@@ -2737,7 +2774,9 @@ impl App {
                     Err(_error) if query_deadline.expired() => {
                         return Err(sql_query_timeout_message());
                     }
-                    Err(error) => return Err(error.to_string()),
+                    Err(error) => {
+                        return Err(sqlite_capture_error(error, &retryable_lock_error));
+                    }
                 };
                 let source_name = sql_value(row, Some(source))
                     .map_err(|e| e.to_string())?
@@ -2862,7 +2901,9 @@ impl App {
             drop(query_deadline);
             drop(rows);
             drop(statement);
-            transaction.commit().map_err(|error| error.to_string())?;
+            transaction
+                .commit()
+                .map_err(|error| sqlite_capture_error(error, &retryable_lock_error))?;
             let mut natural_ids = HashSet::new();
             for fact in &facts {
                 if fact.connection_id.is_empty() && !natural_ids.insert(fact.key.clone()) {
@@ -2958,8 +2999,14 @@ impl App {
                         "SQL SNAPSHOT INGESTED · {count} CONNECTIONS · {skipped_rows} ROWS SKIPPED (EMPTY ENDPOINT)"
                     )
                 };
+                None
             }
-            Err(error) => self.status = format!("SQL INGEST FAILED · {error}"),
+            Err(error) => {
+                self.status = format!("SQL INGEST FAILED · {error}");
+                retryable_lock_error
+                    .load(Ordering::Acquire)
+                    .then_some(error)
+            }
         }
     }
 
@@ -9885,12 +9932,15 @@ impl eframe::App for App {
                         ui.add(
                             egui::TextEdit::singleline(&mut self.import_design_package_path)
                                 .hint_text("Path to .json package")
-                                .desired_width(300.0),
+                                .desired_width(ui.available_width()),
                         );
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Imported name");
                         ui.add(
                             egui::TextEdit::singleline(&mut self.import_design_package_name)
-                                .hint_text("Optional imported name")
-                                .desired_width(170.0),
+                                .hint_text("Optional override")
+                                .desired_width(190.0),
                         );
                         if ui.button("Import package").clicked() {
                             import_design_package = true;
