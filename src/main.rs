@@ -3242,6 +3242,9 @@ impl App {
         }) else {
             return;
         };
+        if preview.regression_count == 0 {
+            *regressions_only = false;
+        }
         let quality_color = match preview.result_quality.as_str() {
             "empty_result" | "all_rows_skipped" => egui::Color32::from_rgb(232, 116, 97),
             "partially_skipped" => egui::Color32::from_rgb(236, 174, 83),
