@@ -6752,14 +6752,17 @@ fn automation_override_selectors_match_jobs(
     overrides: &AutomationParameterOverrides,
     jobs: &[&AutomationJob],
 ) -> bool {
-    overrides.scoped.iter().all(|(selector, _, _)| {
-        jobs.iter()
+    let mut assigned = HashSet::new();
+    overrides.scoped.iter().all(|(selector, name, _)| {
+        let matches: Vec<&AutomationJob> = jobs
+            .iter()
             .filter(|job| {
                 job.name.eq_ignore_ascii_case(selector)
                     || job.id.to_string().eq_ignore_ascii_case(selector)
             })
-            .count()
-            == 1
+            .copied()
+            .collect();
+        matches.len() == 1 && assigned.insert((matches[0].id, name.as_str()))
     })
 }
 
@@ -8438,7 +8441,7 @@ impl eframe::App for App {
                                         } else if !run_overrides_valid || !run_override_values_valid {
                                             "Fix the one-run override syntax or typed values before running automation."
                                         } else if !all_override_selectors_match {
-                                            "Each scoped override must name exactly one enabled job."
+                                            "Scoped overrides must name one enabled job and cannot repeat a parameter for that job."
                                         } else if enabled_job_count == 0 {
                                             "Enable at least one job before running the batch."
                                         } else {
@@ -8633,7 +8636,7 @@ impl eframe::App for App {
                                         } else if !run_overrides_valid || !run_override_values_valid {
                                             "Fix the one-run override syntax or typed values before running automation."
                                         } else if !visible_override_selectors_match {
-                                            "A scoped override must name exactly one visible enabled job."
+                                            "Scoped overrides must name one visible enabled job and cannot repeat a parameter for that job."
                                         } else if visible_enabled_jobs.is_empty() {
                                             "Enable a visible job before running this batch."
                                         } else {
@@ -8734,7 +8737,7 @@ impl eframe::App for App {
                                             } else if !run_overrides_valid || !run_override_values_valid {
                                                 "Fix the one-run override syntax or typed values before running automation."
                                             } else if !job_override_selectors_match {
-                                                "Scoped overrides must name this job for an individual run."
+                                                "Scoped overrides must target this job and cannot repeat a parameter."
                                             } else {
                                                 "Run this job with the reviewed one-run parameter overrides."
                                             })
