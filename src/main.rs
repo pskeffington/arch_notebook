@@ -307,6 +307,8 @@ struct App {
     sql_schema_template_index: usize,
     sql_schema_template_source: Option<(String, String)>,
     automation_job_filter: String,
+    automation_run_filter: String,
+    automation_failed_runs_only: bool,
     sql_snapshot_source: Option<String>,
     sql_snapshot_index: Option<usize>,
     sql_delta_filter: SnapshotDeltaFilter,
@@ -641,6 +643,8 @@ impl Default for App {
             sql_schema_template_index: 0,
             sql_schema_template_source: None,
             automation_job_filter: String::new(),
+            automation_run_filter: String::new(),
+            automation_failed_runs_only: false,
             sql_snapshot_source: None,
             sql_snapshot_index: None,
             sql_delta_filter: SnapshotDeltaFilter::All,
@@ -907,6 +911,8 @@ impl App {
             sql_schema_template_index: 0,
             sql_schema_template_source: None,
             automation_job_filter: String::new(),
+            automation_run_filter: String::new(),
+            automation_failed_runs_only: false,
             sql_snapshot_source: None,
             sql_snapshot_index: None,
             sql_delta_filter: SnapshotDeltaFilter::All,
@@ -5395,6 +5401,24 @@ fn delta_order(kinds: &[DeltaKind]) -> u8 {
     .unwrap_or(usize::MAX) as u8
 }
 
+fn automation_run_matches_filter(run: &AutomationRun, filter: &str, failures_only: bool) -> bool {
+    (!failures_only || !run.success)
+        && (filter.is_empty()
+            || format!(
+                "{} {} {} {} {} {} {} {}",
+                run.job_name,
+                run.database_path,
+                run.series,
+                run.query,
+                run.message,
+                run.started_at,
+                run.finished_at,
+                run.id,
+            )
+            .to_lowercase()
+            .contains(filter))
+}
+
 fn automation_regression_count(case: &CaseFile, source_key: &str) -> usize {
     let mut snapshots = case
         .snapshots
@@ -6222,11 +6246,53 @@ impl eframe::App for App {
                                         });
                                 }
                                 if let Some((verb,id))=action {match verb.as_str(){"validate"=>{self.validate_automation_job(id);},"edit"=>self.edit_automation_job(id),"run"=>self.start_automation_jobs(vec![id],false),"delete"=>{if self.editing_automation_job==Some(id){self.cancel_automation_job_edit();}self.case.automation_jobs.retain(|job|job.id!=id);self.status="AUTOMATION JOB DELETED".into();},_=>{}}}
-                                ui.add_space(8.0);ui.label(egui::RichText::new("RUN HISTORY · newest first").small().strong().color(cyan));
+                                ui.add_space(8.0);
+                                ui.horizontal(|ui| {
+                                    ui.label(egui::RichText::new("RUN HISTORY · newest first").small().strong().color(cyan));
+                                    ui.add(
+                                        egui::TextEdit::singleline(&mut self.automation_run_filter)
+                                            .hint_text("Find by job, result, database, series, SQL, or message")
+                                            .desired_width(300.0),
+                                    );
+                                    ui.checkbox(&mut self.automation_failed_runs_only, "Failures only");
+                                    if ui.small_button("Clear history filters").clicked() {
+                                        self.automation_run_filter.clear();
+                                        self.automation_failed_runs_only = false;
+                                    }
+                                });
+                                let run_filter = self.automation_run_filter.trim().to_lowercase();
+                                let visible_run_count = self
+                                    .case
+                                    .automation_runs
+                                    .iter()
+                                    .filter(|run| {
+                                        automation_run_matches_filter(
+                                            run,
+                                            &run_filter,
+                                            self.automation_failed_runs_only,
+                                        )
+                                    })
+                                    .count();
+                                ui.label(egui::RichText::new(format!(
+                                    "{visible_run_count} OF {} RECORDED RUNS",
+                                    self.case.automation_runs.len()
+                                )).small().color(muted));
                                 let mut review_snapshot = None;
                                 let mut replay_run = None;
                                 egui::ScrollArea::vertical().max_height(210.0).show(ui, |ui| {
-                                    for run in self.case.automation_runs.iter().rev() {
+                                    for run in self
+                                        .case
+                                        .automation_runs
+                                        .iter()
+                                        .rev()
+                                        .filter(|run| {
+                                            automation_run_matches_filter(
+                                                run,
+                                                &run_filter,
+                                                self.automation_failed_runs_only,
+                                            )
+                                        })
+                                    {
                                         let result = if run.success { "PASS" } else { "FAIL" };
                                         let snapshot = run
                                             .snapshot_id
@@ -6307,6 +6373,9 @@ impl eframe::App for App {
                                                 }
                                             }
                                         });
+                                    }
+                                    if visible_run_count == 0 {
+                                        ui.label(egui::RichText::new("No automation runs match these filters.").small().color(muted));
                                     }
                                 });
                                 if let Some(run_id) = replay_run {
@@ -9466,11 +9535,13 @@ fn sqlite_declared_endpoint(
             .iter()
             .map(|key| {
                 let column = key["from"].as_str()?;
-                let value = format!("quote({link_alias}.{0})", quote_sql_identifier(column));
-                Some(format!("CAST(length({value}) AS TEXT) || ':' || {value}"))
+                let value = format!("{link_alias}.{}", quote_sql_identifier(column));
+                Some(format!(
+                    "typeof({value}) || ':' || coalesce(hex(CAST({value} AS BLOB)), '')"
+                ))
             })
             .collect::<Option<Vec<_>>>()?
-            .join(" || ':' || ");
+            .join(" || '|' || ");
         format!("({encoded})")
     };
     Some((expression, join, type_expression, identity_expression))
