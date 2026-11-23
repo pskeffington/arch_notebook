@@ -8015,6 +8015,32 @@ impl App {
                 link.to = keep_id;
             }
         }
+        for path in &mut self.case.saved_paths {
+            if path.start_entity_id == remove_id {
+                path.start_entity_id = keep_id;
+            }
+            if path.end_entity_id == remove_id {
+                path.end_entity_id = keep_id;
+            }
+        }
+        for selection_set in &mut self.case.selection_sets {
+            for entity_id in &mut selection_set.entity_ids {
+                if *entity_id == remove_id {
+                    *entity_id = keep_id;
+                }
+            }
+            selection_set.entity_ids.sort_unstable();
+            selection_set.entity_ids.dedup();
+        }
+        if let Some(entity_ids) = self.chart_fit_entities.as_mut() {
+            for entity_id in entity_ids.iter_mut() {
+                if *entity_id == remove_id {
+                    *entity_id = keep_id;
+                }
+            }
+            entity_ids.sort_unstable();
+            entity_ids.dedup();
+        }
         self.case.entities.remove(remove_index);
         self.path_start = if self.path_start == Some(remove_id) {
             Some(keep_id)
@@ -8030,6 +8056,10 @@ impl App {
         self.selected_link = None;
         self.chart_focus = Some(keep_id);
         self.chart_focus_group = None;
+        self.path_result.clear();
+        self.path_link_result.clear();
+        self.chart_fit_path = None;
+        self.path_timeline_range = None;
         self.merge_candidate = None;
         self.duplicate_candidates.clear();
         self.status = format!(
@@ -21110,6 +21140,12 @@ fn sqlite_query_templates(schema: &[serde_json::Value]) -> Vec<(String, String)>
                 .as_deref()
                 .is_some_and(|identity| identity.contains(&expression))
         });
+        let source_order_expression = source_identity
+            .clone()
+            .unwrap_or_else(|| source_expression.clone());
+        let target_order_expression = target_identity
+            .clone()
+            .unwrap_or_else(|| target_expression.clone());
         let mut selected = vec![
             format!("{source_expression} AS \"source\""),
             format!("{target_expression} AS \"target\""),
@@ -21186,12 +21222,12 @@ fn sqlite_query_templates(schema: &[serde_json::Value]) -> Vec<(String, String)>
             (
                 "source_type",
                 &["source_type", "from_type", "entity_a_type"][..],
-                source_type_expression,
+                source_type_expression.clone(),
             ),
             (
                 "target_type",
                 &["target_type", "to_type", "entity_b_type"][..],
-                target_type_expression,
+                target_type_expression.clone(),
             ),
         ] {
             let expression = schema_column(object, aliases)
@@ -21219,6 +21255,67 @@ fn sqlite_query_templates(schema: &[serde_json::Value]) -> Vec<(String, String)>
             query.push('\n');
             query.push_str(&join);
         }
+        let mut order_terms = vec![
+            source_order_expression,
+            target_order_expression,
+            source_expression.clone(),
+            target_expression.clone(),
+        ];
+        for (aliases, joined_expression) in [
+            (
+                &["source_type", "from_type", "entity_a_type"][..],
+                source_type_expression.as_ref(),
+            ),
+            (
+                &["target_type", "to_type", "entity_b_type"][..],
+                target_type_expression.as_ref(),
+            ),
+        ] {
+            let type_expression = schema_column(object, aliases)
+                .map(|column| format!("\"link_row\".{}", quote_sql_identifier(column)))
+                .or_else(|| joined_expression.cloned());
+            if let Some(type_expression) = type_expression {
+                order_terms.push(type_expression);
+            }
+        }
+        if let Some(column) = schema_column(
+            object,
+            &[
+                "relationship",
+                "relationship_type",
+                "relation_type",
+                "link_type",
+                "edge_type",
+                "connection_type",
+                "interaction_type",
+                "transaction_type",
+                "transfer_type",
+                "relation",
+                "predicate",
+                "action",
+            ],
+        ) {
+            order_terms.push(format!("\"link_row\".{}", quote_sql_identifier(column)));
+        }
+        if let Some(column) = schema_column(
+            object,
+            &[
+                "connection_id",
+                "link_id",
+                "edge_id",
+                "relationship_id",
+                "relationship_key",
+                "record_id",
+                "edge_key",
+                "id",
+            ],
+        ) {
+            order_terms.push(format!("\"link_row\".{}", quote_sql_identifier(column)));
+        }
+        let mut seen_order_terms = HashSet::new();
+        order_terms.retain(|term| seen_order_terms.insert(term.clone()));
+        query.push_str("\nORDER BY ");
+        query.push_str(&order_terms.join(", "));
         query.push(';');
         templates.push((object_name.to_owned(), query));
     }
