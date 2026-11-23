@@ -1,5 +1,38 @@
 # SQL snapshot ingestion
 
+## Map relational records into a network
+
+For a common transaction schema with `accounts(id, owner_name, institution)` and `transfers(id, sender_account_id, recipient_account_id, occurred_at, amount, status)`, join each event to its endpoint records and return one row per relationship. This query keeps account identity stable across refreshes, gives each transfer its own connection identity, and exposes fields for chart inspection and regression comparison:
+
+```sql
+SELECT
+    sender.owner_name AS source,
+    CAST(sender.id AS TEXT) AS source_entity_id,
+    'Account' AS source_type,
+    sender.institution AS "source_attribute:institution",
+    recipient.owner_name AS target,
+    CAST(recipient.id AS TEXT) AS target_entity_id,
+    'Account' AS target_type,
+    recipient.institution AS "target_attribute:institution",
+    CAST(transfer.id AS TEXT) AS connection_id,
+    'Transfer' AS relationship,
+    transfer.occurred_at AS date,
+    3 AS confidence,
+    1 AS directed,
+    transfer.status AS notes,
+    transfer.amount AS "connection_attribute:amount"
+FROM transfers AS transfer
+JOIN accounts AS sender
+  ON sender.id = transfer.sender_account_id
+JOIN accounts AS recipient
+  ON recipient.id = transfer.recipient_account_id
+WHERE transfer.occurred_at >= :start_date
+  AND transfer.occurred_at < :end_date
+ORDER BY transfer.occurred_at, transfer.id;
+```
+
+Set **SQL parameters** to `start_date=text:2025-01-01` and `end_date=text:2025-02-01` (one per line). The half-open interval includes the start and excludes the end, so adjacent monthly captures do not overlap. Reuse the query and snapshot series while changing the parameter values to compare periods. The transfer ID matches parallel transfers independently; the account IDs preserve endpoint identity even if an owner name changes. If source IDs are only unique within a tenant or database partition, include that scope in the entity ID expression, such as `CAST(transfer.tenant_id AS TEXT) || ':' || CAST(sender.id AS TEXT)`. Check that the source columns use compatible date formatting and that each connection ID is unique in the selected period before capture.
+
 SQL queries can also capture custom relationship properties by aliasing values as `connection_attribute:<name>`, for example `transaction.amount AS "connection_attribute:amount"`. They persist with immutable snapshots, appear in validation and before/after comparisons, and are included in snapshot and comparison CSV/TSV exports. Use the **Relationship properties** filter to isolate captures where these values changed. Properties appear in chart search and the selected-link inspector; SQL-owned values refresh from each query and are read-only there. The schema query builder recognizes columns prefixed `connection_attribute_` or `link_attribute_` and aliases them for capture.
 
 1. Open **SQL Review** and choose a SQLite database file.
