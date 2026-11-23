@@ -7291,6 +7291,16 @@ impl eframe::App for App {
                                     .cmp(&second.name.to_lowercase())
                             })
                         });
+                        degrees.retain(|(_, count)| *count > 0);
+                        if degrees.is_empty() {
+                            ui.label(
+                                egui::RichText::new(
+                                    "No connected entities match this measure and relationship type.",
+                                )
+                                .small()
+                                .color(muted),
+                            );
+                        }
                         for (rank, (entity, count)) in degrees.iter().take(5).enumerate() {
                             ui.horizontal(|ui| {
                                 let label = format!(
