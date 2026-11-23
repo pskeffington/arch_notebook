@@ -300,6 +300,7 @@ enum AutomationWorkerResult {
         case: CaseFile,
         disk_case_json: String,
         error: String,
+        selected_snapshot: Option<(String, usize)>,
         selected_link: Option<usize>,
     },
     UnsavedCase {
@@ -2796,7 +2797,9 @@ impl App {
             .cloned();
         let progress = Arc::new(Mutex::new("Waiting for the case lock".to_owned()));
         let worker_progress = Arc::clone(&progress);
-        let durable_checkpoint = Arc::new(Mutex::new(None::<(CaseFile, String)>));
+        let durable_checkpoint = Arc::new(Mutex::new(
+            None::<(CaseFile, String, Option<(String, usize)>)>,
+        ));
         let worker_checkpoint = Arc::clone(&durable_checkpoint);
         let (sender, receiver) = mpsc::channel();
         let spawn_result = thread::Builder::new()
@@ -2870,7 +2873,14 @@ impl App {
                         save_case_atomically(path, &worker.case)?;
                         worker.disk_case_json = Some(serialized.clone());
                         if let Ok(mut checkpoint) = worker_checkpoint.lock() {
-                            *checkpoint = Some((worker.case.clone(), serialized));
+                            *checkpoint = Some((
+                                worker.case.clone(),
+                                serialized,
+                                worker
+                                    .sql_snapshot_source
+                                    .clone()
+                                    .zip(worker.sql_snapshot_index),
+                            ));
                         }
                         let run = worker
                             .case
@@ -2943,7 +2953,9 @@ impl App {
                 let result = match result {
                     Err(error) => match worker_checkpoint.lock() {
                         Ok(checkpoint) => {
-                            if let Some((case, disk_case_json)) = checkpoint.clone() {
+                            if let Some((case, disk_case_json, selected_snapshot)) =
+                                checkpoint.clone()
+                            {
                                 let selected_link = selected_link_record
                                     .as_ref()
                                     .and_then(|selected| refreshed_link_index(&case.links, selected));
@@ -2951,6 +2963,7 @@ impl App {
                                     case,
                                     disk_case_json,
                                     error,
+                                    selected_snapshot,
                                     selected_link,
                                 })
                             } else {
@@ -5631,12 +5644,17 @@ impl eframe::App for App {
                             case,
                             disk_case_json,
                             error,
+                            selected_snapshot,
                             selected_link,
                         } => {
                             self.case = case;
                             self.disk_case_json = Some(disk_case_json);
                             self.saved_case_json = self.current_case_json();
                             self.selected_link = selected_link;
+                            if let Some((source, index)) = selected_snapshot {
+                                self.sql_snapshot_source = Some(source);
+                                self.sql_snapshot_index = Some(index);
+                            }
                             self.status =
                                 format!("AUTOMATION FAILED · {error} · SAVED CHECKPOINTS RELOADED");
                             self.invalidate_network_groups();
