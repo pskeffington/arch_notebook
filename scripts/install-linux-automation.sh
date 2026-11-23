@@ -128,8 +128,8 @@ if ! command -v systemctl >/dev/null 2>&1; then
 fi
 
 # One locked preflight checks that enabled jobs exist and their queries work.
-if ! "$binary" --check-enabled-job-queries "$case_file"; then
-  echo "One or more enabled SQL jobs failed preflight; fix the job, database, or query before installing the timer." >&2
+if ! "$binary" --check-enabled-job-queries "$case_file" --require-usable; then
+  echo "One or more enabled SQL jobs failed preflight or returned no usable connections; fix the job, database, or query before installing the timer." >&2
   exit 1
 fi
 

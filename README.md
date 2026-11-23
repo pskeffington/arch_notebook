@@ -48,7 +48,7 @@ Select `/tmp/sample_connections.sqlite` as the source for the disposable copy, o
 
 ## Automate repeatable ingestion
 
-The validated query preview shows up to eight rows with endpoint names and source IDs, relationship, direction, date, confidence, evidence, and SQL supplied source notes. A prominent result-quality label distinguishes usable results, partial skips, empty results, and cases where every row was skipped, even when a zero-row query passes configured limits. The preview is horizontally scrollable for wide schemas. In **SQL regressions**, set optional automation capture limits, validate the current query and enter a job name before using **Save and review in Automation** to carry the database, series, query, parameters, and capture limits into a repeatable job without re-entering them. Expand **Automation capture limits** to set optional minimum/maximum connections, regression, or skipped-row thresholds before validating. This handoff is enabled only for a usable result with no skipped endpoints and passing capture limits; the new job starts disabled until you review and enable it in Automation; disabled rows are labeled and expose Validate/Edit actions.
+The validated query preview shows up to eight rows with endpoint names and source IDs, relationship, direction, date, confidence, evidence, and SQL supplied source notes. A prominent result-quality label distinguishes usable results, partial skips, empty results, and cases where every row was skipped, even when a zero-row query passes configured limits. The preview also reports removals and confidence declines against the previous capture in the same series, and labels a first capture as the baseline. The preview is horizontally scrollable for wide schemas. In **SQL regressions**, set optional automation capture limits, validate the current query and enter a job name before using **Save and review in Automation** to carry the database, series, query, parameters, and capture limits into a repeatable job without re-entering them. Expand **Automation capture limits** to set optional minimum/maximum connections, regression, or skipped-row thresholds before validating. This handoff is enabled only for a usable result with no skipped endpoints and passing capture limits; the new job starts disabled until you review and enable it in Automation; disabled rows are labeled and expose Validate/Edit actions.
 
 In both the automation editor and one-off SQL snapshot panel, **Build query from schema** inspects the configured SQLite file read-only and generates an editable `SELECT` from the first table or view with recognizable source and target columns. Review and adjust the selected columns before validating or saving the query.
 
@@ -153,6 +153,8 @@ To check enabled SQL queries and their SQLite sources without requiring current 
 ```sh
 cargo run --offline -- --check-enabled-job-queries harbor-light.case.json
 ```
+
+Add `--require-usable` to fail preflight when any selected query returns no usable connections. The Linux and macOS schedule installers use this stricter check, so an empty or all-skipped enabled job cannot be scheduled accidentally. This option does not enforce regression or capture thresholds; those remain visible runtime outcomes.
 
 Preflight every enabled SQL job before scheduling a batch. Validation runs each query read-only, checks minimum and optional regression limits, and evaluates jobs in run order with a temporary snapshot chain. It does not save snapshots or change the case file:
 
