@@ -1990,14 +1990,24 @@ impl App {
         }
         if !self.automation_chart_export_dir.trim().is_empty() {
             let export_dir = Path::new(&self.automation_chart_export_dir);
-            if !export_dir.is_absolute() || !export_dir.is_dir() {
+            if self
+                .automation_chart_export_dir
+                .chars()
+                .any(char::is_control)
+                || !export_dir.is_absolute()
+                || !export_dir.is_dir()
+            {
                 self.status =
                     "CHART CSV EXPORT FOLDER MUST BE AN EXISTING ABSOLUTE DIRECTORY".into();
                 return;
             }
         }
         let schedule = self.automation_schedule.clone();
-        let chart_export_dir = self.automation_chart_export_dir.clone();
+        let chart_export_dir = if self.automation_chart_export_dir.trim().is_empty() {
+            String::new()
+        } else {
+            self.automation_chart_export_dir.clone()
+        };
         let case_label = case_path.to_string_lossy().into_owned();
         let (sender, receiver) = mpsc::channel();
         self.automation_schedule_worker = Some(receiver);
@@ -2198,6 +2208,7 @@ impl App {
                 self.data_source_filter = None;
                 self.editing_automation_job = None;
                 self.automation_editor_before_edit = None;
+                self.automation_chart_export_dir.clear();
                 self.automation_job_name.clear();
                 self.selection_set_name.clear();
                 self.automation_run_parameter_text.clear();
@@ -7951,6 +7962,7 @@ impl App {
         self.editing_automation_job = None;
         self.automation_editor_before_edit = None;
         self.automation_run_parameter_text.clear();
+        self.automation_chart_export_dir.clear();
         self.selection_set_name.clear();
         self.selected_import_spec = None;
         self.import_spec_name.clear();
@@ -12384,7 +12396,7 @@ impl eframe::App for App {
                                         .hint_text("Optional existing absolute folder")
                                         .desired_width(320.0));
                                 });
-                                ui.label(egui::RichText::new("When set, scheduled captures write one atomically refreshed CSV per enabled SQL job. Check schedule restores the installed folder here.").small().color(muted));
+                                ui.label(egui::RichText::new("When set, scheduled captures write one atomically refreshed CSV per enabled SQL job. Check schedule restores the installed folder; switching cases clears this field until checked.").small().color(muted));
                                 if self.automation_schedule_worker.is_some()
                                     && self.automation_schedule_target_path.as_deref()
                                         == Some(self.case_path.as_str())
