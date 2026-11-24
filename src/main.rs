@@ -1039,6 +1039,7 @@ struct App {
     sql_schema_filter: String,
     sql_schema_template_index: usize,
     sql_schema_template_source: Option<(String, String)>,
+    automation_repair_context: Option<(Uuid, String, Option<String>)>,
     automation_job_filter: String,
     automation_run_filter: String,
     automation_run_trigger_filter: String,
@@ -1544,6 +1545,7 @@ impl Default for App {
             sql_schema_filter: String::new(),
             sql_schema_template_index: 0,
             sql_schema_template_source: None,
+            automation_repair_context: None,
             automation_job_filter: String::new(),
             automation_run_filter: String::new(),
             automation_run_trigger_filter: "all".into(),
@@ -1921,6 +1923,7 @@ impl App {
             sql_schema_filter: String::new(),
             sql_schema_template_index: 0,
             sql_schema_template_source: None,
+            automation_repair_context: None,
             automation_job_filter: String::new(),
             automation_run_filter: String::new(),
             automation_run_trigger_filter: "all".into(),
@@ -4585,6 +4588,7 @@ impl App {
             }
         }
         self.sql_cleared_parameter_draft = None;
+        self.automation_repair_context = None;
         if let Some(id) = self.editing_automation_job {
             if let Some(job) = self
                 .case
@@ -5512,6 +5516,7 @@ impl App {
 
     fn cancel_automation_job_edit(&mut self) {
         self.editing_automation_job = None;
+        self.automation_repair_context = None;
         self.restore_automation_editor_before_edit();
         self.status = "JOB EDIT CANCELED".into();
     }
@@ -12130,6 +12135,32 @@ impl eframe::App for App {
                                     if ui.button(if recovered_job_draft { "Save recovered job" } else if editing_saved_job { "Save job changes" } else { "Add job" }).clicked() { self.save_automation_job(); }
                                     if self.editing_automation_job.is_some() && ui.button(if recovered_job_draft { "Discard recovered draft" } else { "Cancel edit" }).clicked() { self.cancel_automation_job_edit(); }
                                 });
+                                if let Some((run_id, kind, reference)) =
+                                    self.automation_repair_context.as_ref()
+                                {
+                                    let mut dismiss_repair_context = false;
+                                    egui::Frame::new()
+                                        .fill(egui::Color32::from_rgb(48, 39, 30))
+                                        .inner_margin(egui::Margin::symmetric(8, 5))
+                                        .show(ui, |ui| {
+                                            ui.horizontal(|ui| {
+                                                ui.label(egui::RichText::new(format!(
+                                                    "REPAIRING RUN {run_id} · {}",
+                                                    kind.replace('_', " ").to_ascii_uppercase()
+                                                )).strong().color(egui::Color32::from_rgb(238, 174, 83)));
+                                                if ui.small_button("Dismiss").clicked() {
+                                                    dismiss_repair_context = true;
+                                                }
+                                            });
+                                            if let Some(reference) = reference {
+                                                ui.label(format!("Reported schema reference: {reference}"));
+                                            }
+                                            ui.label("The failed run's SQL and parameters are loaded. Inspect the current schema, adapt the query, then validate it before saving.");
+                                        });
+                                    if dismiss_repair_context {
+                                        self.automation_repair_context = None;
+                                    }
+                                }
                                 if !self.sql_schema_templates.is_empty()
                                     || !self.sql_schema_objects.is_empty()
                                     || self.sql_cleared_parameter_draft.is_some()
@@ -12786,7 +12817,54 @@ impl eframe::App for App {
                                             );
                                         });
                                 }
-                                if let Some((verb,id))=action {match verb.as_str(){"explain"=>self.explain_automation_job(id),"validate"=>{self.validate_automation_job(id);},"edit"=>self.edit_automation_job(id),"repair"=>{let loaded=if let Some(run_id)=repair_run_id{self.load_automation_run_into_editor(run_id)}else{self.edit_automation_job(id);self.editing_automation_job==Some(id)};if loaded{self.build_sql_query_from_schema();}},"run"=>self.start_automation_jobs(vec![id],false),"export"=>self.export_automation_job_package(id),"delete"=>{if self.editing_automation_job==Some(id){self.cancel_automation_job_edit();}self.case.automation_jobs.retain(|job|job.id!=id);self.status="AUTOMATION JOB DELETED".into();},_=>{}}}
+                                if let Some((verb, id)) = action {
+                                    match verb.as_str() {
+                                        "explain" => self.explain_automation_job(id),
+                                        "validate" => {
+                                            self.validate_automation_job(id);
+                                        }
+                                        "edit" => {
+                                            self.automation_repair_context = None;
+                                            self.edit_automation_job(id);
+                                        }
+                                        "repair" => {
+                                            let repair_context = repair_run_id.and_then(|run_id| {
+                                                self.case
+                                                    .automation_runs
+                                                    .iter()
+                                                    .find(|run| run.id == run_id)
+                                                    .and_then(|run| {
+                                                        let kind = sql_schema_adaptation_kind(&run.message)?;
+                                                        Some((
+                                                            run_id,
+                                                            kind.to_owned(),
+                                                            sql_schema_adaptation_reference(&run.message),
+                                                        ))
+                                                    })
+                                            });
+                                            let loaded = if let Some(run_id) = repair_run_id {
+                                                self.load_automation_run_into_editor(run_id)
+                                            } else {
+                                                self.edit_automation_job(id);
+                                                self.editing_automation_job == Some(id)
+                                            };
+                                            if loaded {
+                                                self.automation_repair_context = repair_context;
+                                                self.build_sql_query_from_schema();
+                                            }
+                                        }
+                                        "run" => self.start_automation_jobs(vec![id], false),
+                                        "export" => self.export_automation_job_package(id),
+                                        "delete" => {
+                                            if self.editing_automation_job == Some(id) {
+                                                self.cancel_automation_job_edit();
+                                            }
+                                            self.case.automation_jobs.retain(|job| job.id != id);
+                                            self.status = "AUTOMATION JOB DELETED".into();
+                                        }
+                                        _ => {}
+                                    }
+                                }
                                 if let Some((_, job_name, database_path, result)) = &self.sql_plan_result {
                                     egui::CollapsingHeader::new(format!("Latest SQL query plan · {job_name}"))
                                         .id_salt(("sql_query_plan_result", job_name))
