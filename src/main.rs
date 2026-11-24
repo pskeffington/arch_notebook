@@ -1826,9 +1826,7 @@ impl App {
         self.network_groups = None;
         self.network_bridges = None;
         self.chart_focus_group = None;
-        self.path_result.clear();
-        self.path_link_result.clear();
-        self.chart_fit_path = None;
+        self.clear_path_result();
     }
 
     fn automation_context(case: CaseFile, case_path: &str) -> Self {
@@ -2229,7 +2227,7 @@ impl App {
                 self.chart_focus_group = None;
                 self.selected = None;
                 self.selected_link = None;
-                self.path_result.clear();
+                self.clear_path_result();
                 self.duplicate_candidates.clear();
                 self.merge_candidate = None;
                 self.status = if cleared_one_run_overrides {
@@ -3408,7 +3406,7 @@ impl App {
                 self.case.entities = entities;
                 self.case.links = links;
                 self.invalidate_network_groups();
-                self.path_result.clear();
+                self.clear_path_result();
                 self.duplicate_candidates.clear();
                 self.merge_candidate = None;
                 format!(
@@ -3956,7 +3954,7 @@ impl App {
                 self.invalidate_network_groups();
                 self.case.snapshots.push(snapshot);
                 self.sql_snapshot_index = Some(self.case.snapshots.len() - 1);
-                self.path_result.clear();
+                self.clear_path_result();
                 self.status = if skipped_rows == 0 {
                     format!("SQL SNAPSHOT INGESTED · {count} CONNECTIONS")
                 } else {
@@ -7617,9 +7615,7 @@ impl App {
         self.chart_focus = None;
         self.chart_focus_link = None;
         self.chart_focus_group = None;
-        self.path_result.clear();
-        self.path_link_result.clear();
-        self.path_timeline_range = None;
+        self.clear_path_result();
         self.timeline_range = None;
         self.selected = None;
         self.selected_link = None;
@@ -7704,9 +7700,7 @@ impl App {
         self.chart_focus_group = Some(entity_ids.iter().copied().collect());
         self.chart_focus = None;
         self.chart_focus_link = None;
-        self.path_result.clear();
-        self.path_link_result.clear();
-        self.path_timeline_range = None;
+        self.clear_path_result();
         self.timeline_range = None;
         self.sql_source_focus = None;
         self.selected = entity_ids.first().copied();
@@ -7725,9 +7719,7 @@ impl App {
         self.chart_fit_path = None;
         self.chart_focus_group = None;
         self.sql_source_focus = None;
-        self.path_result.clear();
-        self.path_link_result.clear();
-        self.path_timeline_range = None;
+        self.clear_path_result();
         self.timeline_range = None;
     }
 
@@ -7740,9 +7732,7 @@ impl App {
         self.chart_fit_path = None;
         self.chart_focus_group = None;
         self.sql_source_focus = None;
-        self.path_result.clear();
-        self.path_link_result.clear();
-        self.path_timeline_range = None;
+        self.clear_path_result();
         self.timeline_range = None;
     }
 
@@ -7948,7 +7938,7 @@ impl App {
             self.case.links.retain(|l| l.from != id && l.to != id);
             self.invalidate_network_groups();
             self.selected_link = None;
-            self.path_result.clear();
+            self.clear_path_result();
             self.status = "ENTITY AND ITS RELATIONSHIPS REMOVED".into();
         } else if let Some(i) = self.selected_link.take() {
             if i < self.case.links.len() {
@@ -7960,7 +7950,7 @@ impl App {
             }
             self.selected_link = None;
             self.chart_focus_link = None;
-            self.path_result.clear();
+            self.clear_path_result();
         }
     }
 
@@ -8015,7 +8005,7 @@ impl App {
         self.selected_link = None;
         self.path_start = None;
         self.path_end = None;
-        self.path_result.clear();
+        self.clear_path_result();
         self.duplicate_candidates.clear();
         self.merge_candidate = None;
         self.status = if cleared_one_run_overrides {
@@ -8023,6 +8013,13 @@ impl App {
         } else {
             "NEW CASE CREATED".into()
         };
+    }
+
+    fn clear_path_result(&mut self) {
+        self.path_result.clear();
+        self.path_link_result.clear();
+        self.chart_fit_path = None;
+        self.path_timeline_range = None;
     }
 
     fn analyze_path(&mut self) {
@@ -8144,9 +8141,7 @@ impl App {
         self.path_follow_directions = saved.follow_directions;
         self.path_time_flow = saved.time_flow;
         self.path_use_timeline_range = saved.use_timeline_range;
-        self.path_result.clear();
-        self.path_link_result.clear();
-        self.chart_fit_path = None;
+        self.clear_path_result();
         self.page = WorkspacePage::Data;
         self.show_timeline = false;
         self.data_mode = DataMode::Relationships;
@@ -8381,10 +8376,7 @@ impl App {
         self.selected_link = None;
         self.chart_focus = Some(keep_id);
         self.chart_focus_group = None;
-        self.path_result.clear();
-        self.path_link_result.clear();
-        self.chart_fit_path = None;
-        self.path_timeline_range = None;
+        self.clear_path_result();
         self.merge_candidate = None;
         self.duplicate_candidates.clear();
         self.status = format!(
@@ -10938,9 +10930,7 @@ impl eframe::App for App {
             .then_some(self.timeline_range)
             .flatten();
         if !self.path_result.is_empty() && self.path_timeline_range != active_path_timeline_range {
-            self.path_result.clear();
-            self.path_link_result.clear();
-            self.chart_fit_path = None;
+            self.clear_path_result();
         }
         if let Some(inspection_state) = self
             .import_inspection_worker
@@ -11681,7 +11671,7 @@ impl eframe::App for App {
                             self.chart_focus_link = None;
                             self.chart_focus_group = None;
                             self.sql_source_focus = None;
-                            self.path_result.clear();
+                            self.clear_path_result();
                         }
                         if ui.small_button("−").clicked() {
                             self.chart_zoom = (self.chart_zoom / 1.2).clamp(0.25, 3.0);
@@ -11756,8 +11746,7 @@ impl eframe::App for App {
                         self.chart_fit_entities=None;
                         self.chart_fit_path=None;
                         self.sql_source_focus=None;
-                        self.path_result.clear();
-                        self.path_link_result.clear();
+                        self.clear_path_result();
                         self.timeline_range=None;
                         self.page=WorkspacePage::Chart;
                         self.show_timeline=false;
@@ -13383,7 +13372,7 @@ impl eframe::App for App {
                                         self.chart_fit_entities = None;
                                         self.chart_fit_path = None;
                                         self.sql_source_focus = None;
-                                        self.path_result.clear();
+                                        self.clear_path_result();
                                         self.page = WorkspacePage::Chart;
                                         self.show_timeline = false;
                                     } else {
@@ -14175,7 +14164,7 @@ impl eframe::App for App {
                                                         self.chart_fit_entities = None;
                                                         self.chart_fit_path = None;
                                                         self.sql_source_focus = None;
-                                                        self.path_result.clear();
+                                                        self.clear_path_result();
                                                         self.page = WorkspacePage::Chart;
                                                         self.show_timeline = false;
                                                     }
@@ -15061,7 +15050,7 @@ impl eframe::App for App {
                             self.chart_focus_group = Some(top_entities.iter().copied().collect());
                             self.chart_focus = None;
                             self.chart_focus_link = None;
-                            self.path_result.clear();
+                            self.clear_path_result();
                             self.sql_source_focus = None;
                             self.selected = top_entities.first().copied();
                             self.selected_link = None;
@@ -15109,7 +15098,7 @@ impl eframe::App for App {
                                     self.chart_focus_group = Some(group_ids.iter().copied().collect());
                                     self.chart_focus = None;
                                     self.chart_focus_link = None;
-                                    self.path_result.clear();
+                                    self.clear_path_result();
                                     self.selected = group_ids.first().copied();
                                     self.selected_link = None;
                                     self.sql_source_focus = None;
@@ -15168,7 +15157,7 @@ impl eframe::App for App {
                                         self.chart_focus_group = Some(neighborhood.into_iter().collect());
                                         self.chart_focus = None;
                                         self.chart_focus_link = None;
-                                        self.path_result.clear();
+                                        self.clear_path_result();
                                         self.sql_source_focus = None;
                                         self.selected = Some(*entity_id);
                                         self.selected_link = None;
@@ -15179,11 +15168,11 @@ impl eframe::App for App {
                                 ui.horizontal_wrapped(|ui| {
                                     if ui.small_button("Use as path start").clicked() {
                                         self.path_start = Some(*entity_id);
-                                        self.path_result.clear();
+                                        self.clear_path_result();
                                     }
                                     if ui.small_button("Use as path end").clicked() {
                                         self.path_end = Some(*entity_id);
-                                        self.path_result.clear();
+                                        self.clear_path_result();
                                     }
                                 });
                                 egui::CollapsingHeader::new("Inspect connection records")
@@ -15257,7 +15246,7 @@ impl eframe::App for App {
                                                     self.chart_focus_group = None;
                                                     self.chart_fit_entities = None;
                                                     self.chart_fit_path = None;
-                                                    self.path_result.clear();
+                                                    self.clear_path_result();
                                                     self.sql_source_focus = None;
                                                     self.page = WorkspacePage::Chart;
                                                     self.show_timeline = false;
@@ -15304,15 +15293,13 @@ impl eframe::App for App {
                                 }
                             });
                         if path_endpoints_changed {
-                            self.path_result.clear();
-                            self.chart_fit_path = None;
+                            self.clear_path_result();
                         }
                         if ui
                             .checkbox(&mut self.path_follow_directions, "Follow link directions")
                             .changed()
                         {
-                            self.path_result.clear();
-                            self.chart_fit_path = None;
+                            self.clear_path_result();
                         }
                         let time_flow_label = match self.path_time_flow {
                             PathTimeFlow::Any => "Any date order",
@@ -15341,13 +15328,12 @@ impl eframe::App for App {
                             });
                         if selected_time_flow != self.path_time_flow {
                             self.path_time_flow = selected_time_flow;
-                            self.path_result.clear();
-                            self.chart_fit_path = None;
+                            self.clear_path_result();
                         }
                         let timeline_filter_label = self.timeline_range.and_then(|(start, end)| {
                             Some((
-                                timeline_date_text(&self.case.links, start)?,
-                                timeline_date_text(&self.case.links, end)?,
+                                timeline_date_text(&self.case.links, start)?.to_owned(),
+                                timeline_date_text(&self.case.links, end)?.to_owned(),
                             ))
                         });
                         ui.add_enabled_ui(timeline_filter_label.is_some(), |ui| {
@@ -15358,9 +15344,7 @@ impl eframe::App for App {
                                 )
                                 .changed()
                             {
-                                self.path_result.clear();
-                                self.path_link_result.clear();
-                                self.chart_fit_path = None;
+                                self.clear_path_result();
                             }
                         });
                         if let Some((start, end)) = timeline_filter_label {
@@ -15449,8 +15433,7 @@ impl eframe::App for App {
                                     self.selected_link = None;
                                 }
                                 if ui.small_button("Clear path").clicked() {
-                                    self.path_result.clear();
-                                    self.chart_fit_path = None;
+                                    self.clear_path_result();
                                     self.chart_fit_entities = None;
                                 }
                             });
@@ -15981,9 +15964,7 @@ impl eframe::App for App {
                             );
                         }
                         if path_criteria_changed {
-                            self.path_result.clear();
-                            self.path_link_result.clear();
-                            self.chart_fit_path = None;
+                            self.clear_path_result();
                         }
                         if let Some(counterpart_id) = focus_linked_entity {
                             self.selected = Some(counterpart_id);
@@ -15993,7 +15974,7 @@ impl eframe::App for App {
                             self.chart_focus_group = None;
                             self.chart_fit_entities = None;
                             self.chart_fit_path = None;
-                            self.path_result.clear();
+                            self.clear_path_result();
                             self.sql_source_focus = None;
                             self.show_timeline = false;
                         } else if let Some(index) = focus_linked_record {
@@ -16004,7 +15985,7 @@ impl eframe::App for App {
                             self.chart_focus_group = None;
                             self.chart_fit_entities = None;
                             self.chart_fit_path = None;
-                            self.path_result.clear();
+                            self.clear_path_result();
                             self.sql_source_focus = None;
                             self.show_timeline = false;
                         }
