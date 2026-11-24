@@ -933,6 +933,12 @@ fn default_chart_title() -> String {
     "Chart 1".into()
 }
 
+fn is_generated_chart_title(title: &str) -> bool {
+    title.strip_prefix("Chart ").is_some_and(|number| {
+        !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit())
+    })
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 struct SavedPath {
     id: Uuid,
@@ -1213,6 +1219,7 @@ struct GraphMlDocument {
 struct InterchangeImportPayload {
     csv_bytes: Vec<u8>,
     source_catalogs: Vec<serde_json::Value>,
+    chart_title: Option<String>,
 }
 
 #[derive(Default)]
@@ -1233,6 +1240,7 @@ enum KmlGeometry {
 
 #[derive(Clone, Copy)]
 enum KmlTextTarget {
+    DocumentName,
     Name,
     Description,
     Coordinates,
@@ -2485,6 +2493,10 @@ impl App {
         source_format: &str,
     ) {
         let source_catalogs = payload.source_catalogs;
+        let chart_title = payload.chart_title;
+        let adopt_chart_title = self.case.entities.is_empty()
+            && self.case.links.is_empty()
+            && is_generated_chart_title(&self.case.active_chart_title);
         let temporary_path = match write_interchange_csv_temp(payload.csv_bytes, source_format) {
             Ok(path) => path,
             Err(error) => {
@@ -2501,6 +2513,11 @@ impl App {
         self.import_column_mapping = original_mapping;
         let import_status = std::mem::take(&mut self.status);
         self.status = if let Some(summary) = import_status.strip_prefix("CSV IMPORT · ") {
+            if adopt_chart_title
+                && let Some(chart_title) = chart_title.filter(|title| !title.trim().is_empty())
+            {
+                self.case.active_chart_title = chart_title;
+            }
             if source_format == "GRAPHML" {
                 self.case.graphml_source_catalogs = merge_graphml_source_catalogs(
                     self.case
@@ -2782,7 +2799,10 @@ impl App {
     fn import_delimited(&mut self) {
         let import_path = self.import_path.clone();
         let mapping = self.import_column_mapping.clone();
-        let result = (|| -> Result<(usize, usize, usize, Vec<Entity>, Vec<Link>), String> {
+        let adopt_imported_chart_title = self.case.entities.is_empty()
+            && self.case.links.is_empty()
+            && is_generated_chart_title(&self.case.active_chart_title);
+        let result = (|| -> Result<(usize, usize, usize, Vec<Entity>, Vec<Link>, Option<String>), String> {
             let delimiter = detect_import_delimiter(Path::new(&import_path))?;
             let mut reader = csv::ReaderBuilder::new()
                 .delimiter(delimiter)
@@ -2796,6 +2816,11 @@ impl App {
                 .collect::<Vec<_>>();
             let headers = normalize_delimited_headers(headers);
             validate_delimited_headers(headers.iter())?;
+            let chart_title_column = headers
+                .iter()
+                .position(|header| header.eq_ignore_ascii_case("chart_title"));
+            let mut imported_chart_title: Option<String> = None;
+            let mut conflicting_chart_titles = false;
             let col = |field: &str, names: &[&str]| {
                 let selected = match field {
                     "source" => &mapping.source,
@@ -3078,6 +3103,21 @@ impl App {
                 if !included {
                     skipped += 1;
                     continue;
+                }
+                if let Some(index) = chart_title_column
+                    && let Some(title) = row
+                        .get(index)
+                        .map(str::trim)
+                        .filter(|title| !title.is_empty())
+                {
+                    if imported_chart_title
+                        .as_ref()
+                        .is_some_and(|existing| existing != title)
+                    {
+                        conflicting_chart_titles = true;
+                    } else {
+                        imported_chart_title.get_or_insert_with(|| title.to_owned());
+                    }
                 }
                 let row_type = record_type
                     .and_then(|index| row.get(index))
@@ -3561,12 +3601,24 @@ impl App {
                     }
                 }
             }
-            Ok((created, updated, skipped, entities, links))
+            Ok((
+                created,
+                updated,
+                skipped,
+                entities,
+                links,
+                (!conflicting_chart_titles)
+                    .then_some(imported_chart_title)
+                    .flatten(),
+            ))
         })();
         self.status = match result {
-            Ok((created, updated, skipped, entities, links)) => {
+            Ok((created, updated, skipped, entities, links, chart_title)) => {
                 self.case.entities = entities;
                 self.case.links = links;
+                if adopt_imported_chart_title && let Some(chart_title) = chart_title {
+                    self.case.active_chart_title = chart_title;
+                }
                 self.invalidate_network_groups();
                 self.clear_path_result();
                 self.duplicate_candidates.clear();
@@ -18659,7 +18711,7 @@ fn store_kml_data_value(
     Ok(())
 }
 
-fn parse_kml_placemarks(path: &str) -> Result<Vec<KmlPlacemark>, String> {
+fn parse_kml_placemarks(path: &str) -> Result<(Option<String>, Vec<KmlPlacemark>), String> {
     if path.trim().is_empty() {
         return Err("KML import path cannot be empty".into());
     }
@@ -18673,6 +18725,9 @@ fn parse_kml_placemarks(path: &str) -> Result<Vec<KmlPlacemark>, String> {
     let mut active_target: Option<KmlTextTarget> = None;
     let mut text = String::new();
     let mut root_seen = false;
+    let mut in_document = false;
+    let mut folder_depth = 0usize;
+    let mut document_name = None;
     let mut buffer = Vec::new();
     loop {
         let event = reader
@@ -18681,6 +18736,8 @@ fn parse_kml_placemarks(path: &str) -> Result<Vec<KmlPlacemark>, String> {
         match event {
             XmlEvent::Start(start) => match start.local_name().as_ref() {
                 b"kml" => root_seen = true,
+                b"Document" => in_document = true,
+                b"Folder" if in_document => folder_depth += 1,
                 b"Placemark" => {
                     if placemark.is_some() {
                         return Err("KML placemarks cannot be nested".into());
@@ -18738,6 +18795,15 @@ fn parse_kml_placemarks(path: &str) -> Result<Vec<KmlPlacemark>, String> {
                         && active_data_name.is_none() =>
                 {
                     active_target = Some(KmlTextTarget::Name);
+                    text.clear();
+                }
+                b"name"
+                    if in_document
+                        && folder_depth == 0
+                        && active_target.is_none()
+                        && active_data_name.is_none() =>
+                {
+                    active_target = Some(KmlTextTarget::DocumentName);
                     text.clear();
                 }
                 b"description"
@@ -18850,6 +18916,10 @@ fn parse_kml_placemarks(path: &str) -> Result<Vec<KmlPlacemark>, String> {
                         .name = std::mem::take(&mut text).trim().to_owned();
                     active_target = None;
                 }
+                b"name" if matches!(active_target, Some(KmlTextTarget::DocumentName)) => {
+                    document_name = Some(std::mem::take(&mut text).trim().to_owned());
+                    active_target = None;
+                }
                 b"description" if matches!(active_target, Some(KmlTextTarget::Description)) => {
                     placemark
                         .as_mut()
@@ -18874,6 +18944,8 @@ fn parse_kml_placemarks(path: &str) -> Result<Vec<KmlPlacemark>, String> {
                     }
                     placemarks.push(item);
                 }
+                b"Folder" if folder_depth > 0 => folder_depth -= 1,
+                b"Document" => in_document = false,
                 _ => {}
             },
             XmlEvent::Eof => break,
@@ -18890,7 +18962,7 @@ fn parse_kml_placemarks(path: &str) -> Result<Vec<KmlPlacemark>, String> {
     if placemarks.is_empty() {
         return Err("KML document contains no supported placemarks".into());
     }
-    Ok(placemarks)
+    Ok((document_name, placemarks))
 }
 
 fn parse_kml_coordinates(value: &str) -> Result<Vec<(f64, f64)>, String> {
@@ -18965,8 +19037,15 @@ fn kml_attributes(placemark: &KmlPlacemark, prefix: &str) -> Result<Vec<(String,
     Ok(attributes)
 }
 
-fn kml_to_graphml_document(placemarks: Vec<KmlPlacemark>) -> Result<GraphMlDocument, String> {
+fn kml_to_graphml_document(
+    placemarks: Vec<KmlPlacemark>,
+    document_name: Option<String>,
+) -> Result<GraphMlDocument, String> {
     let mut document = GraphMlDocument::default();
+    if let Some(title) = document_name.filter(|title| !title.trim().is_empty()) {
+        document.graph_data.insert("title".into(), title.clone());
+        document.graph_data.insert("chart_title".into(), title);
+    }
     let mut node_id_by_entity_id = HashMap::<Uuid, String>::new();
     let mut node_ids_by_kml_id = HashMap::<String, String>::new();
     let mut node_ids_by_coordinate = HashMap::<(i64, i64), Vec<String>>::new();
@@ -19229,8 +19308,8 @@ fn kml_resolve_endpoint(
 }
 
 fn kml_import_payload(path: &str) -> Result<InterchangeImportPayload, String> {
-    let placemarks = parse_kml_placemarks(path)?;
-    let document = kml_to_graphml_document(placemarks)?;
+    let (document_name, placemarks) = parse_kml_placemarks(path)?;
+    let document = kml_to_graphml_document(placemarks, document_name)?;
     interchange_import_payload(document, path, "kml")
 }
 
@@ -19425,6 +19504,13 @@ fn interchange_import_payload(
     source_format: &str,
 ) -> Result<InterchangeImportPayload, String> {
     let source_label = source_format.to_ascii_uppercase();
+    let chart_title = document
+        .graph_data
+        .get("chart_title")
+        .or_else(|| document.graph_data.get("title"))
+        .map(String::as_str)
+        .filter(|title| !title.trim().is_empty())
+        .map(str::to_owned);
     let source_identity = fs::canonicalize(path)
         .unwrap_or_else(|_| PathBuf::from(path))
         .to_string_lossy()
@@ -19528,6 +19614,7 @@ fn interchange_import_payload(
 
     let mut headers = vec![
         "record_type",
+        "chart_title",
         "connection_id",
         "source",
         "source_entity_id",
@@ -19716,6 +19803,7 @@ fn interchange_import_payload(
         let mut row = vec![String::new(); headers.len()];
         let fields = [
             ("record_type", "entity"),
+            ("chart_title", chart_title.as_deref().unwrap_or("")),
             ("source", name),
             ("source_entity_id", entity_id.as_str()),
             ("source_external_ids_json", source_external_ids.as_str()),
@@ -19936,6 +20024,11 @@ fn interchange_import_payload(
         put(&mut row, "record_type", "connection".into());
         put(
             &mut row,
+            "chart_title",
+            chart_title.clone().unwrap_or_default(),
+        );
+        put(
+            &mut row,
             "relationship",
             graphml_property(edge, &["relationship", "label", "name"])
                 .unwrap_or("")
@@ -20028,6 +20121,7 @@ fn interchange_import_payload(
     Ok(InterchangeImportPayload {
         csv_bytes,
         source_catalogs: document.source_catalogs,
+        chart_title,
     })
 }
 
