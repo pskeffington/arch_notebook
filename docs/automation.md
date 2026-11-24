@@ -64,6 +64,8 @@ cargo run --offline -- --run-enabled-jobs harbor-light.case.json --export-chart-
 ARCH_NOTEBOOK_CHART_EXPORT_DIR="$HOME/Analyst Charts" arch-notebook-install-automation harbor-light.case.json
 ```
 
+Replay one saved SQL configuration and export the new capture in the same operation with `--rerun-run <case.json> <run-id> --export-chart-csv <output.csv|tsv>`. This is useful when you need to refresh an analyst handoff without changing the saved job or its parameters. The run history is saved even if the CSV export fails; the command then exits unsuccessfully and reports `chart_csv_export_error` separately from the capture outcome.
+
 Run one named job, including a disabled job, with:
 
 ```sh
