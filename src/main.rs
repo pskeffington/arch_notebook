@@ -24721,6 +24721,8 @@ fn list_automation_jobs_cli(
                 "id": job.id,
                 "name": job.name,
                 "enabled": job.enabled,
+                "destination_chart_id": job.chart_id,
+                "destination_chart_title": job.chart_id.and_then(|chart_id| chart_title_for_id(&case, chart_id)),
                 "database_path": job.database_path,
                 "series": job.series,
                 "query": job.query,
@@ -25795,6 +25797,12 @@ fn list_automation_runs_cli(
             outcome["duration_ms"] = serde_json::json!(run.duration_ms);
             outcome["sqlite_lock_retries"] = serde_json::json!(run.sqlite_lock_retries);
             outcome["enabled"] = serde_json::json!(run.enabled);
+            let destination_chart_id = run
+                .chart_id
+                .or_else(|| snapshot.and_then(|snapshot| snapshot.chart_id));
+            outcome["chart_title"] = serde_json::json!(
+                destination_chart_id.and_then(|chart_id| chart_title_for_id(&case, chart_id))
+            );
             outcome["configuration_recorded"] = serde_json::json!(run.configuration_recorded);
             outcome["trigger"] = serde_json::json!(run.trigger);
             outcome["parameter_overrides"] = serde_json::json!(run.parameter_overrides);
