@@ -13183,7 +13183,7 @@ impl eframe::App for App {
                                         .desired_width(320.0));
                                 });
                                 ui.label(egui::RichText::new("When set, scheduled captures write one atomically refreshed CSV per enabled SQL job. Check schedule restores the installed folder; switching cases clears this field until checked.").small().color(muted));
-                                let mut preflight_repair_request: Option<(Uuid, bool)> = None;
+                                let mut preflight_repair_request: Option<(Uuid, bool, String)> = None;
                                 if self.automation_schedule_worker.is_some()
                                     && self.automation_schedule_target_path.as_deref()
                                         == Some(self.case_path.as_str())
@@ -13259,7 +13259,8 @@ impl eframe::App for App {
                                                             && let Some(job_id) = job_id
                                                             && ui.small_button(if schema_repair { "Repair SQL" } else { "Edit job" }).clicked()
                                                         {
-                                                            preflight_repair_request = Some((job_id, schema_repair));
+                                                            preflight_repair_request =
+                                                                Some((job_id, schema_repair, job_name.to_owned()));
                                                         }
                                                     });
                                                     if let Some(error) = outcome["message"].as_str() {
@@ -13289,7 +13290,8 @@ impl eframe::App for App {
                                         );
                                     }
                                 }
-                                if let Some((job_id, repair_schema)) = preflight_repair_request {
+                                if let Some((job_id, repair_schema, job_name)) = preflight_repair_request {
+                                    self.automation_job_filter = job_name;
                                     self.edit_automation_job(job_id);
                                     if repair_schema {
                                         self.build_sql_query_from_schema();
