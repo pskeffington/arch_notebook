@@ -123,11 +123,28 @@ PY
     else
       echo "No legacy Arch Notebook SQL automation schedule is installed for this user."
     fi
+    echo "Chart CSV export directory: disabled"
     exit 0
   fi
   cadence="$(awk -F= '/^OnCalendar=/ { print $2; exit }' "$timer_file")"
   if [[ "$cadence" == "*:0/15" ]]; then cadence="every 15 minutes"; fi
   if [[ -z "$cadence" ]]; then cadence="unknown cadence"; fi
+  chart_export_dir="$(python3 - "$config_home/systemd/user/$schedule_name.service" <<'PY'
+import shlex
+import sys
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as source:
+        line = next((line for line in source if line.startswith("ExecStart=")), "")
+    arguments = shlex.split(line.partition("=")[2])
+except (OSError, ValueError):
+    arguments = []
+if len(arguments) >= 5 and arguments[3] == "--export-chart-csv-dir":
+    print(arguments[4].replace("%%", "%").replace("$$", "$"))
+else:
+    print("disabled")
+PY
+)"
   if command -v systemctl >/dev/null 2>&1; then
     enabled=0
     active=0
@@ -150,6 +167,7 @@ PY
   else
     echo "Legacy Arch Notebook SQL schedule: $cadence; $state."
   fi
+  printf 'Chart CSV export directory: %s\n' "$chart_export_dir"
   exit 0
 fi
 

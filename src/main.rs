@@ -86,7 +86,11 @@ fn sql_schema_adaptation_reference(error: &str) -> Option<String> {
     })
 }
 
-fn install_automation_schedule_command(case_path: &Path, schedule: &str) -> Result<String, String> {
+fn install_automation_schedule_command(
+    case_path: &Path,
+    schedule: &str,
+    chart_export_dir: &str,
+) -> Result<String, String> {
     let executable =
         env::current_exe().map_err(|error| format!("cannot locate app executable: {error}"))?;
     let mut command: Command;
@@ -134,6 +138,7 @@ fn install_automation_schedule_command(case_path: &Path, schedule: &str) -> Resu
         return Err("scheduled SQL automation is supported on Linux and macOS".into());
     }
     command.env("ARCH_NOTEBOOK_AUTOMATION_SCHEDULE", schedule);
+    command.env("ARCH_NOTEBOOK_CHART_EXPORT_DIR", chart_export_dir);
     let output = command
         .output()
         .map_err(|error| format!("could not launch schedule installer: {error}"))?;
@@ -303,6 +308,17 @@ fn schedule_cadence_from_status(message: &str) -> Option<&'static str> {
     } else {
         None
     }
+}
+
+fn schedule_chart_export_dir_from_status(message: &str) -> Option<String> {
+    message.lines().find_map(|line| {
+        let value = line.strip_prefix("Chart CSV export directory: ")?;
+        Some(if value == "disabled" {
+            String::new()
+        } else {
+            value.to_owned()
+        })
+    })
 }
 
 fn preflight_automation_jobs_command(
@@ -1075,6 +1091,7 @@ struct App {
     sql_schema_request: Option<(Uuid, String, String)>,
     sql_lock_retry_count: usize,
     automation_schedule: String,
+    automation_chart_export_dir: String,
     automation_schedule_message: Option<(String, bool, String)>,
     automation_schedule_target_path: Option<String>,
     automation_schedule_worker: Option<Receiver<(String, Result<String, String>)>>,
@@ -1567,6 +1584,8 @@ impl Default for App {
             sql_schema_request: None,
             sql_lock_retry_count: 0,
             automation_schedule: "hourly".into(),
+            automation_chart_export_dir: env::var("ARCH_NOTEBOOK_CHART_EXPORT_DIR")
+                .unwrap_or_default(),
             automation_schedule_message: None,
             automation_schedule_target_path: None,
             automation_schedule_worker: None,
@@ -1940,6 +1959,8 @@ impl App {
             sql_schema_request: None,
             sql_lock_retry_count: 0,
             automation_schedule: "hourly".into(),
+            automation_chart_export_dir: env::var("ARCH_NOTEBOOK_CHART_EXPORT_DIR")
+                .unwrap_or_default(),
             automation_schedule_message: None,
             automation_schedule_target_path: None,
             automation_schedule_worker: None,
@@ -1967,7 +1988,16 @@ impl App {
             self.status = "ENABLE AT LEAST ONE SQL JOB BEFORE INSTALLING A SCHEDULE".into();
             return;
         }
+        if !self.automation_chart_export_dir.trim().is_empty() {
+            let export_dir = Path::new(&self.automation_chart_export_dir);
+            if !export_dir.is_absolute() || !export_dir.is_dir() {
+                self.status =
+                    "CHART CSV EXPORT FOLDER MUST BE AN EXISTING ABSOLUTE DIRECTORY".into();
+                return;
+            }
+        }
         let schedule = self.automation_schedule.clone();
+        let chart_export_dir = self.automation_chart_export_dir.clone();
         let case_label = case_path.to_string_lossy().into_owned();
         let (sender, receiver) = mpsc::channel();
         self.automation_schedule_worker = Some(receiver);
@@ -1975,7 +2005,8 @@ impl App {
         self.automation_schedule_target_path = Some(case_label.clone());
         self.status = format!("INSTALLING {schedule} SQL AUTOMATION SCHEDULE");
         thread::spawn(move || {
-            let result = install_automation_schedule_command(&case_path, &schedule);
+            let result =
+                install_automation_schedule_command(&case_path, &schedule, &chart_export_dir);
             let _ = sender.send((case_label, result));
         });
     }
@@ -11026,6 +11057,11 @@ impl eframe::App for App {
                     {
                         self.automation_schedule = cadence.into();
                     }
+                    if case_path == self.case_path
+                        && let Some(export_dir) = schedule_chart_export_dir_from_status(&message)
+                    {
+                        self.automation_chart_export_dir = export_dir;
+                    }
                     self.automation_schedule_worker = None;
                     self.automation_schedule_target_path = None;
                     self.automation_progress = None;
@@ -12342,6 +12378,13 @@ impl eframe::App for App {
                                     }
                                 });
                                 ui.label(egui::RichText::new("Schedules are installed per case, so multiple cases can run independently. Install checks enabled queries read-only; Check and Remove apply to the case file currently open here.").small().color(muted));
+                                ui.horizontal(|ui| {
+                                    ui.label("Chart CSV export folder");
+                                    ui.add(egui::TextEdit::singleline(&mut self.automation_chart_export_dir)
+                                        .hint_text("Optional existing absolute folder")
+                                        .desired_width(320.0));
+                                });
+                                ui.label(egui::RichText::new("When set, scheduled captures write one atomically refreshed CSV per enabled SQL job. Check schedule restores the installed folder here.").small().color(muted));
                                 if self.automation_schedule_worker.is_some()
                                     && self.automation_schedule_target_path.as_deref()
                                         == Some(self.case_path.as_str())

@@ -93,6 +93,7 @@ PY
     else
       echo "No legacy Arch Notebook SQL automation schedule is installed for this user."
     fi
+    echo "Chart CSV export directory: disabled"
     exit 0
   fi
   if [[ $# -eq 2 ]]; then
@@ -110,6 +111,8 @@ with open(plist_path, "rb") as source:
     settings = plistlib.load(source)
 seconds = settings.get("StartInterval")
 cadence = {900: "every 15 minutes", 3600: "hourly", 86400: "daily", 604800: "weekly"}.get(seconds, f"every {seconds} seconds")
+arguments = settings.get("ProgramArguments", [])
+chart_export_dir = arguments[4] if len(arguments) >= 5 else "disabled"
 loaded = subprocess.run(
     ["launchctl", "print", f"{domain}/{label}"],
     stdout=subprocess.DEVNULL,
@@ -118,6 +121,7 @@ loaded = subprocess.run(
 ).returncode == 0
 state = "loaded" if loaded else "configured but not loaded in the user LaunchAgent domain"
 print(f"Arch Notebook SQL schedule for {case_path}: {cadence}; {state}.")
+print(f"Chart CSV export directory: {chart_export_dir}")
 PY
   exit $?
 fi
