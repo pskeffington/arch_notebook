@@ -4,7 +4,7 @@
 
 - The main workspace bar opens **Chart**, **Timeline**, **Connections**, **SQL Review**, **Automation**, **Entities**, and **Sources** directly. Keyboard shortcuts are Ctrl/Command+1 for Chart, +2 for Timeline, +3 for Connections, +4 for SQL Review, +5 for Automation, +6 for Entities, and +7 for Sources. The Data page’s **Case Records** row remains available for switching among record views while working in that page.
 
-- The **Charts** row keeps multiple named charts in one case. Choose a tab to switch graphs, right-click a tab to rename it, **＋ New chart** to start a blank chart, or select an entity or relationship and use **Copy selection to new chart** to branch that selection into a separate graph. Chart graphs remain isolated; SQL snapshots and automation jobs stay with the case and are available while any chart is open.
+- The **Charts** row keeps multiple named charts in one case. Choose a tab to switch graphs, right-click a tab to rename or delete it (the last chart cannot be deleted), **＋ New chart** to start a blank chart, or select an entity or relationship and use **Copy selection to new chart** to branch that selection into a separate graph. Deletion asks for confirmation and switches to another chart when the active one is removed. Chart graphs remain isolated; SQL snapshots and automation jobs stay with the case and are available while any chart is open.
 
 - CSV/TSV, GraphML, and KML import/export actions operate on the active chart tab. SQL capture history, automation jobs, and run history remain case-wide; ingesting a snapshot updates the active chart only.
 

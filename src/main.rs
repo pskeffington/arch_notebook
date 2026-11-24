@@ -1054,6 +1054,7 @@ struct App {
     saved_case_json: Option<String>,
     disk_case_json: Option<String>,
     pending_case_action: Option<PendingCaseAction>,
+    pending_chart_delete: Option<Uuid>,
     data_mode: DataMode,
     merge_candidate: Option<(Uuid, Uuid)>,
     duplicate_candidates: Vec<(Uuid, Uuid)>,
@@ -1560,6 +1561,7 @@ impl Default for App {
             saved_case_json,
             disk_case_json,
             pending_case_action: None,
+            pending_chart_delete: None,
             data_mode: DataMode::Relationships,
             merge_candidate: None,
             duplicate_candidates: Vec::new(),
@@ -1883,6 +1885,25 @@ impl App {
         self.status = format!("CHART OPENED · {}", self.case.active_chart_title);
     }
 
+    fn delete_chart(&mut self, chart_id: Uuid) {
+        if chart_id == self.case.active_chart_id {
+            let Some(next_chart_id) = self.case.chart_tabs.last().map(|chart| chart.id) else {
+                self.status = "A CASE MUST KEEP AT LEAST ONE CHART".into();
+                return;
+            };
+            self.switch_chart(next_chart_id);
+            self.case.chart_tabs.retain(|chart| chart.id != chart_id);
+        } else {
+            let original_count = self.case.chart_tabs.len();
+            self.case.chart_tabs.retain(|chart| chart.id != chart_id);
+            if self.case.chart_tabs.len() == original_count {
+                self.status = "CHART TAB NO LONGER EXISTS".into();
+                return;
+            }
+        }
+        self.status = "CHART DELETED · SAVE CASE TO KEEP THE CHANGE".into();
+    }
+
     fn create_chart(&mut self, copy_selection: bool) {
         let selected_link = self
             .selected_link
@@ -2092,6 +2113,7 @@ impl App {
             saved_case_json,
             disk_case_json: None,
             pending_case_action: None,
+            pending_chart_delete: None,
             data_mode: DataMode::Relationships,
             merge_candidate: None,
             duplicate_candidates: Vec::new(),
@@ -2324,6 +2346,7 @@ impl App {
 
     fn perform_case_action(&mut self, action: PendingCaseAction) {
         self.pending_case_action = None;
+        self.pending_chart_delete = None;
         match action {
             PendingCaseAction::Open => self.load(),
             PendingCaseAction::New => self.new_case(),
@@ -12073,6 +12096,7 @@ impl eframe::App for App {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| { ui.label(egui::RichText::new(&self.status).small().color(muted)); });
                 }).response;
                 let mut requested_chart = None;
+                let mut requested_chart_delete = None;
                 let mut create_chart_request = None;
                 ui.horizontal_wrapped(|ui| {
                     ui.label(egui::RichText::new("CHARTS").small().strong().color(muted));
@@ -12080,6 +12104,16 @@ impl eframe::App for App {
                         .context_menu(|ui| {
                             ui.label("Rename active chart");
                             ui.text_edit_singleline(&mut self.case.active_chart_title);
+                            if ui
+                                .add_enabled(
+                                    !self.case.chart_tabs.is_empty(),
+                                    egui::Button::new("Delete active chart…"),
+                                )
+                                .clicked()
+                            {
+                                requested_chart_delete = Some(self.case.active_chart_id);
+                                ui.close_menu();
+                            }
                         });
                     for chart in &mut self.case.chart_tabs {
                         let response = ui.selectable_label(false, &chart.title);
@@ -12089,6 +12123,10 @@ impl eframe::App for App {
                         response.context_menu(|ui| {
                             ui.label("Rename chart");
                             ui.text_edit_singleline(&mut chart.title);
+                            if ui.button("Delete chart…").clicked() {
+                                requested_chart_delete = Some(chart.id);
+                                ui.close_menu();
+                            }
                         });
                     }
                     if ui.button("＋ New chart").clicked() {
@@ -12112,6 +12150,9 @@ impl eframe::App for App {
                     && chart_id != self.case.active_chart_id
                 {
                     self.switch_chart(chart_id);
+                }
+                if let Some(chart_id) = requested_chart_delete {
+                    self.pending_chart_delete = Some(chart_id);
                 }
                 if let Some(copy_selection) = create_chart_request {
                     self.create_chart(copy_selection);
@@ -17209,6 +17250,38 @@ impl eframe::App for App {
                         }
                     });
                 });
+        }
+        if let Some(chart_id) = self.pending_chart_delete {
+            let chart_title = if chart_id == self.case.active_chart_id {
+                Some(self.case.active_chart_title.clone())
+            } else {
+                self.case
+                    .chart_tabs
+                    .iter()
+                    .find(|chart| chart.id == chart_id)
+                    .map(|chart| chart.title.clone())
+            };
+            if let Some(chart_title) = chart_title {
+                egui::Window::new("Delete chart")
+                    .collapsible(false)
+                    .resizable(false)
+                    .show(ctx, |ui| {
+                        ui.label(format!(
+                            "Delete ‘{chart_title}’ and all of its chart items from this case?"
+                        ));
+                        ui.horizontal(|ui| {
+                            if ui.button("Delete chart").clicked() {
+                                self.delete_chart(chart_id);
+                                self.pending_chart_delete = None;
+                            }
+                            if ui.button("Cancel").clicked() {
+                                self.pending_chart_delete = None;
+                            }
+                        });
+                    });
+            } else {
+                self.pending_chart_delete = None;
+            }
         }
     }
 }
