@@ -24925,10 +24925,10 @@ fn chart_id_for_selector(case: &CaseFile, selector: &str) -> Result<Uuid, String
     match matching.as_slice() {
         [chart_id] => Ok(*chart_id),
         [] => Err(format!(
-            "destination chart {title:?} does not exist in the destination case; choose an existing chart with --chart"
+            "destination chart {title:?} does not exist in the destination case; choose an existing chart in the import destination selector"
         )),
         _ => Err(format!(
-            "destination chart title {title:?} is ambiguous; use a chart UUID with --chart to select one"
+            "destination chart title {title:?} is ambiguous; select a chart by UUID in the import destination selector"
         )),
     }
 }
