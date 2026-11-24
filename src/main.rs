@@ -815,9 +815,11 @@ struct SqlPlanStep {
 }
 
 struct SqlPlanResult {
-    job_id: Uuid,
+    job_id: Option<Uuid>,
+    draft: bool,
     job_name: String,
     database_path: String,
+    case_path: String,
     query: String,
     parameters: Vec<(String, String)>,
     result: Result<Vec<SqlPlanStep>, String>,
@@ -5590,6 +5592,8 @@ impl App {
     fn cancel_automation_job_edit(&mut self) {
         self.editing_automation_job = None;
         self.automation_repair_context = None;
+        self.sql_plan_worker = None;
+        self.sql_plan_result = None;
         self.restore_automation_editor_before_edit();
         self.status = "JOB EDIT CANCELED".into();
     }
@@ -5743,8 +5747,12 @@ impl App {
     }
 
     fn start_sql_ui_operation(&mut self, request: SqlUiRequest, validate: bool) {
-        if self.automation_worker.is_some() {
-            self.status = "SQL OPERATION ALREADY RUNNING".into();
+        if self.automation_worker.is_some()
+            || self.automation_schedule_worker.is_some()
+            || self.sql_plan_worker.is_some()
+            || self.sql_schema_worker.is_some()
+        {
+            self.status = "ANOTHER SQL OPERATION IS RUNNING".into();
             return;
         }
         let case = self.case.clone();
@@ -6357,9 +6365,11 @@ impl App {
                         .map(|(_, steps)| steps)
                 })();
                 let _ = sender.send(SqlPlanResult {
-                    job_id: id,
+                    job_id: Some(id),
+                    draft: false,
                     job_name: name,
                     database_path,
+                    case_path,
                     query,
                     parameters,
                     result,
@@ -6370,6 +6380,70 @@ impl App {
                 self.sql_plan_worker = Some(receiver);
                 self.sql_plan_result = None;
                 self.status = format!("INSPECTING SQL QUERY PLAN · {display_name}");
+            }
+            Err(error) => self.status = format!("SQL QUERY PLAN FAILED · {error}"),
+        }
+    }
+
+    fn explain_automation_editor_query(&mut self) {
+        if self.automation_worker.is_some()
+            || self.automation_schedule_worker.is_some()
+            || self.sql_plan_worker.is_some()
+            || self.sql_schema_worker.is_some()
+        {
+            self.status = "ANOTHER SQL OPERATION IS RUNNING".into();
+            return;
+        }
+        if self.sql_path.trim().is_empty() || self.sql_query.trim().is_empty() {
+            self.status = "SQL QUERY PLAN FAILED · database and query are required".into();
+            return;
+        }
+        let parameters = match parse_sql_parameters(&self.sql_parameter_text) {
+            Ok(parameters) => parameters,
+            Err(error) => {
+                self.status = format!("SQL QUERY PLAN FAILED · {error}");
+                return;
+            }
+        };
+        for (name, value) in &parameters {
+            if let Err(error) = sql_parameter_value(name, value) {
+                self.status = format!("SQL QUERY PLAN FAILED · {error}");
+                return;
+            }
+        }
+
+        let database_path = self.sql_path.trim().to_owned();
+        let case_path = self.case_path.clone();
+        let query = self.sql_query.clone();
+        let job_id = self.editing_automation_job;
+        let job_name = if self.automation_job_name.trim().is_empty() {
+            "Draft SQL query".to_owned()
+        } else {
+            format!("Draft · {}", self.automation_job_name.trim())
+        };
+        let (sender, receiver) = mpsc::channel();
+        let spawn_result = thread::Builder::new()
+            .name("arch-notebook-sql-plan-draft".into())
+            .spawn(move || {
+                let result =
+                    inspect_sql_query_plan(&database_path, &case_path, &query, &parameters)
+                        .map(|(_, steps)| steps);
+                let _ = sender.send(SqlPlanResult {
+                    job_id,
+                    draft: true,
+                    job_name,
+                    database_path,
+                    case_path,
+                    query,
+                    parameters,
+                    result,
+                });
+            });
+        match spawn_result {
+            Ok(_) => {
+                self.sql_plan_worker = Some(receiver);
+                self.sql_plan_result = None;
+                self.status = "INSPECTING DRAFT SQL QUERY PLAN".into();
             }
             Err(error) => self.status = format!("SQL QUERY PLAN FAILED · {error}"),
         }
@@ -11109,13 +11183,24 @@ impl eframe::App for App {
             match plan_state {
                 Ok(result) => {
                     self.sql_plan_worker = None;
-                    let matches_saved_job = self.case.automation_jobs.iter().any(|job| {
-                        job.id == result.job_id
-                            && job.database_path == result.database_path
-                            && job.query == result.query
-                            && job.parameters == result.parameters
-                    });
-                    if matches_saved_job {
+                    let matches_current_configuration = result.case_path == self.case_path
+                        && if result.draft {
+                            self.editing_automation_job == result.job_id
+                                && self.sql_path.trim() == result.database_path
+                                && self.sql_query == result.query
+                                && parse_sql_parameters(&self.sql_parameter_text)
+                                    .is_ok_and(|parameters| parameters == result.parameters)
+                        } else {
+                            result.job_id.is_some_and(|job_id| {
+                                self.case.automation_jobs.iter().any(|job| {
+                                    job.id == job_id
+                                        && job.database_path == result.database_path
+                                        && job.query == result.query
+                                        && job.parameters == result.parameters
+                                })
+                            })
+                        };
+                    if matches_current_configuration {
                         self.status = match &result.result {
                             Ok(steps) => format!(
                                 "SQL QUERY PLAN READY · {} · {} STEPS",
@@ -12270,6 +12355,7 @@ impl eframe::App for App {
                                 });
                                 ui.horizontal(|ui| {
                                     if ui.button("Build query from schema").clicked() { self.build_sql_query_from_schema(); }
+                                    if ui.button("Explain draft plan").on_hover_text("Inspect SQLite's read-only query plan before saving this job.").clicked() { self.explain_automation_editor_query(); }
                                     if ui.button("Validate query").clicked() { self.start_sql_validation(); }
                                     if ui.button(if recovered_job_draft { "Save recovered job" } else if editing_saved_job { "Save job changes" } else { "Add job" }).clicked() { self.save_automation_job(); }
                                     if self.editing_automation_job.is_some() && ui.button(if recovered_job_draft { "Discard recovered draft" } else { "Cancel edit" }).clicked() { self.cancel_automation_job_edit(); }
@@ -12991,7 +13077,7 @@ impl eframe::App for App {
                                             if self
                                                 .sql_plan_result
                                                 .as_ref()
-                                                .is_some_and(|plan| plan.job_id == id)
+                                                .is_some_and(|plan| plan.job_id == Some(id))
                                             {
                                                 self.sql_plan_result = None;
                                             }
