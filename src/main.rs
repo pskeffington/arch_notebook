@@ -4291,18 +4291,43 @@ impl App {
             ui.label(egui::RichText::new("No recognizable source/target query template. Use the inspected columns above to edit the SQL query manually.").small().color(egui::Color32::GRAY));
             return;
         }
+        let search_terms: Vec<String> = self
+            .sql_schema_filter
+            .split_whitespace()
+            .map(str::to_lowercase)
+            .collect();
+        let matching_template_indexes: Vec<usize> = self
+            .sql_schema_templates
+            .iter()
+            .enumerate()
+            .filter(|(_, (table, query))| {
+                let searchable = format!("{table} {query}").to_lowercase();
+                search_terms.iter().all(|term| searchable.contains(term))
+            })
+            .map(|(index, _)| index)
+            .collect();
+        if matching_template_indexes.is_empty() {
+            ui.label(egui::RichText::new("No query templates match the schema search. Clear the search to show every detected table/view template.").small().color(egui::Color32::GRAY));
+            return;
+        }
+        let mut selected_index =
+            if matching_template_indexes.contains(&self.sql_schema_template_index) {
+                self.sql_schema_template_index
+            } else {
+                matching_template_indexes[0]
+            };
         let selected_text = self
             .sql_schema_templates
-            .get(self.sql_schema_template_index)
+            .get(selected_index)
             .map(|(table, _)| table.as_str())
             .unwrap_or("Choose table or view");
-        let mut selected_index = self.sql_schema_template_index;
-        if self.sql_schema_templates.len() > 1 {
+        if matching_template_indexes.len() > 1 {
             egui::ComboBox::from_id_salt("sql_schema_template")
                 .selected_text(selected_text)
                 .show_ui(ui, |ui| {
-                    for (index, (table, _)) in self.sql_schema_templates.iter().enumerate() {
-                        ui.selectable_value(&mut selected_index, index, table);
+                    for index in &matching_template_indexes {
+                        let (table, _) = &self.sql_schema_templates[*index];
+                        ui.selectable_value(&mut selected_index, *index, table);
                     }
                 });
         } else {
