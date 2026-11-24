@@ -13254,6 +13254,7 @@ impl eframe::App for App {
                                     }
                                 });
                                 let mut action: Option<(String,Uuid)> = None;
+                                let mut open_destination_chart = None;
                                 let mut repair_run_id = None;
                                 let mut focus_run = None;
                                 let mut focus_job_history = None;
@@ -13356,6 +13357,27 @@ impl eframe::App for App {
                                         ui.label(format!(
                                             "Destination · {chart_title}"
                                         ));
+                                        let destination_chart_id =
+                                            job.chart_id.unwrap_or(self.case.active_chart_id);
+                                        let destination_chart_exists = destination_chart_id
+                                            == self.case.active_chart_id
+                                            || self
+                                                .case
+                                                .chart_tabs
+                                                .iter()
+                                                .any(|chart| chart.id == destination_chart_id);
+                                        if ui
+                                            .add_enabled(
+                                                destination_chart_exists,
+                                                egui::Button::new("Open destination"),
+                                            )
+                                            .on_disabled_hover_text(
+                                                "This job's destination chart no longer exists.",
+                                            )
+                                            .clicked()
+                                        {
+                                            open_destination_chart = Some(destination_chart_id);
+                                        }
                                         ui.label(format!("{} · {}", job.series, job.database_path));
                                         ui.label(format!(
                                             "min {} connections · min confidence {} · max connections {} · max regressions {} · max additions {} · max relationship-property changes {} · max entity-property changes {} · max skipped rows {}",
@@ -13501,6 +13523,10 @@ impl eframe::App for App {
                                                 &mut self.sql_validation_preview_regressions_only,
                                             );
                                         });
+                                }
+                                if let Some(chart_id) = open_destination_chart {
+                                    self.switch_chart(chart_id);
+                                    self.page = WorkspacePage::Chart;
                                 }
                                 if let Some((verb, id)) = action {
                                     match verb.as_str() {
