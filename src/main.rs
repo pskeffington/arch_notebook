@@ -12608,7 +12608,7 @@ impl eframe::App for App {
                                     ui.label(egui::RichText::new("JOBS").small().strong().color(cyan));
                                     ui.add(
                                         egui::TextEdit::singleline(&mut self.automation_job_filter)
-                                            .hint_text("Find by job, database, series, or SQL")
+                                            .hint_text("Find by job, database, series, SQL, or parameter")
                                             .desired_width(280.0),
                                     );
                                     if ui.small_button("Clear").clicked() {
@@ -12623,11 +12623,16 @@ impl eframe::App for App {
                                     .filter(|job| {
                                         job_filter.is_empty()
                                             || format!(
-                                                "{} {} {} {}",
+                                                "{} {} {} {} {}",
                                                 job.name,
                                                 job.database_path,
                                                 job.series,
-                                                job.query
+                                                job.query,
+                                                job.parameters
+                                                    .iter()
+                                                    .map(|(name, value)| format!("{name}={value}"))
+                                                    .collect::<Vec<_>>()
+                                                    .join(" ")
                                             )
                                             .to_lowercase()
                                             .contains(&job_filter)
