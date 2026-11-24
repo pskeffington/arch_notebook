@@ -6322,6 +6322,7 @@ impl App {
         if self.automation_worker.is_some()
             || self.automation_schedule_worker.is_some()
             || self.sql_plan_worker.is_some()
+            || self.sql_schema_worker.is_some()
         {
             self.status = "ANOTHER SQL OPERATION IS RUNNING".into();
             return;
