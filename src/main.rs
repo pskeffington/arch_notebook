@@ -5380,14 +5380,18 @@ impl App {
                             } else {
                                 &row.connection_id
                             });
-                            ui.label(if row.source.is_empty() {
-                                "(blank or NULL)"
+                            ui.label(if row.source.is_empty() && !row.source_entity_id.is_empty() {
+                                "(blank label · ID returned)"
+                            } else if row.source.is_empty() {
+                                "(blank label · no ID returned)"
                             } else {
                                 &row.source
                             });
                             ui.label(&row.source_entity_id);
-                            ui.label(if row.target.is_empty() {
-                                "(blank or NULL)"
+                            ui.label(if row.target.is_empty() && !row.target_entity_id.is_empty() {
+                                "(blank label · ID returned)"
+                            } else if row.target.is_empty() {
+                                "(blank label · no ID returned)"
                             } else {
                                 &row.target
                             });
