@@ -9740,6 +9740,30 @@ fn format_sql_parameters(parameters: &[(String, String)]) -> String {
         .join("\n")
 }
 
+fn format_sql_parameter_value_for_display(value: &str) -> String {
+    let Some(text) = value.strip_prefix("text:") else {
+        return value.to_owned();
+    };
+    let visible_text = text
+        .chars()
+        .map(|character| match character {
+            ' ' => '␠',
+            '\t' => '⇥',
+            '\r' => '␍',
+            _ => character,
+        })
+        .collect::<String>();
+    format!("text:{visible_text}")
+}
+
+fn format_sql_parameters_for_display(parameters: &[(String, String)]) -> String {
+    parameters
+        .iter()
+        .map(|(name, value)| format!("{name}={}", format_sql_parameter_value_for_display(value)))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn sql_parameter_value(name: &str, value: &str) -> Result<Value, String> {
     if let Some(text) = value.strip_prefix("text:") {
         return Ok(Value::Text(text.to_owned()));
@@ -12031,10 +12055,10 @@ impl eframe::App for App {
                                             ui.colored_label(egui::Color32::from_rgb(222, 112, 104), format!("Invalid typed value · {error}"));
                                         } else if let Ok(overrides) = &run_parameter_overrides {
                                             for (name, value) in &overrides.global {
-                                                ui.label(format!("Shared override · {name} = {value}"));
+                                                ui.label(format!("Shared override · {name} = {}", format_sql_parameter_value_for_display(value)));
                                             }
                                             for (selector, name, value) in &overrides.scoped {
-                                                ui.label(format!("{selector} · {name} = {value}"));
+                                                ui.label(format!("{selector} · {name} = {}", format_sql_parameter_value_for_display(value)));
                                             }
                                         }
                                         ui.horizontal(|ui| {
@@ -12830,7 +12854,7 @@ impl eframe::App for App {
                                         .id_salt(("automation_job_query", job.id))
                                         .show(ui, |ui| {
                                             ui.label(format!("SQLite {} · series {}", job.database_path, job.series));
-                                            ui.label(format!("Parameters: {}", if job.parameters.is_empty() { "(none)".to_owned() } else { format_sql_parameters(&job.parameters) }));
+                                            ui.label(format!("Parameters: {}", if job.parameters.is_empty() { "(none)".to_owned() } else { format_sql_parameters_for_display(&job.parameters) }));
                                             let mut query = job.query.clone();
                                             ui.add(
                                                 egui::TextEdit::multiline(&mut query)
@@ -13356,14 +13380,14 @@ impl eframe::App for App {
                                                     if run.parameters.is_empty() {
                                                         "(none)".to_owned()
                                                     } else {
-                                                        format_sql_parameters(&run.parameters)
+                                                        format_sql_parameters_for_display(&run.parameters)
                                                     }
                                                 ));
                                                 ui.label(format!(
                                                     "One-run parameter overrides: {}",
                                                     match run.parameter_overrides.as_deref() {
                                                         Some(overrides) if overrides.is_empty() => "(none)".to_owned(),
-                                                        Some(overrides) => format_sql_parameters(overrides),
+                                                        Some(overrides) => format_sql_parameters_for_display(overrides),
                                                         None => "not recorded for this older run".to_owned(),
                                                     }
                                                 ));
@@ -14128,7 +14152,7 @@ impl eframe::App for App {
                                                 if current.parameters.is_empty() {
                                                     "(none)".to_owned()
                                                 } else {
-                                                    format_sql_parameters(&current.parameters)
+                                                    format_sql_parameters_for_display(&current.parameters)
                                                 }
                                             ));
                                         });
@@ -14174,11 +14198,11 @@ impl eframe::App for App {
                                                     if parameters_changed {
                                                         ui.label(format!(
                                                             "Baseline parameters: {}",
-                                                            if base.parameters.is_empty() { "(none)".to_owned() } else { format_sql_parameters(&base.parameters) }
+                                                            if base.parameters.is_empty() { "(none)".to_owned() } else { format_sql_parameters_for_display(&base.parameters) }
                                                         ));
                                                         ui.label(format!(
                                                             "Current parameters: {}",
-                                                            if current.parameters.is_empty() { "(none)".to_owned() } else { format_sql_parameters(&current.parameters) }
+                                                            if current.parameters.is_empty() { "(none)".to_owned() } else { format_sql_parameters_for_display(&current.parameters) }
                                                         ));
                                                     }
                                                 });

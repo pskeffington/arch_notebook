@@ -16,7 +16,7 @@ Export a job package from the Automation panel or with `--export-job`; import it
 
 For an ad-hoc desktop run, expand **One-run SQL parameter overrides**. Enter `name=value` lines for a single job, or scope each line as `Job name or UUID::name=value` for a batch. The panel echoes the effective override lines and checks typed values before enabling a run, so malformed `int:`, `real:`, or `bool:` values fail before a job starts. Scoped selectors must match exactly one enabled job in the chosen batch, and a job/parameter pair can appear only once. Overrides are retained in each run's effective configuration for replay and audit, then clear from the editor. Opening another case or creating a new case also clears the transient overrides so values cannot carry across investigation contexts. They do not modify saved jobs or scheduled captures.
 
-Use the explicit `text:` type when leading or trailing spaces are significant. Text after the `text:` prefix is preserved exactly; for example, `account_code=text:  A7 ` binds two leading spaces and one trailing space. Unprefixed values keep trimming surrounding whitespace for convenience.
+Use the explicit `text:` type when leading or trailing spaces are significant. Text after the `text:` prefix is preserved exactly; for example, `account_code=text:  A7 ` binds two leading spaces and one trailing space. Parameter summaries display spaces as `␠` and tabs as `⇥` so exact values remain visible in override, job, run, and snapshot details. Unprefixed values keep trimming surrounding whitespace for convenience.
 
 ## Build and preview queries
 
