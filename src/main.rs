@@ -415,7 +415,7 @@ fn preflight_automation_jobs_command(
             if succeeded { "PASSED" } else { "NEEDS REVIEW" }
         );
         if !stderr.trim().is_empty() {
-            report.push('\n');
+            report.push_str("\n\nSQL PREFLIGHT DIAGNOSTICS\n");
             report.push_str(stderr.trim());
         }
         return Ok(report);
@@ -13221,7 +13221,12 @@ impl eframe::App for App {
                                     let preflight_json = message
                                         .strip_prefix("SQL PREFLIGHT PASSED\n")
                                         .or_else(|| message.strip_prefix("SQL PREFLIGHT NEEDS REVIEW\n"))
-                                        .and_then(|json| serde_json::from_str::<serde_json::Value>(json).ok());
+                                        .and_then(|json| {
+                                            let json = json
+                                                .split_once("\n\nSQL PREFLIGHT DIAGNOSTICS\n")
+                                                .map_or(json, |(json, _)| json);
+                                            serde_json::from_str::<serde_json::Value>(json).ok()
+                                        });
                                     if let Some(outcomes) = preflight_json
                                         .as_ref()
                                         .and_then(|result| result["outcomes"].as_array())
@@ -13273,6 +13278,15 @@ impl eframe::App for App {
                                             .show(ui, |ui| {
                                                 ui.label(egui::RichText::new(message).small().color(color));
                                             });
+                                    }
+                                    if let Some((_, diagnostics)) = message
+                                        .split_once("\n\nSQL PREFLIGHT DIAGNOSTICS\n")
+                                    {
+                                        ui.label(
+                                            egui::RichText::new(format!("Diagnostics · {diagnostics}"))
+                                                .small()
+                                                .color(muted),
+                                        );
                                     }
                                 }
                                 if let Some((job_id, repair_schema)) = preflight_repair_request {
