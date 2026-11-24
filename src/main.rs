@@ -25893,6 +25893,7 @@ fn export_automation_runs_cli(
     case_path: &str,
     output_path: &str,
     job_filter: Option<&str>,
+    batch_filter: Option<Uuid>,
     trigger_filter: Option<&str>,
     schema_adaptation_needed: bool,
     offset: usize,
@@ -25924,7 +25925,8 @@ fn export_automation_runs_cli(
             job_filter.is_none_or(|filter| {
                 run.job_name.eq_ignore_ascii_case(filter)
                     || run.job_id.to_string().eq_ignore_ascii_case(filter)
-            }) && trigger_filter.is_none_or(|filter| run.trigger.eq_ignore_ascii_case(filter))
+            }) && batch_filter.is_none_or(|filter| run.batch_id == Some(filter))
+                && trigger_filter.is_none_or(|filter| run.trigger.eq_ignore_ascii_case(filter))
                 && (!schema_adaptation_needed
                     || (!run.success && sql_schema_adaptation_kind(&run.message).is_some()))
         })
@@ -25941,7 +25943,7 @@ fn export_automation_runs_cli(
                 "case": case_path,
                 "output": output_path,
                 "format": delimited_text_format(output_path),
-                "filters": {"job": job_filter, "trigger": trigger_filter, "schema_adaptation_needed": schema_adaptation_needed, "offset": offset, "limit": limit},
+                "filters": {"job": job_filter, "batch_id": batch_filter, "trigger": trigger_filter, "schema_adaptation_needed": schema_adaptation_needed, "offset": offset, "limit": limit},
                 "exported": matching_runs.len(),
             }))
             .map_err(|error| error.to_string())?
@@ -26030,6 +26032,7 @@ fn list_automation_runs_cli(
     case_path: &str,
     json_output: bool,
     job_filter: Option<&str>,
+    batch_filter: Option<Uuid>,
     trigger_filter: Option<&str>,
     schema_adaptation_needed: bool,
     offset: usize,
@@ -26052,7 +26055,8 @@ fn list_automation_runs_cli(
             job_filter.is_none_or(|filter| {
                 run.job_name.eq_ignore_ascii_case(filter)
                     || run.job_id.to_string().eq_ignore_ascii_case(filter)
-            }) && trigger_filter.is_none_or(|filter| run.trigger.eq_ignore_ascii_case(filter))
+            }) && batch_filter.is_none_or(|filter| run.batch_id == Some(filter))
+                && trigger_filter.is_none_or(|filter| run.trigger.eq_ignore_ascii_case(filter))
                 && (!schema_adaptation_needed
                     || (!run.success && sql_schema_adaptation_kind(&run.message).is_some()))
         })
@@ -26142,7 +26146,7 @@ fn list_automation_runs_cli(
             serde_json::to_string_pretty(&serde_json::json!({
                 "schema_version":1,
                 "case":case_path,
-                "filter":{"job":job_filter,"trigger":trigger_filter,"schema_adaptation_needed":schema_adaptation_needed,"offset":offset,"limit":limit},
+                "filter":{"job":job_filter,"batch_id":batch_filter,"trigger":trigger_filter,"schema_adaptation_needed":schema_adaptation_needed,"offset":offset,"limit":limit},
                 "total":total,
                 "returned":runs.len(),
                 "next_offset":(offset.saturating_add(runs.len()) < total)
@@ -26684,7 +26688,7 @@ fn main() -> eframe::Result<()> {
         .is_some_and(|arg| arg == "--help" || arg == "-h")
     {
         println!(
-            "Arch Notebook\n\nUsage:\n  arch-notebook\n  arch-notebook --version [--json]\n  arch-notebook --inspect-sqlite <database.sqlite> [--json]\n  arch-notebook --import-graphml <case.json> <input.graphml> [--json]\n  arch-notebook --import-kml <case.json> <input.kml> [--json]\n  arch-notebook --export-graphml <case.json> <output.graphml> [--json]\n  arch-notebook --export-kml <case.json> <output.kml> [--json]\n  arch-notebook --export-sql-snapshot <case.json> <snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --export-sql-series <case.json> <snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --export-sql-comparison <case.json> <baseline-snapshot-id> <current-snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --export-job <case.json> <job-name-or-id> <output.json> [--json]\n  arch-notebook --export-path <case.json> <path-name-or-id> <output.json> [--json]\n  arch-notebook --import-path <case.json> <input.json> [--name <path-name>] [--json]\n  arch-notebook --import-job <case.json> <input.json> [--name <job-name>] [--chart <chart-title-or-uuid>] [--database <path>] [--series <label>] [--param name=value ...] [--json]\n  arch-notebook --export-import-design <case.json> <design-name-or-id> <output.json> [--json]\n  arch-notebook --import-import-design <case.json> <input.json> [--name <design-name>] [--json]\n  arch-notebook --list-jobs <case.json> [--enabled-only] [--schema-adaptation-needed] [--json]\n  arch-notebook --list-batches <case.json> [--json]\n  arch-notebook --list-runs <case.json> [--json] [--job <name-or-id>] [--trigger <desktop|scheduled|cli|replay|legacy>] [--schema-adaptation-needed] [--offset <count>] [--limit <count>]\n  arch-notebook --export-runs <case.json> <output.csv|tsv> [--job <name-or-id>] [--trigger <desktop|scheduled|cli|replay|legacy>] [--schema-adaptation-needed] [--offset <count>] [--limit <count>] [--json]\n  arch-notebook --explain-job <case.json> <job-name-or-id> [--param name=value ...] [--json]\n  arch-notebook --validate-job <case.json> <job-name-or-id> [--query-only] [--param name=value ...] [--json]\n  arch-notebook --validate-enabled-jobs <case.json> [--json] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --check-enabled-job-queries <case.json> [--json] [--require-usable] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --validate-run <case.json> <run-id> [--json]\n  arch-notebook --run-enabled-jobs <case.json> [--json] [--resume-batch <batch-id>] [--export-chart-csv-dir <absolute-directory>] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --run-job <case.json> <job-name-or-id> [--param name=value ...] [--resume-batch <batch-id>] [--export-chart-csv <output.csv|tsv>] [--json]\n  arch-notebook --rerun-run <case.json> <run-id> [--export-chart-csv <output.csv|tsv>] [--json]\n\nJob and import design packages contain portable configuration, not case data or run history. Batch runs save snapshots and run history to the case file. JSON output is available for scheduler integration. Additional commands:"
+            "Arch Notebook\n\nUsage:\n  arch-notebook\n  arch-notebook --version [--json]\n  arch-notebook --inspect-sqlite <database.sqlite> [--json]\n  arch-notebook --import-graphml <case.json> <input.graphml> [--json]\n  arch-notebook --import-kml <case.json> <input.kml> [--json]\n  arch-notebook --export-graphml <case.json> <output.graphml> [--json]\n  arch-notebook --export-kml <case.json> <output.kml> [--json]\n  arch-notebook --export-sql-snapshot <case.json> <snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --export-sql-series <case.json> <snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --export-sql-comparison <case.json> <baseline-snapshot-id> <current-snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --export-job <case.json> <job-name-or-id> <output.json> [--json]\n  arch-notebook --export-path <case.json> <path-name-or-id> <output.json> [--json]\n  arch-notebook --import-path <case.json> <input.json> [--name <path-name>] [--json]\n  arch-notebook --import-job <case.json> <input.json> [--name <job-name>] [--chart <chart-title-or-uuid>] [--database <path>] [--series <label>] [--param name=value ...] [--json]\n  arch-notebook --export-import-design <case.json> <design-name-or-id> <output.json> [--json]\n  arch-notebook --import-import-design <case.json> <input.json> [--name <design-name>] [--json]\n  arch-notebook --list-jobs <case.json> [--enabled-only] [--schema-adaptation-needed] [--json]\n  arch-notebook --list-batches <case.json> [--json]\n  arch-notebook --list-runs <case.json> [--json] [--job <name-or-id>] [--batch <batch-uuid>] [--trigger <desktop|scheduled|cli|replay|legacy>] [--schema-adaptation-needed] [--offset <count>] [--limit <count>]\n  arch-notebook --export-runs <case.json> <output.csv|tsv> [--job <name-or-id>] [--batch <batch-uuid>] [--trigger <desktop|scheduled|cli|replay|legacy>] [--schema-adaptation-needed] [--offset <count>] [--limit <count>] [--json]\n  arch-notebook --explain-job <case.json> <job-name-or-id> [--param name=value ...] [--json]\n  arch-notebook --validate-job <case.json> <job-name-or-id> [--query-only] [--param name=value ...] [--json]\n  arch-notebook --validate-enabled-jobs <case.json> [--json] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --check-enabled-job-queries <case.json> [--json] [--require-usable] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --validate-run <case.json> <run-id> [--json]\n  arch-notebook --run-enabled-jobs <case.json> [--json] [--resume-batch <batch-id>] [--export-chart-csv-dir <absolute-directory>] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --run-job <case.json> <job-name-or-id> [--param name=value ...] [--resume-batch <batch-id>] [--export-chart-csv <output.csv|tsv>] [--json]\n  arch-notebook --rerun-run <case.json> <run-id> [--export-chart-csv <output.csv|tsv>] [--json]\n\nJob and import design packages contain portable configuration, not case data or run history. Batch runs save snapshots and run history to the case file. JSON output is available for scheduler integration. Additional commands:"
         );
         println!(
             "  arch-notebook --export-sql-chart-csv <case.json> <snapshot-id> <output.csv|tsv> [--json]"
@@ -27187,12 +27191,13 @@ fn main() -> eframe::Result<()> {
     if args.first().is_some_and(|arg| arg == "--list-runs") {
         let Some(case_path) = args.get(1) else {
             report_cli_usage_error(
-                "usage: arch-notebook --list-runs <case.json> [--json] [--job <name-or-id>] [--trigger <desktop|scheduled|cli|replay|legacy>] [--schema-adaptation-needed] [--offset <count>] [--limit <count>]",
+                "usage: arch-notebook --list-runs <case.json> [--json] [--job <name-or-id>] [--batch <batch-uuid>] [--trigger <desktop|scheduled|cli|replay|legacy>] [--schema-adaptation-needed] [--offset <count>] [--limit <count>]",
                 args.iter().any(|arg| arg == "--json"),
             );
         };
         let json_output = args.iter().any(|arg| arg == "--json");
         let mut job_filter = None;
+        let mut batch_filter = None;
         let mut trigger_filter = None;
         let mut schema_adaptation_needed = false;
         let mut seen_schema_adaptation_needed = false;
@@ -27200,6 +27205,7 @@ fn main() -> eframe::Result<()> {
         let mut limit = None;
         let mut seen_json = false;
         let mut seen_job = false;
+        let mut seen_batch = false;
         let mut seen_trigger = false;
         let mut seen_offset = false;
         let mut seen_limit = false;
@@ -27219,6 +27225,16 @@ fn main() -> eframe::Result<()> {
                     };
                     job_filter = Some(value.clone());
                     seen_job = true;
+                }
+                "--batch" if !seen_batch => {
+                    index += 1;
+                    let Some(value) = args.get(index) else {
+                        report_cli_usage_error("--batch requires a batch UUID", json_output);
+                    };
+                    batch_filter = Some(Uuid::parse_str(value).unwrap_or_else(|_| {
+                        report_cli_usage_error("--batch requires a valid batch UUID", json_output)
+                    }));
+                    seen_batch = true;
                 }
                 "--trigger" if !seen_trigger => {
                     index += 1;
@@ -27277,7 +27293,7 @@ fn main() -> eframe::Result<()> {
                     seen_limit = true;
                 }
                 _ => report_cli_usage_error(
-                    "usage: arch-notebook --list-runs <case.json> [--json] [--job <name-or-id>] [--trigger <desktop|scheduled|cli|replay|legacy>] [--schema-adaptation-needed] [--offset <count>] [--limit <count>]",
+                    "usage: arch-notebook --list-runs <case.json> [--json] [--job <name-or-id>] [--batch <batch-uuid>] [--trigger <desktop|scheduled|cli|replay|legacy>] [--schema-adaptation-needed] [--offset <count>] [--limit <count>]",
                     json_output,
                 ),
             }
@@ -27287,6 +27303,7 @@ fn main() -> eframe::Result<()> {
             case_path,
             json_output,
             job_filter.as_deref(),
+            batch_filter,
             trigger_filter.as_deref(),
             schema_adaptation_needed,
             offset,
@@ -27298,11 +27315,12 @@ fn main() -> eframe::Result<()> {
     }
     if args.first().is_some_and(|arg| arg == "--export-runs") {
         let json_output = args.iter().any(|arg| arg == "--json");
-        let usage = "usage: arch-notebook --export-runs <case.json> <output.csv|tsv> [--job <name-or-id>] [--trigger <desktop|scheduled|cli|replay|legacy>] [--schema-adaptation-needed] [--offset <count>] [--limit <count>] [--json]";
+        let usage = "usage: arch-notebook --export-runs <case.json> <output.csv|tsv> [--job <name-or-id>] [--batch <batch-uuid>] [--trigger <desktop|scheduled|cli|replay|legacy>] [--schema-adaptation-needed] [--offset <count>] [--limit <count>] [--json]";
         let (Some(case_path), Some(output_path)) = (args.get(1), args.get(2)) else {
             report_cli_usage_error(usage, json_output);
         };
         let mut job_filter = None;
+        let mut batch_filter = None;
         let mut trigger_filter = None;
         let mut schema_adaptation_needed = false;
         let mut seen_schema_adaptation_needed = false;
@@ -27310,6 +27328,7 @@ fn main() -> eframe::Result<()> {
         let mut limit = None;
         let mut seen_json = false;
         let mut seen_job = false;
+        let mut seen_batch = false;
         let mut seen_trigger = false;
         let mut seen_offset = false;
         let mut seen_limit = false;
@@ -27329,6 +27348,16 @@ fn main() -> eframe::Result<()> {
                     };
                     job_filter = Some(value.clone());
                     seen_job = true;
+                }
+                "--batch" if !seen_batch => {
+                    index += 1;
+                    let Some(value) = args.get(index) else {
+                        report_cli_usage_error("--batch requires a batch UUID", json_output);
+                    };
+                    batch_filter = Some(Uuid::parse_str(value).unwrap_or_else(|_| {
+                        report_cli_usage_error("--batch requires a valid batch UUID", json_output)
+                    }));
+                    seen_batch = true;
                 }
                 "--trigger" if !seen_trigger => {
                     index += 1;
@@ -27394,6 +27423,7 @@ fn main() -> eframe::Result<()> {
             case_path,
             output_path,
             job_filter.as_deref(),
+            batch_filter,
             trigger_filter.as_deref(),
             schema_adaptation_needed,
             offset,
