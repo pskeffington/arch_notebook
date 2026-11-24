@@ -7969,14 +7969,24 @@ impl App {
     }
 
     fn open_sql_snapshot_review(&mut self, snapshot_index: usize) {
-        let Some(source_key) = self
+        let Some((source_key, chart_id)) = self
             .case
             .snapshots
             .get(snapshot_index)
-            .map(|snapshot| snapshot.source_key.clone())
+            .map(|snapshot| (snapshot.source_key.clone(), snapshot.chart_id))
         else {
             return;
         };
+        if let Some(chart_id) = chart_id
+            && chart_id != self.case.active_chart_id
+            && self
+                .case
+                .chart_tabs
+                .iter()
+                .any(|chart| chart.id == chart_id)
+        {
+            self.switch_chart(chart_id);
+        }
         self.sql_snapshot_source = Some(source_key);
         self.sql_snapshot_index = Some(snapshot_index);
         self.sql_snapshot_filter.clear();
@@ -8005,6 +8015,23 @@ impl App {
     }
 
     fn highlight_sql_source_on_chart(&mut self, source_key: String) {
+        if let Some(chart_id) = self
+            .sql_snapshot_index_for_source(&source_key)
+            .and_then(|index| self.case.snapshots.get(index))
+            .and_then(|snapshot| snapshot.chart_id)
+            && chart_id != self.case.active_chart_id
+        {
+            if !self
+                .case
+                .chart_tabs
+                .iter()
+                .any(|chart| chart.id == chart_id)
+            {
+                self.status = format!("SOURCE CHART NO LONGER EXISTS · {chart_id}");
+                return;
+            }
+            self.switch_chart(chart_id);
+        }
         let mut source_entities: Vec<Uuid> = self
             .case
             .links
