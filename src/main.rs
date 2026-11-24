@@ -12676,6 +12676,46 @@ impl eframe::App for App {
                                         self.import_automation_job_package();
                                     }
                                 });
+                                ui.horizontal(|ui| {
+                                    ui.label("Destination chart");
+                                    let mut chart_choices = vec![(
+                                        self.case.active_chart_id.to_string(),
+                                        format!("{} · active", self.case.active_chart_title),
+                                    )];
+                                    chart_choices.extend(self.case.chart_tabs.iter().map(|chart| {
+                                        (
+                                            chart.id.to_string(),
+                                            format!("{} · {}", chart.title, &chart.id.to_string()[..8]),
+                                        )
+                                    }));
+                                    let selected_chart = if self.automation_job_import_chart.trim().is_empty() {
+                                        "Use package destination".to_owned()
+                                    } else {
+                                        chart_choices
+                                            .iter()
+                                            .find(|(selector, _)| selector == &self.automation_job_import_chart)
+                                            .map(|(_, label)| label.clone())
+                                            .unwrap_or_else(|| self.automation_job_import_chart.clone())
+                                    };
+                                    egui::ComboBox::from_id_salt("automation_job_import_chart")
+                                        .selected_text(selected_chart)
+                                        .show_ui(ui, |ui| {
+                                            ui.selectable_value(
+                                                &mut self.automation_job_import_chart,
+                                                String::new(),
+                                                "Use package destination",
+                                            );
+                                            for (selector, label) in chart_choices {
+                                                ui.selectable_value(
+                                                    &mut self.automation_job_import_chart,
+                                                    selector,
+                                                    label,
+                                                );
+                                            }
+                                        });
+                                    ui.label(egui::RichText::new("Override the package destination when needed.").small().color(muted));
+                                });
+                                ui.label(egui::RichText::new("Blank keeps the package chart; older packages without a chart use the active chart.").small().color(muted));
                                 egui::CollapsingHeader::new("Adapt imported job (optional overrides)")
                                     .id_salt("automation_job_import_overrides")
                                     .show(ui, |ui| {
@@ -12686,45 +12726,6 @@ impl eframe::App for App {
                                             ui.label("Database");
                                             ui.add(egui::TextEdit::singleline(&mut self.automation_job_import_database_path).hint_text("Keep package path").desired_width(260.0));
                                         });
-                                        ui.horizontal(|ui| {
-                                            ui.label("Destination chart");
-                                            let mut chart_choices = vec![(
-                                                self.case.active_chart_id.to_string(),
-                                                format!("{} · active", self.case.active_chart_title),
-                                            )];
-                                            chart_choices.extend(self.case.chart_tabs.iter().map(|chart| {
-                                                (
-                                                    chart.id.to_string(),
-                                                    format!("{} · {}", chart.title, &chart.id.to_string()[..8]),
-                                                )
-                                            }));
-                                            let selected_chart = if self.automation_job_import_chart.trim().is_empty() {
-                                                "Use package destination".to_owned()
-                                            } else {
-                                                chart_choices
-                                                    .iter()
-                                                    .find(|(selector, _)| selector == &self.automation_job_import_chart)
-                                                    .map(|(_, label)| label.clone())
-                                                    .unwrap_or_else(|| self.automation_job_import_chart.clone())
-                                            };
-                                            egui::ComboBox::from_id_salt("automation_job_import_chart")
-                                                .selected_text(selected_chart)
-                                                .show_ui(ui, |ui| {
-                                                    ui.selectable_value(
-                                                        &mut self.automation_job_import_chart,
-                                                        String::new(),
-                                                        "Use package destination",
-                                                    );
-                                                    for (selector, label) in chart_choices {
-                                                        ui.selectable_value(
-                                                            &mut self.automation_job_import_chart,
-                                                            selector,
-                                                            label,
-                                                        );
-                                                    }
-                                                });
-                                        });
-                                        ui.label(egui::RichText::new("Choose an existing chart to override the package destination. Older packages without a title use the active chart.").small().color(muted));
                                         ui.horizontal(|ui| {
                                             ui.label("Series");
                                             ui.add(egui::TextEdit::singleline(&mut self.automation_job_import_series).hint_text("Keep package series").desired_width(260.0));
