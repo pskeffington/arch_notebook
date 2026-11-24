@@ -5064,7 +5064,13 @@ impl App {
         }
         match write_automation_job_package(&self.case, &self.case_path, &job, output_path) {
             Ok(()) => {
-                self.status = format!("AUTOMATION JOB EXPORTED · {} · {output_path}", job.name)
+                let chart_id = job.chart_id.unwrap_or(self.case.active_chart_id);
+                let chart_title =
+                    chart_title_for_id(&self.case, chart_id).unwrap_or("Unknown chart");
+                self.status = format!(
+                    "AUTOMATION JOB EXPORTED · {} · {chart_title} · {output_path}",
+                    job.name
+                );
             }
             Err(error) => self.status = format!("JOB PACKAGE EXPORT FAILED · {error}"),
         }
@@ -25554,11 +25560,19 @@ fn export_automation_job_cli(
                 "case": case_path,
                 "output": output_path,
                 "job": job.name,
+                "chart_id": job.chart_id.unwrap_or(case.active_chart_id),
+                "chart_title": chart_title_for_id(&case, job.chart_id.unwrap_or(case.active_chart_id)),
             }))
             .map_err(|error| error.to_string())?
         );
     } else {
-        println!("AUTOMATION JOB EXPORTED · {} · {}", job.name, output_path);
+        println!(
+            "AUTOMATION JOB EXPORTED · {} · {} · {}",
+            job.name,
+            chart_title_for_id(&case, job.chart_id.unwrap_or(case.active_chart_id))
+                .unwrap_or("Unknown chart"),
+            output_path
+        );
     }
     Ok(())
 }
