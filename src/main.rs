@@ -10760,10 +10760,11 @@ fn automation_run_matches_filter(
         && has_unreviewed_regression
         && (filter.is_empty()
             || format!(
-                "{} {} {} {} {} {} {} {} {} {} {} {} {}",
+                "{} {} {} {} {} {} {} {} {} {} {} {} {} {}",
                 result,
                 run.job_name,
                 destination_chart,
+                run.batch_id.map(|id| id.to_string()).unwrap_or_default(),
                 run.trigger,
                 run.database_path,
                 run.series,
@@ -13240,6 +13241,38 @@ impl eframe::App for App {
                                 });
                                 ui.label(egui::RichText::new("When set, scheduled captures write one atomically refreshed CSV per enabled SQL job. Check schedule restores the installed folder; switching cases clears this field until checked.").small().color(muted));
                                 let mut preflight_repair_request: Option<(Uuid, bool, String)> = None;
+                                let mut focus_scheduled_batch = None;
+                                if let Some(run) = self
+                                    .case
+                                    .automation_runs
+                                    .iter()
+                                    .rev()
+                                    .find(|run| run.trigger == "scheduled")
+                                    .cloned()
+                                {
+                                    ui.horizontal(|ui| {
+                                        ui.label(egui::RichText::new(format!(
+                                            "LATEST SCHEDULED CAPTURE · {} · {} · {}",
+                                            run.job_name,
+                                            run.finished_at,
+                                            if run.success { "PASS" } else { "FAIL" },
+                                        )).small().color(muted));
+                                        if ui.small_button(if run.batch_id.is_some() {
+                                            "View scheduled batch"
+                                        } else {
+                                            "View scheduled run"
+                                        }).clicked() {
+                                            let filter = run.batch_id.unwrap_or(run.id);
+                                            self.automation_run_filter = filter.to_string();
+                                            self.automation_run_trigger_filter = "scheduled".into();
+                                            self.automation_failed_runs_only = false;
+                                            self.automation_schema_adaptation_only = false;
+                                            self.automation_runs_needing_review = false;
+                                            self.automation_runs_with_unreviewed_regressions = false;
+                                            focus_scheduled_batch = run.batch_id;
+                                        }
+                                    });
+                                }
                                 if self.automation_schedule_worker.is_some()
                                     && self.automation_schedule_target_path.as_deref()
                                         == Some(self.case_path.as_str())
@@ -13841,7 +13874,7 @@ impl eframe::App for App {
                                     ui.label(egui::RichText::new("RUN HISTORY · newest first").small().strong().color(cyan));
                                     ui.add(
                                         egui::TextEdit::singleline(&mut self.automation_run_filter)
-                                            .hint_text("Find by job, chart, trigger, result, database, series, SQL, or message")
+                                            .hint_text("Find by job, chart, batch ID, trigger, result, database, series, SQL, or message")
                                             .desired_width(300.0),
                                     );
                                     egui::ComboBox::from_id_salt("automation_run_trigger_filter")
@@ -14000,7 +14033,12 @@ impl eframe::App for App {
                                             run.started_at
                                         ))
                                         .id_salt(("automation_run", run.id))
-                                        .default_open(focus_run == Some(run.id))
+                                        .default_open(
+                                            focus_run == Some(run.id)
+                                                || focus_scheduled_batch.is_some_and(|batch_id| {
+                                                    run.batch_id == Some(batch_id)
+                                                }),
+                                        )
                                         .show(ui, |ui| {
                                             if has_skipped_rows {
                                                 ui.colored_label(
