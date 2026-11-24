@@ -6984,6 +6984,7 @@ impl App {
                 .map_err(|e| e.to_string())?;
             let mut headers = vec![
                 "record_type".to_string(),
+                "chart_title".to_string(),
                 "connection_id".to_string(),
                 "source".to_string(),
                 "source_entity_id".to_string(),
@@ -7085,6 +7086,7 @@ impl App {
                 let target_y = b.y.to_string();
                 let mut values = vec![
                     "connection",
+                    self.case.active_chart_title.as_str(),
                     link.connection_id.as_str(),
                     a.name.as_str(),
                     source_entity_id.as_str(),
@@ -7160,6 +7162,7 @@ impl App {
                 );
                 let mut values = vec![
                     "entity".to_string(),
+                    self.case.active_chart_title.clone(),
                     String::new(),
                     entity.name.clone(),
                     entity_id,
@@ -7271,6 +7274,8 @@ impl App {
             );
             for (id, scope, name, kind) in [
                 ("graph_title", "graph", "title", "string"),
+                ("graph_case_title", "graph", "case_title", "string"),
+                ("graph_chart_id", "graph", "chart_id", "string"),
                 ("graph_description", "graph", "description", "string"),
                 (
                     "graph_source_catalog",
@@ -7317,7 +7322,13 @@ impl App {
                 ));
             }
             xml.push_str("  <graph id=\"arch_notebook\" edgedefault=\"undirected\">\n");
-            graphml_data(&mut xml, "graph_title", &self.case.title);
+            graphml_data(&mut xml, "graph_title", &self.case.active_chart_title);
+            graphml_data(&mut xml, "graph_case_title", &self.case.title);
+            graphml_data(
+                &mut xml,
+                "graph_chart_id",
+                &self.case.active_chart_id.to_string(),
+            );
             graphml_data(&mut xml, "graph_description", &self.case.description);
             let mut source_keys: Vec<String> = self
                 .case
@@ -21341,8 +21352,11 @@ fn write_case_kml(
     let mut kml = String::from(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<kml xmlns=\"http://www.opengis.net/kml/2.2\"><Document><name>",
     );
-    kml.push_str(&escape_xml_text(&case.title));
-    kml.push_str("</name><Folder><name>Entities</name>");
+    kml.push_str(&escape_xml_text(&case.active_chart_title));
+    kml.push_str("</name><ExtendedData>");
+    kml_data("chart_id", &case.active_chart_id.to_string(), &mut kml);
+    kml_data("case_title", &case.title, &mut kml);
+    kml.push_str("</ExtendedData><Folder><name>Entities</name>");
     for entity in &case.entities {
         let Some((latitude, longitude)) = coordinates.get(&entity.id) else {
             continue;
