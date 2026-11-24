@@ -2159,6 +2159,7 @@ impl App {
 
     fn save_as(&mut self) {
         let path = Path::new(self.case_path_input.trim());
+        let path_changed = path != Path::new(self.case_path.trim());
         let result = if path.as_os_str().is_empty() {
             Err("case path cannot be empty".to_string())
         } else if path == Path::new(self.case_path.trim()) {
@@ -2169,6 +2170,9 @@ impl App {
         match result {
             Ok(disk_case_json) => {
                 self.case_path = self.case_path_input.trim().to_string();
+                if path_changed {
+                    self.automation_chart_export_dir.clear();
+                }
                 self.disk_case_json = Some(disk_case_json);
                 self.saved_case_json = self.current_case_json();
                 self.status = format!("CASE SAVED · {}", self.case_path);
