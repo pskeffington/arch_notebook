@@ -617,6 +617,8 @@ struct AutomationJobPackage {
 #[derive(Clone, Serialize, Deserialize)]
 struct AutomationJobPackageDefinition {
     name: String,
+    #[serde(default)]
+    chart_title: Option<String>,
     database_path: String,
     series: String,
     query: String,
@@ -1150,6 +1152,7 @@ struct App {
     automation_job_import_path: String,
     automation_job_export_path: String,
     automation_job_import_name: String,
+    automation_job_import_chart: String,
     automation_job_import_database_path: String,
     automation_job_import_series: String,
     automation_job_import_parameter_text: String,
@@ -1664,6 +1667,7 @@ impl Default for App {
                 .to_string_lossy()
                 .into_owned(),
             automation_job_import_name: String::new(),
+            automation_job_import_chart: String::new(),
             automation_job_import_database_path: String::new(),
             automation_job_import_series: String::new(),
             automation_job_import_parameter_text: String::new(),
@@ -2235,6 +2239,7 @@ impl App {
             automation_job_import_path: String::new(),
             automation_job_export_path: String::new(),
             automation_job_import_name: String::new(),
+            automation_job_import_chart: String::new(),
             automation_job_import_database_path: String::new(),
             automation_job_import_series: String::new(),
             automation_job_import_parameter_text: String::new(),
@@ -5073,6 +5078,8 @@ impl App {
         }
         let name_override = (!self.automation_job_import_name.trim().is_empty())
             .then(|| self.automation_job_import_name.trim().to_owned());
+        let chart_title_override = (!self.automation_job_import_chart.trim().is_empty())
+            .then(|| self.automation_job_import_chart.trim().to_owned());
         let database_path_override = (!self.automation_job_import_database_path.trim().is_empty())
             .then(|| self.automation_job_import_database_path.trim().to_owned());
         let series_override = (!self.automation_job_import_series.trim().is_empty())
@@ -5100,6 +5107,7 @@ impl App {
                 &self.case,
                 &self.case_path,
                 name_override.as_deref(),
+                chart_title_override.as_deref(),
                 database_path_override.as_deref(),
                 series_override.as_deref(),
             )?;
@@ -5118,6 +5126,7 @@ impl App {
                 self.automation_job_filter = name.clone();
                 self.automation_job_import_path.clear();
                 self.automation_job_import_name.clear();
+                self.automation_job_import_chart.clear();
                 self.automation_job_import_database_path.clear();
                 self.automation_job_import_series.clear();
                 self.automation_job_import_parameter_text.clear();
@@ -12661,6 +12670,11 @@ impl eframe::App for App {
                                             ui.label("Database");
                                             ui.add(egui::TextEdit::singleline(&mut self.automation_job_import_database_path).hint_text("Keep package path").desired_width(260.0));
                                         });
+                                        ui.horizontal(|ui| {
+                                            ui.label("Destination chart");
+                                            ui.add(egui::TextEdit::singleline(&mut self.automation_job_import_chart).hint_text("Use package title").desired_width(260.0));
+                                        });
+                                        ui.label(egui::RichText::new("The package title must match one existing chart. Older packages without a title use the active chart.").small().color(muted));
                                         ui.horizontal(|ui| {
                                             ui.label("Series");
                                             ui.add(egui::TextEdit::singleline(&mut self.automation_job_import_series).hint_text("Keep package series").desired_width(260.0));
@@ -24743,7 +24757,15 @@ fn list_automation_jobs_cli(
     Ok(())
 }
 
-fn automation_job_package(job: &AutomationJob, case_path: &str) -> AutomationJobPackage {
+fn automation_job_package(
+    job: &AutomationJob,
+    case: &CaseFile,
+    case_path: &str,
+) -> Result<AutomationJobPackage, String> {
+    let chart_id = job.chart_id.unwrap_or(case.active_chart_id);
+    let chart_title = chart_title_for_id(case, chart_id)
+        .ok_or_else(|| format!("job destination chart no longer exists: {chart_id}"))?
+        .to_owned();
     let case_parent = Path::new(case_path)
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
@@ -24760,12 +24782,13 @@ fn automation_job_package(job: &AutomationJob, case_path: &str) -> AutomationJob
             }
         })
         .map(|path| path.to_string_lossy().into_owned());
-    AutomationJobPackage {
+    Ok(AutomationJobPackage {
         format: "arch-notebook-automation-job".into(),
-        schema_version: 2,
+        schema_version: 3,
         database_base_path,
         job: AutomationJobPackageDefinition {
             name: job.name.clone(),
+            chart_title: Some(chart_title),
             database_path: job.database_path.clone(),
             series: job.series.clone(),
             query: job.query.clone(),
@@ -24779,6 +24802,43 @@ fn automation_job_package(job: &AutomationJob, case_path: &str) -> AutomationJob
             maximum_entity_property_changes: job.maximum_entity_property_changes,
             maximum_skipped_rows: job.maximum_skipped_rows,
         },
+    })
+}
+
+fn chart_title_for_id(case: &CaseFile, chart_id: Uuid) -> Option<&str> {
+    if chart_id == case.active_chart_id {
+        Some(&case.active_chart_title)
+    } else {
+        case.chart_tabs
+            .iter()
+            .find(|chart| chart.id == chart_id)
+            .map(|chart| chart.title.as_str())
+    }
+}
+
+fn chart_id_for_title(case: &CaseFile, title: &str) -> Result<Uuid, String> {
+    let title = title.trim();
+    if title.is_empty() {
+        return Err("destination chart title cannot be empty".into());
+    }
+    let mut matching = Vec::new();
+    if case.active_chart_title.eq_ignore_ascii_case(title) {
+        matching.push(case.active_chart_id);
+    }
+    matching.extend(
+        case.chart_tabs
+            .iter()
+            .filter(|chart| chart.title.eq_ignore_ascii_case(title))
+            .map(|chart| chart.id),
+    );
+    match matching.as_slice() {
+        [chart_id] => Ok(*chart_id),
+        [] => Err(format!(
+            "destination chart {title:?} does not exist in the destination case; choose an existing chart with --chart"
+        )),
+        _ => Err(format!(
+            "destination chart title {title:?} is ambiguous; rename one of the matching charts so the destination is unique"
+        )),
     }
 }
 
@@ -24787,7 +24847,7 @@ fn read_automation_job_package(input_path: &str) -> Result<AutomationJobPackage,
         .map_err(|error| format!("cannot read automation job package: {error}"))?;
     let package = serde_json::from_str::<AutomationJobPackage>(&package_json)
         .map_err(|error| format!("cannot parse automation job package: {error}"))?;
-    if !matches!(package.schema_version, 1 | 2) {
+    if !matches!(package.schema_version, 1 | 2 | 3) {
         return Err(format!(
             "unsupported automation job package schema version: {}",
             package.schema_version
@@ -24805,12 +24865,21 @@ fn job_from_automation_package(
     case: &CaseFile,
     case_path: &str,
     name_override: Option<&str>,
+    chart_title_override: Option<&str>,
     database_path_override: Option<&str>,
     series_override: Option<&str>,
 ) -> Result<AutomationJob, String> {
     if let Some(name) = name_override {
         definition.name = name.to_owned();
     }
+    let chart_title = chart_title_override
+        .or(definition.chart_title.as_deref())
+        .map(str::trim)
+        .filter(|title| !title.is_empty());
+    let chart_id = chart_title
+        .map(|title| chart_id_for_title(case, title))
+        .transpose()?
+        .unwrap_or(case.active_chart_id);
     if let Some(database_path) = database_path_override {
         definition.database_path = database_path.to_owned();
     } else if Path::new(&definition.database_path).is_relative()
@@ -24868,7 +24937,7 @@ fn job_from_automation_package(
     }
     let job = AutomationJob {
         id: Uuid::new_v4(),
-        chart_id: Some(case.active_chart_id),
+        chart_id: Some(chart_id),
         name: definition.name.trim().to_owned(),
         database_path: definition.database_path.trim().to_owned(),
         series: definition.series.trim().to_owned(),
@@ -24913,7 +24982,7 @@ fn write_automation_job_package(
     if output_replaces_source {
         return Err("job package output cannot replace a saved SQLite source".into());
     }
-    let package = automation_job_package(job, case_path);
+    let package = automation_job_package(job, case, case_path)?;
     let contents = serde_json::to_vec_pretty(&package).map_err(|error| error.to_string())?;
     write_file_atomically(Path::new(output_path), &contents)
 }
@@ -25554,6 +25623,7 @@ fn import_automation_job_cli(
     case_path: &str,
     input_path: &str,
     name_override: Option<&str>,
+    chart_title_override: Option<&str>,
     database_path_override: Option<&str>,
     series_override: Option<&str>,
     parameter_overrides: &[(String, String)],
@@ -25572,6 +25642,7 @@ fn import_automation_job_cli(
         &case,
         case_path,
         name_override,
+        chart_title_override,
         database_path_override,
         series_override,
     )?;
@@ -25596,6 +25667,8 @@ fn import_automation_job_cli(
                 "input": input_path,
                 "job_id": job_id,
                 "job": job_name,
+            "chart_id": case.automation_jobs.last().and_then(|job| job.chart_id),
+            "chart_title": case.automation_jobs.last().and_then(|job| job.chart_id).and_then(|chart_id| chart_title_for_id(&case, chart_id)),
                 "database_path": case.automation_jobs.last().map(|job|job.database_path.as_str()),
                 "series": case.automation_jobs.last().map(|job|job.series.as_str()),
                 "enabled": false,
@@ -26266,7 +26339,7 @@ fn main() -> eframe::Result<()> {
         .is_some_and(|arg| arg == "--help" || arg == "-h")
     {
         println!(
-            "Arch Notebook\n\nUsage:\n  arch-notebook\n  arch-notebook --version [--json]\n  arch-notebook --inspect-sqlite <database.sqlite> [--json]\n  arch-notebook --import-graphml <case.json> <input.graphml> [--json]\n  arch-notebook --import-kml <case.json> <input.kml> [--json]\n  arch-notebook --export-graphml <case.json> <output.graphml> [--json]\n  arch-notebook --export-kml <case.json> <output.kml> [--json]\n  arch-notebook --export-sql-snapshot <case.json> <snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --export-sql-series <case.json> <snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --export-sql-comparison <case.json> <baseline-snapshot-id> <current-snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --export-job <case.json> <job-name-or-id> <output.json> [--json]\n  arch-notebook --export-path <case.json> <path-name-or-id> <output.json> [--json]\n  arch-notebook --import-path <case.json> <input.json> [--name <path-name>] [--json]\n  arch-notebook --import-job <case.json> <input.json> [--name <job-name>] [--database <path>] [--series <label>] [--param name=value ...] [--json]\n  arch-notebook --export-import-design <case.json> <design-name-or-id> <output.json> [--json]\n  arch-notebook --import-import-design <case.json> <input.json> [--name <design-name>] [--json]\n  arch-notebook --list-jobs <case.json> [--enabled-only] [--schema-adaptation-needed] [--json]\n  arch-notebook --list-batches <case.json> [--json]\n  arch-notebook --list-runs <case.json> [--json] [--job <name-or-id>] [--trigger <desktop|scheduled|cli|replay|legacy>] [--schema-adaptation-needed] [--offset <count>] [--limit <count>]\n  arch-notebook --export-runs <case.json> <output.csv|tsv> [--job <name-or-id>] [--trigger <desktop|scheduled|cli|replay|legacy>] [--schema-adaptation-needed] [--offset <count>] [--limit <count>] [--json]\n  arch-notebook --explain-job <case.json> <job-name-or-id> [--param name=value ...] [--json]\n  arch-notebook --validate-job <case.json> <job-name-or-id> [--query-only] [--param name=value ...] [--json]\n  arch-notebook --validate-enabled-jobs <case.json> [--json] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --check-enabled-job-queries <case.json> [--json] [--require-usable] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --validate-run <case.json> <run-id> [--json]\n  arch-notebook --run-enabled-jobs <case.json> [--json] [--resume-batch <batch-id>] [--export-chart-csv-dir <absolute-directory>] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --run-job <case.json> <job-name-or-id> [--param name=value ...] [--resume-batch <batch-id>] [--export-chart-csv <output.csv|tsv>] [--json]\n  arch-notebook --rerun-run <case.json> <run-id> [--export-chart-csv <output.csv|tsv>] [--json]\n\nJob and import design packages contain portable configuration, not case data or run history. Batch runs save snapshots and run history to the case file. JSON output is available for scheduler integration. Additional commands:"
+            "Arch Notebook\n\nUsage:\n  arch-notebook\n  arch-notebook --version [--json]\n  arch-notebook --inspect-sqlite <database.sqlite> [--json]\n  arch-notebook --import-graphml <case.json> <input.graphml> [--json]\n  arch-notebook --import-kml <case.json> <input.kml> [--json]\n  arch-notebook --export-graphml <case.json> <output.graphml> [--json]\n  arch-notebook --export-kml <case.json> <output.kml> [--json]\n  arch-notebook --export-sql-snapshot <case.json> <snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --export-sql-series <case.json> <snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --export-sql-comparison <case.json> <baseline-snapshot-id> <current-snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --export-job <case.json> <job-name-or-id> <output.json> [--json]\n  arch-notebook --export-path <case.json> <path-name-or-id> <output.json> [--json]\n  arch-notebook --import-path <case.json> <input.json> [--name <path-name>] [--json]\n  arch-notebook --import-job <case.json> <input.json> [--name <job-name>] [--chart <chart-title>] [--database <path>] [--series <label>] [--param name=value ...] [--json]\n  arch-notebook --export-import-design <case.json> <design-name-or-id> <output.json> [--json]\n  arch-notebook --import-import-design <case.json> <input.json> [--name <design-name>] [--json]\n  arch-notebook --list-jobs <case.json> [--enabled-only] [--schema-adaptation-needed] [--json]\n  arch-notebook --list-batches <case.json> [--json]\n  arch-notebook --list-runs <case.json> [--json] [--job <name-or-id>] [--trigger <desktop|scheduled|cli|replay|legacy>] [--schema-adaptation-needed] [--offset <count>] [--limit <count>]\n  arch-notebook --export-runs <case.json> <output.csv|tsv> [--job <name-or-id>] [--trigger <desktop|scheduled|cli|replay|legacy>] [--schema-adaptation-needed] [--offset <count>] [--limit <count>] [--json]\n  arch-notebook --explain-job <case.json> <job-name-or-id> [--param name=value ...] [--json]\n  arch-notebook --validate-job <case.json> <job-name-or-id> [--query-only] [--param name=value ...] [--json]\n  arch-notebook --validate-enabled-jobs <case.json> [--json] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --check-enabled-job-queries <case.json> [--json] [--require-usable] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --validate-run <case.json> <run-id> [--json]\n  arch-notebook --run-enabled-jobs <case.json> [--json] [--resume-batch <batch-id>] [--export-chart-csv-dir <absolute-directory>] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --run-job <case.json> <job-name-or-id> [--param name=value ...] [--resume-batch <batch-id>] [--export-chart-csv <output.csv|tsv>] [--json]\n  arch-notebook --rerun-run <case.json> <run-id> [--export-chart-csv <output.csv|tsv>] [--json]\n\nJob and import design packages contain portable configuration, not case data or run history. Batch runs save snapshots and run history to the case file. JSON output is available for scheduler integration. Additional commands:"
         );
         println!(
             "  arch-notebook --export-sql-chart-csv <case.json> <snapshot-id> <output.csv|tsv> [--json]"
@@ -26427,15 +26500,17 @@ fn main() -> eframe::Result<()> {
     }
     if args.first().is_some_and(|arg| arg == "--import-job") {
         let json_output = args.iter().any(|arg| arg == "--json");
-        let usage = "usage: arch-notebook --import-job <case.json> <input.json> [--name <job-name>] [--database <path>] [--series <label>] [--param name=value ...] [--json]";
+        let usage = "usage: arch-notebook --import-job <case.json> <input.json> [--name <job-name>] [--chart <chart-title>] [--database <path>] [--series <label>] [--param name=value ...] [--json]";
         let (Some(case_path), Some(input_path)) = (args.get(1), args.get(2)) else {
             report_cli_usage_error(usage, json_output);
         };
         let mut name_override = None;
+        let mut chart_title_override = None;
         let mut database_path_override = None;
         let mut series_override = None;
         let mut seen_json = false;
         let mut seen_name = false;
+        let mut seen_chart = false;
         let mut seen_database = false;
         let mut seen_series = false;
         let mut parameter_options = Vec::new();
@@ -26453,6 +26528,17 @@ fn main() -> eframe::Result<()> {
                     };
                     name_override = Some(value.as_str());
                     seen_name = true;
+                }
+                "--chart" if !seen_chart => {
+                    index += 1;
+                    let Some(value) = args
+                        .get(index)
+                        .filter(|value| !value.trim().is_empty() && !value.starts_with("--"))
+                    else {
+                        report_cli_usage_error("--chart requires a chart title", json_output);
+                    };
+                    chart_title_override = Some(value.as_str());
+                    seen_chart = true;
                 }
                 "--database" if !seen_database => {
                     index += 1;
@@ -26497,6 +26583,7 @@ fn main() -> eframe::Result<()> {
             case_path,
             input_path,
             name_override,
+            chart_title_override,
             database_path_override,
             series_override,
             &parameter_overrides,
