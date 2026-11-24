@@ -4071,6 +4071,7 @@ impl App {
         if self.sql_schema_template_source.as_ref() != Some(&current_source) {
             self.sql_schema_templates.clear();
             self.sql_schema_objects.clear();
+            self.sql_schema_filter.clear();
             self.sql_schema_template_index = 0;
             self.sql_schema_template_source = None;
             return;
