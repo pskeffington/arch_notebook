@@ -9617,12 +9617,12 @@ fn valid_sql_parameter_name(name: &str) -> bool {
 fn parse_sql_parameters(text: &str) -> Result<Vec<(String, String)>, String> {
     let mut parameters = Vec::new();
     let mut names = HashSet::new();
-    for (line_index, line) in text.lines().enumerate() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') {
+    for (line_index, raw_line) in text.lines().enumerate() {
+        let line = raw_line.trim_start();
+        if line.trim().is_empty() || line.starts_with('#') {
             continue;
         }
-        let Some((raw_name, value)) = line.split_once('=') else {
+        let Some((raw_name, raw_value)) = line.split_once('=') else {
             return Err(format!(
                 "SQL parameter line {} must use name=value",
                 line_index + 1
@@ -9638,7 +9638,13 @@ fn parse_sql_parameters(text: &str) -> Result<Vec<(String, String)>, String> {
         if !names.insert(name.clone()) {
             return Err(format!("duplicate SQL parameter: {name}"));
         }
-        parameters.push((name, value.trim().to_owned()));
+        let value = raw_value.trim_start();
+        let value = if let Some(text) = value.strip_prefix("text:") {
+            format!("text:{text}")
+        } else {
+            value.trim().to_owned()
+        };
+        parameters.push((name, value));
     }
     Ok(parameters)
 }
@@ -9651,9 +9657,9 @@ fn parse_automation_parameter_overrides(
         scoped: Vec::new(),
     };
     let mut global_names = HashSet::new();
-    for (line_index, line) in text.lines().enumerate() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') {
+    for (line_index, raw_line) in text.lines().enumerate() {
+        let line = raw_line.trim_start();
+        if line.trim().is_empty() || line.starts_with('#') {
             continue;
         }
         let scope_separator = line
