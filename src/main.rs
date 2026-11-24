@@ -334,6 +334,7 @@ fn preflight_automation_jobs_command(
         .arg("--check-enabled-job-queries")
         .arg(case_path)
         .arg("--require-usable")
+        .arg("--json")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     for job_id in job_ids {
@@ -373,12 +374,16 @@ fn preflight_automation_jobs_command(
     for line in BufReader::new(stdout).lines() {
         match line {
             Ok(line) => {
+                let completed = serde_json::from_str::<serde_json::Value>(&line)
+                    .ok()
+                    .and_then(|result| result["outcomes"].as_array().map(Vec::len));
                 reports.push(line.clone());
                 if let Ok(mut current) = progress.lock() {
-                    *current = format!(
-                        "Preflighted {} of {} enabled jobs · {line}",
-                        reports.len(),
-                        job_ids.len()
+                    *current = completed.map_or_else(
+                        || "Collecting structured SQL preflight results".to_owned(),
+                        |completed| {
+                            format!("Preflighted {completed} of {} enabled jobs", job_ids.len())
+                        },
                     );
                 }
             }
@@ -401,7 +406,21 @@ fn preflight_automation_jobs_command(
     if let Some(error) = stream_error {
         return Err(format!("SQL preflight output could not be read: {error}"));
     }
-    let mut report = reports.join("\n");
+    let stdout_report = reports.join("\n");
+    if let Ok(result) = serde_json::from_str::<serde_json::Value>(&stdout_report) {
+        let succeeded = result["ok"].as_bool().unwrap_or_else(|| status.success());
+        let summary = serde_json::to_string_pretty(&result).unwrap_or(stdout_report);
+        let mut report = format!(
+            "SQL PREFLIGHT {}\n{summary}",
+            if succeeded { "PASSED" } else { "NEEDS REVIEW" }
+        );
+        if !stderr.trim().is_empty() {
+            report.push('\n');
+            report.push_str(stderr.trim());
+        }
+        return Ok(report);
+    }
+    let mut report = stdout_report;
     if !stderr.trim().is_empty() {
         if !report.is_empty() {
             report.push('\n');
@@ -11707,8 +11726,13 @@ impl eframe::App for App {
                     self.automation_schedule_worker = None;
                     self.automation_schedule_target_path = None;
                     self.automation_progress = None;
+                    let succeeded = if self.status.starts_with("PREFLIGHTING") {
+                        message.starts_with("SQL PREFLIGHT PASSED\n")
+                    } else {
+                        true
+                    };
                     self.status = message.clone();
-                    self.automation_schedule_message = Some((case_path, true, message));
+                    self.automation_schedule_message = Some((case_path, succeeded, message));
                 }
                 Ok((case_path, Err(error))) => {
                     let verb = if self.status.starts_with("REMOVING") {
@@ -13159,6 +13183,7 @@ impl eframe::App for App {
                                         .desired_width(320.0));
                                 });
                                 ui.label(egui::RichText::new("When set, scheduled captures write one atomically refreshed CSV per enabled SQL job. Check schedule restores the installed folder; switching cases clears this field until checked.").small().color(muted));
+                                let mut preflight_repair_request: Option<(Uuid, bool)> = None;
                                 if self.automation_schedule_worker.is_some()
                                     && self.automation_schedule_target_path.as_deref()
                                         == Some(self.case_path.as_str())
@@ -13193,11 +13218,68 @@ impl eframe::App for App {
                                         .strong()
                                         .color(cyan),
                                     );
-                                    egui::ScrollArea::vertical()
-                                        .max_height(96.0)
-                                        .show(ui, |ui| {
-                                            ui.label(egui::RichText::new(message).small().color(color));
-                                        });
+                                    let preflight_json = message
+                                        .strip_prefix("SQL PREFLIGHT PASSED\n")
+                                        .or_else(|| message.strip_prefix("SQL PREFLIGHT NEEDS REVIEW\n"))
+                                        .and_then(|json| serde_json::from_str::<serde_json::Value>(json).ok());
+                                    if let Some(outcomes) = preflight_json
+                                        .as_ref()
+                                        .and_then(|result| result["outcomes"].as_array())
+                                    {
+                                        egui::ScrollArea::vertical()
+                                            .max_height(220.0)
+                                            .show(ui, |ui| {
+                                                for outcome in outcomes {
+                                                    let passed = outcome["status"].as_str() == Some("PASS");
+                                                    let outcome_color = if passed {
+                                                        egui::Color32::from_rgb(102, 190, 146)
+                                                    } else {
+                                                        egui::Color32::from_rgb(232, 116, 97)
+                                                    };
+                                                    let job_name = outcome["job"].as_str().unwrap_or("Unknown job");
+                                                    let chart_title = outcome["chart_title"].as_str().unwrap_or("Unknown chart");
+                                                    let schema_repair = outcome["schema_adaptation"]["required"].as_bool().unwrap_or(false);
+                                                    let job_id = outcome["job_id"]
+                                                        .as_str()
+                                                        .and_then(|id| Uuid::parse_str(id).ok())
+                                                        .filter(|id| self.case.automation_jobs.iter().any(|job| job.id == *id));
+                                                    ui.horizontal(|ui| {
+                                                        ui.colored_label(
+                                                            outcome_color,
+                                                            if passed { "PASS" } else { "REVIEW" },
+                                                        );
+                                                        ui.strong(job_name);
+                                                        ui.label(format!("Destination · {chart_title}"));
+                                                        if !passed
+                                                            && let Some(job_id) = job_id
+                                                            && ui.small_button(if schema_repair { "Repair SQL" } else { "Edit job" }).clicked()
+                                                        {
+                                                            preflight_repair_request = Some((job_id, schema_repair));
+                                                        }
+                                                    });
+                                                    if let Some(error) = outcome["message"].as_str() {
+                                                        ui.label(egui::RichText::new(error).small().color(outcome_color));
+                                                    }
+                                                    if schema_repair
+                                                        && let Some(hint) = outcome["schema_adaptation"]["hint"].as_str()
+                                                    {
+                                                        ui.label(egui::RichText::new(hint).small().color(egui::Color32::from_rgb(238, 174, 83)));
+                                                    }
+                                                }
+                                            });
+                                    } else {
+                                        egui::ScrollArea::vertical()
+                                            .max_height(96.0)
+                                            .show(ui, |ui| {
+                                                ui.label(egui::RichText::new(message).small().color(color));
+                                            });
+                                    }
+                                }
+                                if let Some((job_id, repair_schema)) = preflight_repair_request {
+                                    self.edit_automation_job(job_id);
+                                    if repair_schema {
+                                        self.build_sql_query_from_schema();
+                                    }
                                 }
                                 ui.add_space(8.0);
                                 ui.horizontal(|ui| {
