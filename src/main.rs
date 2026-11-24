@@ -24856,6 +24856,17 @@ fn read_automation_job_package(input_path: &str) -> Result<AutomationJobPackage,
     if package.format != "arch-notebook-automation-job" {
         return Err("input is not an Arch Notebook automation job package".into());
     }
+    if package.schema_version >= 3
+        && package
+            .job
+            .chart_title
+            .as_deref()
+            .is_none_or(|title| title.trim().is_empty())
+    {
+        return Err(
+            "version 3 automation job packages must include a destination chart title".into(),
+        );
+    }
     Ok(package)
 }
 
