@@ -10,7 +10,7 @@ Use **Preflight enabled jobs and overrides** to check every enabled query read-o
 
 ### Sharing and adapting jobs
 
-Export a job package from the Automation panel or with `--export-job`; import it in the panel or with `--import-job`. New package version 2 files record the exporting case directory so a relative SQLite database path resolves to the same source when imported on the same machine. This source directory is an absolute path in the package. When moving a package and database to another machine or location, pass `--database <path>` during CLI import or set the **Database** override in the panel. Version 1 packages remain supported and keep their prior behavior of resolving relative paths against the destination case. Imported jobs are disabled until reviewed.
+Export a job package from the Automation panel or with `--export-job`; import it in the panel or with `--import-job`. New package version 2 files record the exporting case directory when the SQLite database path is relative, so it resolves to the same source when imported on the same machine. This source directory is an absolute path in the package. When moving a package and database to another machine or location, pass `--database <path>` during CLI import or set the **Database** override in the panel. Version 1 packages remain supported and keep their prior behavior of resolving relative paths against the destination case. Imported jobs are disabled until reviewed.
 
 ### One-run overrides
 

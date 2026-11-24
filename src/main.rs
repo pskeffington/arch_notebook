@@ -23765,17 +23765,22 @@ fn automation_job_package(job: &AutomationJob, case_path: &str) -> AutomationJob
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
-    let database_base_path = if case_parent.is_absolute() {
-        case_parent.to_path_buf()
-    } else {
-        std::env::current_dir()
-            .unwrap_or_else(|_| PathBuf::from("."))
-            .join(case_parent)
-    };
+    let database_base_path = Path::new(&job.database_path)
+        .is_relative()
+        .then(|| {
+            if case_parent.is_absolute() {
+                case_parent.to_path_buf()
+            } else {
+                std::env::current_dir()
+                    .unwrap_or_else(|_| PathBuf::from("."))
+                    .join(case_parent)
+            }
+        })
+        .map(|path| path.to_string_lossy().into_owned());
     AutomationJobPackage {
         format: "arch-notebook-automation-job".into(),
         schema_version: 2,
-        database_base_path: Some(database_base_path.to_string_lossy().into_owned()),
+        database_base_path,
         job: AutomationJobPackageDefinition {
             name: job.name.clone(),
             database_path: job.database_path.clone(),
