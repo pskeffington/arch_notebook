@@ -557,6 +557,8 @@ struct ConnectionFact {
 struct ConnectionSnapshot {
     #[serde(default = "Uuid::new_v4")]
     id: Uuid,
+    #[serde(default)]
+    chart_id: Option<Uuid>,
     series: String,
     source_key: String,
     database_path: String,
@@ -576,6 +578,8 @@ struct ConnectionSnapshot {
 #[derive(Clone, Serialize, Deserialize)]
 struct AutomationJob {
     id: Uuid,
+    #[serde(default)]
+    chart_id: Option<Uuid>,
     name: String,
     database_path: String,
     series: String,
@@ -661,6 +665,8 @@ struct AutomationRun {
     #[serde(default)]
     batch_configuration_fingerprint: Option<String>,
     job_id: Uuid,
+    #[serde(default)]
+    chart_id: Option<Uuid>,
     job_name: String,
     #[serde(default)]
     database_path: String,
@@ -4150,6 +4156,7 @@ impl App {
             }
             let snapshot = ConnectionSnapshot {
                 id: Uuid::new_v4(),
+                chart_id: Some(self.case.active_chart_id),
                 series,
                 source_key,
                 database_path: path,
@@ -4811,6 +4818,7 @@ impl App {
                 .find(|job| job.id == id)
             {
                 job.name = name.clone();
+                job.chart_id = Some(self.case.active_chart_id);
                 job.database_path = self.sql_path.trim().into();
                 job.series = self.sql_series.trim().into();
                 job.query = self.sql_query.trim().into();
@@ -4832,6 +4840,7 @@ impl App {
             }
             self.case.automation_jobs.push(AutomationJob {
                 id,
+                chart_id: Some(self.case.active_chart_id),
                 name: name.clone(),
                 database_path: self.sql_path.trim().into(),
                 series: self.sql_series.trim().into(),
@@ -4862,6 +4871,7 @@ impl App {
         }
         self.case.automation_jobs.push(AutomationJob {
             id: Uuid::new_v4(),
+            chart_id: Some(self.case.active_chart_id),
             name: name.clone(),
             database_path: self.sql_path.trim().into(),
             series: self.sql_series.trim().into(),
@@ -6714,6 +6724,31 @@ impl App {
             );
             return (false, message);
         }
+        let original_chart_id = self.case.active_chart_id;
+        if let Some(chart_id) = job.chart_id
+            && chart_id != original_chart_id
+        {
+            let chart_exists = self
+                .case
+                .chart_tabs
+                .iter()
+                .any(|chart| chart.id == chart_id);
+            if !chart_exists {
+                let message =
+                    format!("JOB RUN FAILED · destination chart no longer exists · {chart_id}");
+                self.record_automation_run(
+                    job,
+                    started_at,
+                    elapsed.elapsed().as_millis() as u64,
+                    false,
+                    message.clone(),
+                    trigger,
+                    None,
+                );
+                return (false, message);
+            }
+            self.switch_chart(chart_id);
+        }
         let snapshot_count_before = self.case.snapshots.len();
         self.sql_path = job.database_path.clone();
         self.sql_series = job.series.clone();
@@ -6851,6 +6886,10 @@ impl App {
             );
         }
         let message = self.status.clone();
+        if self.case.active_chart_id != original_chart_id {
+            self.switch_chart(original_chart_id);
+            self.status = message.clone();
+        }
         self.record_automation_run(
             job,
             started_at,
@@ -6903,6 +6942,7 @@ impl App {
             batch_id: None,
             batch_configuration_fingerprint: None,
             job_id: job.id,
+            chart_id: job.chart_id,
             job_name: job.name.clone(),
             database_path: job.database_path.clone(),
             series: job.series.clone(),
@@ -11067,6 +11107,7 @@ fn automation_outcome_json(
         "status": if success { "PASS" } else { "FAIL" },
         "job": job.name,
         "job_id": job.id,
+        "chart_id": job.chart_id,
         "run_id": run_id,
         "sqlite_lock_retries": sqlite_lock_retries,
         "duration_ms": serde_json::Value::Null,
@@ -11097,6 +11138,7 @@ fn automation_outcome_json(
             )
         }),
         "snapshot_id": snapshot.map(|snapshot| snapshot.id),
+        "snapshot_chart_id": snapshot.and_then(|snapshot| snapshot.chart_id),
         "captured_at": snapshot.map(|snapshot| snapshot.captured_at.as_str()),
         "source_key": snapshot.map(|snapshot| snapshot.source_key.as_str()),
         "connection_count": connection_count,
@@ -13130,6 +13172,19 @@ impl eframe::App for App {
                                             );
                                         }
                                         ui.strong(&job.name);
+                                        let chart_title = job.chart_id.and_then(|chart_id| {
+                                            if chart_id == self.case.active_chart_id {
+                                                Some(self.case.active_chart_title.as_str())
+                                            } else {
+                                                self.case.chart_tabs.iter()
+                                                    .find(|chart| chart.id == chart_id)
+                                                    .map(|chart| chart.title.as_str())
+                                            }
+                                        });
+                                        ui.label(format!(
+                                            "Destination · {}",
+                                            chart_title.unwrap_or("Current chart (legacy job)")
+                                        ));
                                         ui.label(format!("{} · {}", job.series, job.database_path));
                                         ui.label(format!(
                                             "min {} connections · min confidence {} · max connections {} · max regressions {} · max additions {} · max relationship-property changes {} · max entity-property changes {} · max skipped rows {}",
@@ -20365,6 +20420,7 @@ fn automation_job_effective_configuration_matches(
     left_parameters.sort_by(|a, b| a.0.cmp(&b.0));
     right_parameters.sort_by(|a, b| a.0.cmp(&b.0));
     left.database_path == right.database_path
+        && left.chart_id == right.chart_id
         && left.series == right.series
         && left.query == right.query
         && left_parameters == right_parameters
@@ -21156,6 +21212,7 @@ fn automation_job_from_run(prior_run: &AutomationRun) -> Result<AutomationJob, S
     }
     Ok(AutomationJob {
         id: prior_run.job_id,
+        chart_id: prior_run.chart_id,
         name: prior_run.job_name.clone(),
         database_path: prior_run.database_path.clone(),
         series: prior_run.series.clone(),
@@ -24549,6 +24606,7 @@ fn job_from_automation_package(
     }
     let job = AutomationJob {
         id: Uuid::new_v4(),
+        chart_id: Some(case.active_chart_id),
         name: definition.name.trim().to_owned(),
         database_path: definition.database_path.trim().to_owned(),
         series: definition.series.trim().to_owned(),
@@ -25345,6 +25403,7 @@ fn list_automation_runs_cli(
                 .and_then(|index| case.snapshots.get(index));
             let job = AutomationJob {
                 id: run.job_id,
+                chart_id: run.chart_id,
                 name: run.job_name.clone(),
                 database_path: run.database_path.clone(),
                 series: run.series.clone(),
@@ -27054,6 +27113,7 @@ mod tests {
         };
         let make_snapshot = |key: String| ConnectionSnapshot {
             id: super::Uuid::new_v4(),
+            chart_id: None,
             series: "test".into(),
             source_key: "db::test".into(),
             database_path: "db".into(),
