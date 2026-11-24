@@ -605,6 +605,8 @@ struct AutomationJob {
 struct AutomationJobPackage {
     format: String,
     schema_version: u32,
+    #[serde(default)]
+    database_base_path: Option<String>,
     job: AutomationJobPackageDefinition,
 }
 
@@ -4767,6 +4769,7 @@ impl App {
         let result = read_automation_job_package(input_path).and_then(|package| {
             let mut job = job_from_automation_package(
                 package.job,
+                package.database_base_path.as_deref(),
                 &self.case,
                 &self.case_path,
                 name_override.as_deref(),
@@ -23757,10 +23760,22 @@ fn list_automation_jobs_cli(
     Ok(())
 }
 
-fn automation_job_package(job: &AutomationJob) -> AutomationJobPackage {
+fn automation_job_package(job: &AutomationJob, case_path: &str) -> AutomationJobPackage {
+    let case_parent = Path::new(case_path)
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let database_base_path = if case_parent.is_absolute() {
+        case_parent.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join(case_parent)
+    };
     AutomationJobPackage {
         format: "arch-notebook-automation-job".into(),
-        schema_version: 1,
+        schema_version: 2,
+        database_base_path: Some(database_base_path.to_string_lossy().into_owned()),
         job: AutomationJobPackageDefinition {
             name: job.name.clone(),
             database_path: job.database_path.clone(),
@@ -23784,7 +23799,7 @@ fn read_automation_job_package(input_path: &str) -> Result<AutomationJobPackage,
         .map_err(|error| format!("cannot read automation job package: {error}"))?;
     let package = serde_json::from_str::<AutomationJobPackage>(&package_json)
         .map_err(|error| format!("cannot parse automation job package: {error}"))?;
-    if package.schema_version != 1 {
+    if !matches!(package.schema_version, 1 | 2) {
         return Err(format!(
             "unsupported automation job package schema version: {}",
             package.schema_version
@@ -23798,6 +23813,7 @@ fn read_automation_job_package(input_path: &str) -> Result<AutomationJobPackage,
 
 fn job_from_automation_package(
     mut definition: AutomationJobPackageDefinition,
+    database_base_path: Option<&str>,
     case: &CaseFile,
     case_path: &str,
     name_override: Option<&str>,
@@ -23809,6 +23825,13 @@ fn job_from_automation_package(
     }
     if let Some(database_path) = database_path_override {
         definition.database_path = database_path.to_owned();
+    } else if Path::new(&definition.database_path).is_relative()
+        && let Some(database_base_path) = database_base_path
+    {
+        definition.database_path = Path::new(database_base_path)
+            .join(&definition.database_path)
+            .to_string_lossy()
+            .into_owned();
     }
     if let Some(series) = series_override {
         definition.series = series.to_owned();
@@ -23901,7 +23924,7 @@ fn write_automation_job_package(
     if output_replaces_source {
         return Err("job package output cannot replace a saved SQLite source".into());
     }
-    let package = automation_job_package(job);
+    let package = automation_job_package(job, case_path);
     let contents = serde_json::to_vec_pretty(&package).map_err(|error| error.to_string())?;
     write_file_atomically(Path::new(output_path), &contents)
 }
@@ -24556,6 +24579,7 @@ fn import_automation_job_cli(
         .map_err(|error| format!("cannot parse case: {error}"))?;
     let mut job = job_from_automation_package(
         package.job,
+        package.database_base_path.as_deref(),
         &case,
         case_path,
         name_override,

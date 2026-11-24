@@ -8,6 +8,10 @@ In **Automation**, **Unreviewed regressions, properties, or schema changes** fil
 
 Use **Preflight enabled jobs and overrides** to check every enabled query read-only with the current one-run SQL parameter overrides and inspect per-job progress and diagnostics before a batch run. The preflight does not save run history or change job parameters. Schedule install, check, remove, and preflight results remain visible in the Automation panel for the case that was acted on. Schedule installation separately preflights the saved job parameters before changing the scheduler, so one-run overrides never alter scheduled captures.
 
+### Sharing and adapting jobs
+
+Export a job package from the Automation panel or with `--export-job`; import it in the panel or with `--import-job`. New package version 2 files record the exporting case directory so a relative SQLite database path resolves to the same source when imported on the same machine. This source directory is an absolute path in the package. When moving a package and database to another machine or location, pass `--database <path>` during CLI import or set the **Database** override in the panel. Version 1 packages remain supported and keep their prior behavior of resolving relative paths against the destination case. Imported jobs are disabled until reviewed.
+
 ### One-run overrides
 
 For an ad-hoc desktop run, expand **One-run SQL parameter overrides**. Enter `name=value` lines for a single job, or scope each line as `Job name or UUID::name=value` for a batch. The panel echoes the effective override lines and checks typed values before enabling a run, so malformed `int:`, `real:`, or `bool:` values fail before a job starts. Scoped selectors must match exactly one enabled job in the chosen batch, and a job/parameter pair can appear only once. Overrides are retained in each run's effective configuration for replay and audit, then clear from the editor. Opening another case or creating a new case also clears the transient overrides so values cannot carry across investigation contexts. They do not modify saved jobs or scheduled captures.
