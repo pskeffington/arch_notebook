@@ -10705,11 +10705,21 @@ fn automation_run_matches_filter(
     unreviewed_regressions_only: bool,
 ) -> bool {
     let result = if run.success { "PASS" } else { "FAIL" };
+    let snapshot_index = run
+        .snapshot_id
+        .and_then(|id| case.snapshots.iter().position(|snapshot| snapshot.id == id))
+        .or(run.snapshot_index);
+    let destination_chart = snapshot_index
+        .and_then(|index| case.snapshots.get(index))
+        .and_then(|snapshot| snapshot.chart_id)
+        .and_then(|chart_id| {
+            case.chart_tabs
+                .iter()
+                .find(|chart| chart.id == chart_id)
+                .map(|chart| format!("{} {chart_id}", chart.title))
+        })
+        .unwrap_or_default();
     let has_unreviewed_regression = if unreviewed_regressions_only {
-        let snapshot_index = run
-            .snapshot_id
-            .and_then(|id| case.snapshots.iter().position(|snapshot| snapshot.id == id))
-            .or(run.snapshot_index);
         snapshot_index.is_some_and(|index| automation_snapshot_regression_count(case, index) > 0)
             && !run
                 .regressions_reviewed
@@ -10725,9 +10735,10 @@ fn automation_run_matches_filter(
         && has_unreviewed_regression
         && (filter.is_empty()
             || format!(
-                "{} {} {} {} {} {} {} {} {} {} {} {}",
+                "{} {} {} {} {} {} {} {} {} {} {} {} {}",
                 result,
                 run.job_name,
+                destination_chart,
                 run.trigger,
                 run.database_path,
                 run.series,
@@ -13773,7 +13784,7 @@ impl eframe::App for App {
                                     ui.label(egui::RichText::new("RUN HISTORY · newest first").small().strong().color(cyan));
                                     ui.add(
                                         egui::TextEdit::singleline(&mut self.automation_run_filter)
-                                            .hint_text("Find by job, trigger, result, database, series, SQL, or message")
+                                            .hint_text("Find by job, chart, trigger, result, database, series, SQL, or message")
                                             .desired_width(300.0),
                                     );
                                     egui::ComboBox::from_id_salt("automation_run_trigger_filter")
