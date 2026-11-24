@@ -24,7 +24,7 @@ use std::{
 };
 use uuid::Uuid;
 
-const CURRENT_CASE_FORMAT_VERSION: u32 = 13;
+const CURRENT_CASE_FORMAT_VERSION: u32 = 14;
 const SQL_QUERY_TIMEOUT_MINUTES: u64 = 15;
 const SQL_QUERY_TIMEOUT: Duration = Duration::from_secs(SQL_QUERY_TIMEOUT_MINUTES * 60);
 const SQLITE_LOCK_RETRY_ATTEMPTS: usize = 3;
@@ -897,6 +897,12 @@ struct CaseFile {
     description: String,
     entities: Vec<Entity>,
     links: Vec<Link>,
+    #[serde(default = "Uuid::new_v4")]
+    active_chart_id: Uuid,
+    #[serde(default = "default_chart_title")]
+    active_chart_title: String,
+    #[serde(default)]
+    chart_tabs: Vec<ChartDocument>,
     #[serde(default)]
     snapshots: Vec<ConnectionSnapshot>,
     #[serde(default)]
@@ -913,6 +919,18 @@ struct CaseFile {
     saved_paths: Vec<SavedPath>,
     #[serde(default)]
     selection_sets: Vec<SavedSelectionSet>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct ChartDocument {
+    id: Uuid,
+    title: String,
+    entities: Vec<Entity>,
+    links: Vec<Link>,
+}
+
+fn default_chart_title() -> String {
+    "Chart 1".into()
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -1797,6 +1815,9 @@ fn demo_case() -> CaseFile {
         description: "Fictional sample relationship investigation".into(),
         entities,
         links,
+        active_chart_id: Uuid::new_v4(),
+        active_chart_title: default_chart_title(),
+        chart_tabs: Vec::new(),
         snapshots: Vec::new(),
         automation_jobs: Vec::new(),
         automation_runs: Vec::new(),
@@ -1815,6 +1836,126 @@ impl App {
         self.new_link_label = "ASSOCIATED WITH".into();
         self.new_entity_type_text.clear();
         self.new_link_type_text.clear();
+    }
+
+    fn switch_chart(&mut self, chart_id: Uuid) {
+        if chart_id == self.case.active_chart_id {
+            return;
+        }
+        let Some(position) = self
+            .case
+            .chart_tabs
+            .iter()
+            .position(|chart| chart.id == chart_id)
+        else {
+            self.status = "CHART TAB NO LONGER EXISTS".into();
+            return;
+        };
+        let target = self.case.chart_tabs.remove(position);
+        self.case.chart_tabs.push(ChartDocument {
+            id: self.case.active_chart_id,
+            title: std::mem::replace(&mut self.case.active_chart_title, target.title),
+            entities: std::mem::take(&mut self.case.entities),
+            links: std::mem::take(&mut self.case.links),
+        });
+        self.case.active_chart_id = target.id;
+        self.case.entities = target.entities;
+        self.case.links = target.links;
+        self.reset_chart_creation_drafts();
+        self.selected = None;
+        self.selected_link = None;
+        self.chart_zoom = 1.0;
+        self.chart_pan = egui::Vec2::ZERO;
+        self.chart_focus = None;
+        self.chart_focus_link = None;
+        self.chart_fit_entities = None;
+        self.chart_fit_path = None;
+        self.chart_focus_group = None;
+        self.timeline_range = None;
+        self.sql_source_focus = None;
+        self.data_source_filter = None;
+        self.path_start = None;
+        self.path_end = None;
+        self.path_timeline_range = None;
+        self.connections_for_selected = false;
+        self.clear_path_result();
+        self.invalidate_network_groups();
+        self.status = format!("CHART OPENED · {}", self.case.active_chart_title);
+    }
+
+    fn create_chart(&mut self, copy_selection: bool) {
+        let selected_link = self
+            .selected_link
+            .and_then(|index| self.case.links.get(index))
+            .cloned();
+        let selected_entities: HashSet<Uuid> = if copy_selection {
+            let mut ids = self
+                .selected
+                .filter(|id| self.case.entities.iter().any(|entity| entity.id == *id))
+                .into_iter()
+                .collect::<HashSet<_>>();
+            if let Some(link) = &selected_link {
+                ids.insert(link.from);
+                ids.insert(link.to);
+            }
+            ids
+        } else {
+            HashSet::new()
+        };
+        if copy_selection && selected_entities.is_empty() {
+            self.status = "SELECT CHART ITEMS TO COPY".into();
+            return;
+        }
+        let (entities, links) = if copy_selection {
+            let entities = self
+                .case
+                .entities
+                .iter()
+                .filter(|entity| selected_entities.contains(&entity.id))
+                .cloned()
+                .collect::<Vec<_>>();
+            let links = selected_link.into_iter().collect::<Vec<_>>();
+            (entities, links)
+        } else {
+            (Vec::new(), Vec::new())
+        };
+        let old_title = self.case.active_chart_title.clone();
+        self.case.chart_tabs.push(ChartDocument {
+            id: self.case.active_chart_id,
+            title: old_title,
+            entities: std::mem::take(&mut self.case.entities),
+            links: std::mem::take(&mut self.case.links),
+        });
+        self.case.active_chart_id = Uuid::new_v4();
+        self.case.active_chart_title = format!("Chart {}", self.case.chart_tabs.len() + 1);
+        self.case.entities = entities;
+        self.case.links = links;
+        self.page = WorkspacePage::Chart;
+        self.show_timeline = false;
+        self.reset_chart_creation_drafts();
+        self.selected = None;
+        self.selected_link = None;
+        self.chart_zoom = 1.0;
+        self.chart_pan = egui::Vec2::ZERO;
+        self.chart_focus = None;
+        self.chart_focus_link = None;
+        self.chart_fit_entities = None;
+        self.chart_fit_path = None;
+        self.chart_focus_group = None;
+        self.timeline_range = None;
+        self.sql_source_focus = None;
+        self.data_source_filter = None;
+        self.path_start = None;
+        self.path_end = None;
+        self.path_timeline_range = None;
+        self.connections_for_selected = false;
+        self.clear_path_result();
+        self.invalidate_network_groups();
+        self.status = if copy_selection {
+            format!("COPIED SELECTION TO {}", self.case.active_chart_title)
+        } else {
+            format!("NEW CHART · {}", self.case.active_chart_title)
+        };
     }
 
     fn reset_case_transient_analysis(&mut self) {
@@ -8101,6 +8242,9 @@ impl App {
             description: String::new(),
             entities: Vec::new(),
             links: Vec::new(),
+            active_chart_id: Uuid::new_v4(),
+            active_chart_title: default_chart_title(),
+            chart_tabs: Vec::new(),
             snapshots: Vec::new(),
             automation_jobs: Vec::new(),
             automation_runs: Vec::new(),
@@ -11928,6 +12072,48 @@ impl eframe::App for App {
                     if self.selected.is_some() || self.selected_link.is_some() {if ui.button("Delete selected").clicked(){self.delete_selected();}}
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| { ui.label(egui::RichText::new(&self.status).small().color(muted)); });
                 }).response;
+                let mut requested_chart = None;
+                let mut create_chart_request = None;
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(egui::RichText::new("CHARTS").small().strong().color(muted));
+                    ui.selectable_value(
+                        &mut requested_chart,
+                        Some(self.case.active_chart_id),
+                        &self.case.active_chart_title,
+                    );
+                    for chart in &self.case.chart_tabs {
+                        if ui
+                            .selectable_label(false, &chart.title)
+                            .clicked()
+                        {
+                            requested_chart = Some(chart.id);
+                        }
+                    }
+                    if ui.button("＋ New chart").clicked() {
+                        create_chart_request = Some(false);
+                    }
+                    let has_selection = self.selected.is_some()
+                        || self
+                            .selected_link
+                            .is_some_and(|index| index < self.case.links.len());
+                    if ui
+                        .add_enabled(
+                            has_selection,
+                            egui::Button::new("Copy selection to new chart"),
+                        )
+                        .clicked()
+                    {
+                        create_chart_request = Some(true);
+                    }
+                });
+                if let Some(chart_id) = requested_chart
+                    && chart_id != self.case.active_chart_id
+                {
+                    self.switch_chart(chart_id);
+                }
+                if let Some(copy_selection) = create_chart_request {
+                    self.create_chart(copy_selection);
+                }
                 ui.separator();
                 let avail=ui.available_size();
                 ui.horizontal(|ui| {
