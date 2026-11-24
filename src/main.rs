@@ -3782,23 +3782,30 @@ impl App {
                     ));
                 }
                 let endpoints_swapped = !is_directed
-                    && (source_name.to_lowercase(), source_kind.to_lowercase())
-                        > (target_name.to_lowercase(), target_kind.to_lowercase());
-                let (source_name, source_kind, target_name, target_kind, natural_key) =
-                    canonical_connection(
-                        &source_name,
-                        &source_kind,
-                        &target_name,
-                        &target_kind,
-                        &relationship,
-                        is_directed,
-                    )?;
-                let (source_entity_id, target_entity_id) = if endpoints_swapped {
+                    && entity_identity_endpoint_key(&source_name, &source_kind, &source_entity_id)
+                        > entity_identity_endpoint_key(
+                            &target_name,
+                            &target_kind,
+                            &target_entity_id,
+                        );
+                let (mut source_name, mut source_kind, mut target_name, mut target_kind) =
+                    (source_name, source_kind, target_name, target_kind);
+                let (mut source_entity_id, mut target_entity_id) =
+                    (source_entity_id, target_entity_id);
+                if endpoints_swapped {
+                    std::mem::swap(&mut source_name, &mut target_name);
+                    std::mem::swap(&mut source_kind, &mut target_kind);
+                    std::mem::swap(&mut source_entity_id, &mut target_entity_id);
                     std::mem::swap(&mut source_attributes, &mut target_attributes);
-                    (target_entity_id, source_entity_id)
-                } else {
-                    (source_entity_id, target_entity_id)
-                };
+                }
+                let (_, _, _, _, natural_key) = canonical_connection(
+                    &source_name,
+                    &source_kind,
+                    &target_name,
+                    &target_kind,
+                    &relationship,
+                    is_directed,
+                )?;
                 let identity = if explicit_id.trim().is_empty() {
                     if source_entity_id.trim().is_empty() && target_entity_id.trim().is_empty() {
                         format!("natural-v2:{natural_key}")
@@ -10151,6 +10158,14 @@ fn connection_delta_matches_filter(
         })
 }
 
+fn entity_identity_endpoint_key(name: &str, kind: &str, external_id: &str) -> String {
+    if external_id.trim().is_empty() {
+        format!("name:{}:{}", name.to_lowercase(), kind.to_lowercase())
+    } else {
+        format!("id:{}", external_id.trim())
+    }
+}
+
 fn entity_identity_connection_key(
     source: &str,
     source_type: &str,
@@ -10161,15 +10176,8 @@ fn entity_identity_connection_key(
     relationship: &str,
     directed: bool,
 ) -> String {
-    let endpoint = |name: &str, kind: &str, external_id: &str| {
-        if external_id.trim().is_empty() {
-            format!("name:{}:{}", name.to_lowercase(), kind.to_lowercase())
-        } else {
-            format!("id:{}", external_id.trim())
-        }
-    };
-    let mut source_key = endpoint(source, source_type, source_entity_id);
-    let mut target_key = endpoint(target, target_type, target_entity_id);
+    let mut source_key = entity_identity_endpoint_key(source, source_type, source_entity_id);
+    let mut target_key = entity_identity_endpoint_key(target, target_type, target_entity_id);
     if !directed && source_key > target_key {
         std::mem::swap(&mut source_key, &mut target_key);
     }
