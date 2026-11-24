@@ -1806,6 +1806,37 @@ impl App {
         self.new_link_type_text.clear();
     }
 
+    fn reset_case_transient_analysis(&mut self) {
+        if let Some(cancel) = &self.import_inspection_cancel {
+            cancel.store(true, Ordering::Relaxed);
+        }
+        self.import_headers.clear();
+        self.import_preview.clear();
+        self.import_record_count = 0;
+        self.import_inspection_worker = None;
+        self.import_inspection_cancel = None;
+        self.import_inspection_progress = None;
+        self.import_column_mapping = ImportColumnMapping::default();
+        self.import_spec_name.clear();
+        self.selected_import_spec = None;
+        self.show_import_wizard = false;
+
+        self.sql_cleared_parameter_draft = None;
+        self.sql_validation_preview = None;
+        self.sql_skipped_endpoints.clear();
+        self.sql_validation_preview_regressions_only = false;
+        self.sql_schema_templates.clear();
+        self.sql_schema_objects.clear();
+        self.sql_schema_filter.clear();
+        self.sql_schema_template_index = 0;
+        self.sql_schema_template_source = None;
+        self.sql_schema_worker = None;
+        self.sql_schema_request = None;
+        self.sql_plan_worker = None;
+        self.sql_plan_result = None;
+        self.automation_repair_context = None;
+    }
+
     fn add_entity_with_type(&mut self, kind: &str) {
         let item = Entity {
             id: Uuid::new_v4(),
@@ -2208,6 +2239,7 @@ impl App {
                 normalize_snapshot_database_paths(&mut c, &requested_path);
                 self.case = c;
                 self.reset_chart_creation_drafts();
+                self.reset_case_transient_analysis();
                 self.network_groups = None;
                 self.case_path = requested_path.clone();
                 self.case_path_input = requested_path;
@@ -2225,9 +2257,6 @@ impl App {
                 self.selection_set_name.clear();
                 self.path_entity_filter.clear();
                 self.automation_run_parameter_text.clear();
-                self.selected_import_spec = None;
-                self.import_spec_name.clear();
-                self.show_import_wizard = false;
                 self.chart_zoom = 1.0;
                 self.chart_pan = egui::Vec2::ZERO;
                 self.chart_pan_origin = egui::Vec2::ZERO;
@@ -8035,6 +8064,7 @@ impl App {
             selection_sets: Vec::new(),
         };
         self.reset_chart_creation_drafts();
+        self.reset_case_transient_analysis();
         self.network_groups = None;
         self.chart_focus_group = None;
         self.sql_snapshot_source = None;
@@ -8047,9 +8077,6 @@ impl App {
         self.automation_run_parameter_text.clear();
         self.automation_chart_export_dir.clear();
         self.selection_set_name.clear();
-        self.selected_import_spec = None;
-        self.import_spec_name.clear();
-        self.show_import_wizard = false;
         self.chart_zoom = 1.0;
         self.chart_pan = egui::Vec2::ZERO;
         self.chart_pan_origin = egui::Vec2::ZERO;
