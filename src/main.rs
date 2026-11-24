@@ -12076,18 +12076,20 @@ impl eframe::App for App {
                 let mut create_chart_request = None;
                 ui.horizontal_wrapped(|ui| {
                     ui.label(egui::RichText::new("CHARTS").small().strong().color(muted));
-                    ui.selectable_value(
-                        &mut requested_chart,
-                        Some(self.case.active_chart_id),
-                        &self.case.active_chart_title,
-                    );
-                    for chart in &self.case.chart_tabs {
-                        if ui
-                            .selectable_label(false, &chart.title)
-                            .clicked()
-                        {
+                    ui.selectable_label(true, &self.case.active_chart_title)
+                        .context_menu(|ui| {
+                            ui.label("Rename active chart");
+                            ui.text_edit_singleline(&mut self.case.active_chart_title);
+                        });
+                    for chart in &mut self.case.chart_tabs {
+                        let response = ui.selectable_label(false, &chart.title);
+                        if response.clicked() {
                             requested_chart = Some(chart.id);
                         }
+                        response.context_menu(|ui| {
+                            ui.label("Rename chart");
+                            ui.text_edit_singleline(&mut chart.title);
+                        });
                     }
                     if ui.button("＋ New chart").clicked() {
                         create_chart_request = Some(false);
