@@ -1101,7 +1101,7 @@ struct App {
     new_entity_type_text: String,
     new_link_type_text: String,
     import_path: String,
-    import_interchange_into_new_chart: bool,
+    import_into_new_chart: bool,
     import_headers: Vec<String>,
     import_preview: Vec<Vec<String>>,
     import_record_count: usize,
@@ -1608,7 +1608,7 @@ impl Default for App {
             new_entity_type_text: String::new(),
             new_link_type_text: String::new(),
             import_path: data_dir.join("sample_relationships.csv").to_string_lossy().into_owned(),
-            import_interchange_into_new_chart: false,
+            import_into_new_chart: false,
             import_headers: Vec::new(),
             import_preview: Vec::new(),
             import_record_count: 0,
@@ -2190,7 +2190,7 @@ impl App {
             new_entity_type_text: String::new(),
             new_link_type_text: String::new(),
             import_path: String::new(),
-            import_interchange_into_new_chart: false,
+            import_into_new_chart: false,
             import_headers: Vec::new(),
             import_preview: Vec::new(),
             import_record_count: 0,
@@ -2621,16 +2621,11 @@ impl App {
                 return;
             }
         };
-        let previous_chart_id = self.case.active_chart_id;
-        let import_into_new_chart = std::mem::take(&mut self.import_interchange_into_new_chart);
-        if import_into_new_chart {
-            self.create_chart(false);
-        }
-        let created_chart_id =
-            (self.case.active_chart_id != previous_chart_id).then_some(self.case.active_chart_id);
-        let adopt_chart_title = self.case.entities.is_empty()
-            && self.case.links.is_empty()
-            && is_generated_chart_title(&self.case.active_chart_title);
+        let import_into_new_chart = self.import_into_new_chart;
+        let adopt_chart_title = import_into_new_chart
+            || (self.case.entities.is_empty()
+                && self.case.links.is_empty()
+                && is_generated_chart_title(&self.case.active_chart_title));
         let original_path = self.import_path.clone();
         let original_mapping = self.import_column_mapping.clone();
         self.import_path = temporary_path.to_string_lossy().into_owned();
@@ -2659,13 +2654,6 @@ impl App {
         } else {
             format!("{source_format} IMPORT FAILED · {import_status}")
         };
-        if self.status.contains("IMPORT FAILED")
-            && let Some(chart_id) = created_chart_id
-        {
-            let failure_status = std::mem::take(&mut self.status);
-            self.delete_chart(chart_id);
-            self.status = failure_status;
-        }
         if let Err(error) = fs::remove_file(&temporary_path) {
             self.status = format!("{} · TEMP FILE CLEANUP FAILED · {error}", self.status);
         }
@@ -2933,9 +2921,11 @@ impl App {
     fn import_delimited(&mut self) {
         let import_path = self.import_path.clone();
         let mapping = self.import_column_mapping.clone();
-        let adopt_imported_chart_title = self.case.entities.is_empty()
-            && self.case.links.is_empty()
-            && is_generated_chart_title(&self.case.active_chart_title);
+        let import_into_new_chart = std::mem::take(&mut self.import_into_new_chart);
+        let adopt_imported_chart_title = import_into_new_chart
+            || (self.case.entities.is_empty()
+                && self.case.links.is_empty()
+                && is_generated_chart_title(&self.case.active_chart_title));
         let result = (|| -> Result<(usize, usize, usize, Vec<Entity>, Vec<Link>, Option<String>), String> {
             let delimiter = detect_import_delimiter(Path::new(&import_path))?;
             let mut reader = csv::ReaderBuilder::new()
@@ -3193,9 +3183,17 @@ impl App {
                 .iter()
                 .map(|snapshot| snapshot.source_key.clone())
                 .collect();
-            let mut entities = self.case.entities.clone();
+            let mut entities = if import_into_new_chart {
+                Vec::new()
+            } else {
+                self.case.entities.clone()
+            };
             let mut entity_index = EntityIndex::new(&entities);
-            let mut links = self.case.links.clone();
+            let mut links = if import_into_new_chart {
+                Vec::new()
+            } else {
+                self.case.links.clone()
+            };
             let mut links_by_id: HashMap<(Option<String>, String), Vec<usize>> = HashMap::new();
             let mut links_by_natural_key: HashMap<(String, String), Vec<usize>> = HashMap::new();
             for (index, link) in links.iter().enumerate() {
@@ -3748,6 +3746,9 @@ impl App {
         })();
         self.status = match result {
             Ok((created, updated, skipped, entities, links, chart_title)) => {
+                if import_into_new_chart {
+                    self.create_chart(false);
+                }
                 self.case.entities = entities;
                 self.case.links = links;
                 if adopt_imported_chart_title && let Some(chart_title) = chart_title {
@@ -12296,10 +12297,17 @@ impl eframe::App for App {
                                 cancel.store(true, Ordering::Relaxed);
                             }
                         }
-                    } else if ui.button("Import CSV/TSV").clicked() {
-                        self.inspect_delimited_import();
                     }
                     ui.horizontal(|ui| {
+                        if ui
+                            .add_enabled(
+                                self.import_inspection_worker.is_none(),
+                                egui::Button::new("Import CSV/TSV"),
+                            )
+                            .clicked()
+                        {
+                            self.inspect_delimited_import();
+                        }
                         if ui.button("Import GraphML").clicked() {
                             self.import_graphml();
                         }
@@ -12307,11 +12315,11 @@ impl eframe::App for App {
                             self.import_kml();
                         }
                         ui.checkbox(
-                            &mut self.import_interchange_into_new_chart,
+                            &mut self.import_into_new_chart,
                             "Import into new chart",
                         )
                         .on_hover_text(
-                            "Create a separate chart for the next GraphML or KML import instead of merging it into the active chart.",
+                            "Create a separate chart for the next CSV/TSV, GraphML, or KML import instead of merging into the active chart.",
                         );
                     });
                     if ui.button("Export CSV/TSV").clicked(){self.export_delimited();}
@@ -17806,7 +17814,14 @@ impl eframe::App for App {
                             });
                         }
                         if ui
-                            .add_enabled(import_rules_valid, egui::Button::new("Import into chart"))
+                            .add_enabled(
+                                import_rules_valid,
+                                egui::Button::new(if self.import_into_new_chart {
+                                    "Import into new chart"
+                                } else {
+                                    "Import into chart"
+                                }),
+                            )
                             .on_disabled_hover_text(
                                 "Fix the endpoint mapping, row filters, or value transforms before importing.",
                             )
