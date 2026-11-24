@@ -57,6 +57,13 @@ cargo run --offline -- --validate-enabled-jobs harbor-light.case.json --job "Har
 cargo run --offline -- --run-enabled-jobs harbor-light.case.json --job "Harbor Light baseline" --json
 ```
 
+Export each selected job's latest capture as a chart-ready CSV with `--export-chart-csv-dir <absolute-directory>`. The directory must already exist. Each job gets a separate file named from a short sanitized job name and its stable job UUID; exports are atomically replaced after capture, and resuming a batch refreshes files from completed snapshots. For scheduled runs, set `ARCH_NOTEBOOK_CHART_EXPORT_DIR` to an existing absolute directory before installing or updating the Linux or macOS schedule. The installer records that directory in the scheduler configuration.
+
+```sh
+cargo run --offline -- --run-enabled-jobs harbor-light.case.json --export-chart-csv-dir "$HOME/Analyst Charts"
+ARCH_NOTEBOOK_CHART_EXPORT_DIR="$HOME/Analyst Charts" arch-notebook-install-automation harbor-light.case.json
+```
+
 Run one named job, including a disabled job, with:
 
 ```sh

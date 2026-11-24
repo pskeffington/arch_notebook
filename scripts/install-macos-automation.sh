@@ -159,6 +159,18 @@ if ! command -v python3 >/dev/null 2>&1; then
   exit 1
 fi
 case_file="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$case_file")"
+chart_export_dir="${ARCH_NOTEBOOK_CHART_EXPORT_DIR:-}"
+if [[ -n "$chart_export_dir" ]]; then
+  case "$chart_export_dir" in
+    /*) ;;
+    *) echo "ARCH_NOTEBOOK_CHART_EXPORT_DIR must be an absolute path." >&2; exit 2 ;;
+  esac
+  if [[ ! -d "$chart_export_dir" ]]; then
+    echo "ARCH_NOTEBOOK_CHART_EXPORT_DIR must name an existing directory." >&2
+    exit 2
+  fi
+  chart_export_dir="$(cd "$chart_export_dir" && pwd -P)"
+fi
 # One locked preflight checks that enabled jobs exist and their queries work.
 if ! "$binary" --check-enabled-job-queries "$case_file" --require-usable; then
   echo "One or more enabled SQL jobs failed preflight or returned no usable connections; fix the job, database, or query before installing the LaunchAgent." >&2
@@ -180,17 +192,17 @@ log_dir="$HOME/Library/Logs/ArchNotebook/$schedule_id"
 plist_path="$agent_dir/$label.plist"
 mkdir -p "$agent_dir" "$log_dir"
 
-candidate_plist="$(python3 - "$plist_path" "$runner" "$binary" "$case_file" "$log_dir" "$label" "$schedule" <<'PY'
+candidate_plist="$(python3 - "$plist_path" "$runner" "$binary" "$case_file" "$log_dir" "$label" "$schedule" "$chart_export_dir" <<'PY'
 import os
 import plistlib
 import sys
 import tempfile
 
-destination, runner, binary, case_file, log_dir, label, schedule = sys.argv[1:]
+destination, runner, binary, case_file, log_dir, label, schedule, chart_export_dir = sys.argv[1:]
 interval_seconds = {"15m": 900, "hourly": 3600, "daily": 86400, "weekly": 604800}[schedule]
 payload = {
     "Label": label,
-    "ProgramArguments": [runner, binary, case_file, log_dir],
+    "ProgramArguments": [runner, binary, case_file, log_dir] + ([chart_export_dir] if chart_export_dir else []),
     "RunAtLoad": True,
     "StartInterval": interval_seconds,
     "StandardOutPath": "/dev/null",

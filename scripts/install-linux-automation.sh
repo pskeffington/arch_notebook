@@ -219,6 +219,19 @@ if [[ -z "$binary" || ! -x "$binary" ]]; then
 fi
 binary="$(realpath "$binary")"
 
+chart_export_dir="${ARCH_NOTEBOOK_CHART_EXPORT_DIR:-}"
+if [[ -n "$chart_export_dir" ]]; then
+  case "$chart_export_dir" in
+    /*) ;;
+    *) echo "ARCH_NOTEBOOK_CHART_EXPORT_DIR must be an absolute path." >&2; exit 2 ;;
+  esac
+  if [[ ! -d "$chart_export_dir" ]]; then
+    echo "ARCH_NOTEBOOK_CHART_EXPORT_DIR must name an existing directory." >&2
+    exit 2
+  fi
+  chart_export_dir="$(realpath "$chart_export_dir")"
+fi
+
 if ! command -v systemctl >/dev/null 2>&1; then
   echo "systemctl is required to enable the user timer." >&2
   exit 1
@@ -238,12 +251,12 @@ esac
 unit_dir="$config_home/systemd/user"
 mkdir -p "$unit_dir"
 
-python3 - "$unit_dir" "$binary" "$case_file" "$schedule" "$schedule_name" <<'PY'
+python3 - "$unit_dir" "$binary" "$case_file" "$schedule" "$schedule_name" "$chart_export_dir" <<'PY'
 import os
 import sys
 import tempfile
 
-unit_dir, binary, case_file, schedule, schedule_name = sys.argv[1:]
+unit_dir, binary, case_file, schedule, schedule_name, chart_export_dir = sys.argv[1:]
 
 def quote_exec_arg(value: str) -> str:
     if any(ord(character) < 32 or ord(character) == 127 for character in value):
@@ -263,7 +276,8 @@ Environment=ARCH_NOTEBOOK_AUTOMATION_TRIGGER=scheduled
 ExecStart={command}
 """.format(command=" ".join(map(quote_exec_arg, [
     # Scheduler output goes to the journal; keep it to per-job summaries.
-    binary, "--run-enabled-jobs", case_file
+    binary, "--run-enabled-jobs", case_file,
+    *( ["--export-chart-csv-dir", chart_export_dir] if chart_export_dir else [] ),
 ])))
 
 timer = """[Unit]

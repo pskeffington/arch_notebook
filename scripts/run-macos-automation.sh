@@ -1,14 +1,15 @@
 #!/bin/bash
 set -u
 
-if [[ $# -ne 3 ]]; then
-  echo "Usage: $0 <arch-notebook-binary> <case-file> <log-directory>" >&2
+if [[ $# -lt 3 || $# -gt 4 ]]; then
+  echo "Usage: $0 <arch-notebook-binary> <case-file> <log-directory> [chart-export-directory]" >&2
   exit 2
 fi
 
 binary="$1"
 case_file="$2"
 log_dir="$3"
+chart_export_dir="${4:-}"
 stdout_log="$log_dir/arch-notebook-automation.log"
 stderr_log="$log_dir/arch-notebook-automation-error.log"
 umask 077
@@ -43,4 +44,7 @@ rotate_log "$stderr_log" || exit 1
 touch "$stdout_log" "$stderr_log" || exit 1
 chmod 600 "$stdout_log" "$stderr_log" || exit 1
 export ARCH_NOTEBOOK_AUTOMATION_TRIGGER=scheduled
+if [[ -n "$chart_export_dir" ]]; then
+  exec "$binary" --run-enabled-jobs "$case_file" --export-chart-csv-dir "$chart_export_dir" >>"$stdout_log" 2>>"$stderr_log"
+fi
 exec "$binary" --run-enabled-jobs "$case_file" >>"$stdout_log" 2>>"$stderr_log"

@@ -19914,6 +19914,7 @@ fn run_automation_cli(
     scoped_parameter_overrides: &[(String, String, String)],
     resume_batch_id: Option<Uuid>,
     export_chart_csv_path: Option<&str>,
+    export_chart_csv_dir: Option<&str>,
     json_output: bool,
 ) -> Result<bool, String> {
     let _case_lock = lock_automation_case(Path::new(case_path))?;
@@ -20013,21 +20014,33 @@ fn run_automation_cli(
     if jobs.is_empty() {
         return Err("case contains no enabled automation jobs".into());
     }
+    if export_chart_csv_path.is_some() && export_chart_csv_dir.is_some() {
+        return Err("choose either a chart CSV output path or an export directory".into());
+    }
+    let mut chart_csv_output_paths = HashMap::<Uuid, String>::new();
     if let Some(output_path) = export_chart_csv_path {
         if jobs.len() != 1 {
             return Err("chart CSV export requires exactly one selected automation job".into());
         }
-        if output_path.trim().is_empty() {
-            return Err("chart CSV export path cannot be empty".into());
+        validate_sql_chart_csv_destination(case_path, &case, output_path)?;
+        chart_csv_output_paths.insert(jobs[0].id, output_path.to_owned());
+    }
+    if let Some(output_dir) = export_chart_csv_dir {
+        let directory = Path::new(output_dir);
+        if !directory.is_absolute() {
+            return Err("chart CSV export directory must be an absolute path".into());
         }
-        if paths_refer_to_same_file(case_path, output_path) {
-            return Err("chart CSV export cannot replace its case file".into());
+        if !directory.is_dir() {
+            return Err(format!(
+                "chart CSV export directory does not exist or is not a directory: {output_dir}"
+            ));
         }
-        let lock_path = automation_lock_path(Path::new(case_path))?;
-        if paths_refer_to_same_file(&lock_path.to_string_lossy(), output_path) {
-            return Err("chart CSV export cannot replace its case automation lock".into());
+        for job in &jobs {
+            let output_path = sql_chart_csv_path_for_job(directory, job);
+            let output_path = output_path.to_string_lossy().into_owned();
+            validate_sql_chart_csv_destination(case_path, &case, &output_path)?;
+            chart_csv_output_paths.insert(job.id, output_path);
         }
-        ensure_case_export_path_is_not_sql_source(&case, case_path, output_path)?;
     }
     apply_sql_parameter_overrides(&mut jobs, parameter_overrides, scoped_parameter_overrides)?;
     let batch_configuration_fingerprint = automation_batch_configuration_fingerprint(&jobs)?;
@@ -20144,7 +20157,7 @@ fn run_automation_cli(
                 .cloned()
         });
         if let Some(checkpoint) = checkpoint {
-            if let Some(output_path) = export_chart_csv_path {
+            if let Some(output_path) = chart_csv_output_paths.get(&job.id) {
                 let snapshot = checkpoint
                     .snapshot_id
                     .and_then(|snapshot_id| {
@@ -20185,7 +20198,7 @@ fn run_automation_cli(
                 "duration_ms": checkpoint.duration_ms,
                 "sqlite_lock_retries": checkpoint.sqlite_lock_retries,
                 "snapshot_id": checkpoint.snapshot_id,
-                "chart_csv_output": export_chart_csv_path,
+                "chart_csv_output": chart_csv_output_paths.get(&job.id),
                 "batch_id": batch_id,
             }));
             if !checkpoint.success {
@@ -20202,7 +20215,7 @@ fn run_automation_cli(
                     },
                     checkpoint.message
                 );
-                if let Some(output_path) = export_chart_csv_path {
+                if let Some(output_path) = chart_csv_output_paths.get(&job.id) {
                     println!("CHART CSV EXPORTED · {output_path}");
                 }
             }
@@ -20263,7 +20276,7 @@ fn run_automation_cli(
                 .position(|snapshot| snapshot.id == id)
         });
         save_case_atomically(Path::new(case_path), &app.case)?;
-        if let Some(output_path) = export_chart_csv_path {
+        if let Some(output_path) = chart_csv_output_paths.get(&job.id) {
             let snapshot = snapshot_index
                 .and_then(|index| app.case.snapshots.get(index))
                 .ok_or_else(|| {
@@ -20289,7 +20302,7 @@ fn run_automation_cli(
                 outcome["trigger"] = serde_json::json!(trigger);
                 outcome["parameter_overrides"] = serde_json::json!(parameter_overrides);
                 outcome["batch_id"] = serde_json::json!(batch_id);
-                if let Some(output_path) = export_chart_csv_path {
+                if let Some(output_path) = chart_csv_output_paths.get(&job.id) {
                     outcome["chart_csv_output"] = serde_json::json!(output_path);
                 }
             }
@@ -20301,7 +20314,7 @@ fn run_automation_cli(
                 job.name,
                 message
             );
-            if let Some(output_path) = export_chart_csv_path {
+            if let Some(output_path) = chart_csv_output_paths.get(&job.id) {
                 println!("CHART CSV EXPORTED · {output_path}");
             }
         }
@@ -22454,6 +22467,50 @@ fn write_sql_snapshot_chart_csv_atomically(
         let _ = fs::remove_file(temporary_path);
     }
     result
+}
+
+fn sql_chart_csv_path_for_job(directory: &Path, job: &AutomationJob) -> PathBuf {
+    let slug: String = job
+        .name
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    let slug = slug
+        .split('-')
+        .filter(|part| !part.is_empty())
+        .take(8)
+        .collect::<Vec<_>>()
+        .join("-");
+    let name = if slug.is_empty() {
+        format!("job-{}.csv", job.id)
+    } else {
+        format!("{slug}-{}.csv", job.id)
+    };
+    directory.join(name)
+}
+
+fn validate_sql_chart_csv_destination(
+    case_path: &str,
+    case: &CaseFile,
+    output_path: &str,
+) -> Result<(), String> {
+    if output_path.trim().is_empty() {
+        return Err("chart CSV export path cannot be empty".into());
+    }
+    if paths_refer_to_same_file(case_path, output_path) {
+        return Err("chart CSV export cannot replace its case file".into());
+    }
+    let lock_path = automation_lock_path(Path::new(case_path))?;
+    if paths_refer_to_same_file(&lock_path.to_string_lossy(), output_path) {
+        return Err("chart CSV export cannot replace the case automation lock".into());
+    }
+    ensure_case_export_path_is_not_sql_source(case, case_path, output_path)
 }
 
 fn write_sql_snapshots_csv_atomically(
@@ -24920,6 +24977,7 @@ fn parse_batch_selection_args(
     Vec<(String, String)>,
     Vec<(String, String, String)>,
     Option<Uuid>,
+    Option<String>,
 ) {
     let json_output = args.iter().any(|arg| arg == "--json");
     let mut selectors = Vec::new();
@@ -24927,6 +24985,7 @@ fn parse_batch_selection_args(
     let mut scoped_parameter_options = Vec::new();
     let mut seen_json = false;
     let mut resume_batch_id = None;
+    let mut export_chart_csv_dir = None;
     let mut index = 2;
     while index < args.len() {
         match args[index].as_str() {
@@ -24983,6 +25042,19 @@ fn parse_batch_selection_args(
                     )
                 }));
             }
+            "--export-chart-csv-dir" if allow_resume_batch && export_chart_csv_dir.is_none() => {
+                index += 1;
+                let Some(value) = args
+                    .get(index)
+                    .filter(|value| !value.trim().is_empty() && !value.starts_with("--"))
+                else {
+                    report_cli_usage_error(
+                        "--export-chart-csv-dir requires an absolute directory path",
+                        json_output,
+                    );
+                };
+                export_chart_csv_dir = Some(value.clone());
+            }
             _ => report_cli_usage_error(usage, json_output),
         }
         index += 1;
@@ -25005,6 +25077,7 @@ fn parse_batch_selection_args(
         parameters,
         scoped_parameters,
         resume_batch_id,
+        export_chart_csv_dir,
     )
 }
 
@@ -25037,7 +25110,7 @@ fn main() -> eframe::Result<()> {
         .is_some_and(|arg| arg == "--help" || arg == "-h")
     {
         println!(
-            "Arch Notebook\n\nUsage:\n  arch-notebook\n  arch-notebook --version [--json]\n  arch-notebook --inspect-sqlite <database.sqlite> [--json]\n  arch-notebook --import-graphml <case.json> <input.graphml> [--json]\n  arch-notebook --import-kml <case.json> <input.kml> [--json]\n  arch-notebook --export-graphml <case.json> <output.graphml> [--json]\n  arch-notebook --export-kml <case.json> <output.kml> [--json]\n  arch-notebook --export-sql-snapshot <case.json> <snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --export-sql-series <case.json> <snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --export-sql-comparison <case.json> <baseline-snapshot-id> <current-snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --export-job <case.json> <job-name-or-id> <output.json> [--json]\n  arch-notebook --export-path <case.json> <path-name-or-id> <output.json> [--json]\n  arch-notebook --import-path <case.json> <input.json> [--name <path-name>] [--json]\n  arch-notebook --import-job <case.json> <input.json> [--name <job-name>] [--database <path>] [--series <label>] [--param name=value ...] [--json]\n  arch-notebook --export-import-design <case.json> <design-name-or-id> <output.json> [--json]\n  arch-notebook --import-import-design <case.json> <input.json> [--name <design-name>] [--json]\n  arch-notebook --list-jobs <case.json> [--enabled-only] [--schema-adaptation-needed] [--json]\n  arch-notebook --list-batches <case.json> [--json]\n  arch-notebook --list-runs <case.json> [--json] [--job <name-or-id>] [--trigger <desktop|scheduled|cli|replay|legacy>] [--schema-adaptation-needed] [--offset <count>] [--limit <count>]\n  arch-notebook --export-runs <case.json> <output.csv|tsv> [--job <name-or-id>] [--trigger <desktop|scheduled|cli|replay|legacy>] [--schema-adaptation-needed] [--offset <count>] [--limit <count>] [--json]\n  arch-notebook --explain-job <case.json> <job-name-or-id> [--param name=value ...] [--json]\n  arch-notebook --validate-job <case.json> <job-name-or-id> [--query-only] [--param name=value ...] [--json]\n  arch-notebook --validate-enabled-jobs <case.json> [--json] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --check-enabled-job-queries <case.json> [--json] [--require-usable] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --validate-run <case.json> <run-id> [--json]\n  arch-notebook --run-enabled-jobs <case.json> [--json] [--resume-batch <batch-id>] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --run-job <case.json> <job-name-or-id> [--param name=value ...] [--resume-batch <batch-id>] [--export-chart-csv <output.csv|tsv>] [--json]\n  arch-notebook --rerun-run <case.json> <run-id> [--json]\n\nJob and import design packages contain portable configuration, not case data or run history. Batch runs save snapshots and run history to the case file. JSON output is available for scheduler integration. Additional commands:"
+            "Arch Notebook\n\nUsage:\n  arch-notebook\n  arch-notebook --version [--json]\n  arch-notebook --inspect-sqlite <database.sqlite> [--json]\n  arch-notebook --import-graphml <case.json> <input.graphml> [--json]\n  arch-notebook --import-kml <case.json> <input.kml> [--json]\n  arch-notebook --export-graphml <case.json> <output.graphml> [--json]\n  arch-notebook --export-kml <case.json> <output.kml> [--json]\n  arch-notebook --export-sql-snapshot <case.json> <snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --export-sql-series <case.json> <snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --export-sql-comparison <case.json> <baseline-snapshot-id> <current-snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --export-job <case.json> <job-name-or-id> <output.json> [--json]\n  arch-notebook --export-path <case.json> <path-name-or-id> <output.json> [--json]\n  arch-notebook --import-path <case.json> <input.json> [--name <path-name>] [--json]\n  arch-notebook --import-job <case.json> <input.json> [--name <job-name>] [--database <path>] [--series <label>] [--param name=value ...] [--json]\n  arch-notebook --export-import-design <case.json> <design-name-or-id> <output.json> [--json]\n  arch-notebook --import-import-design <case.json> <input.json> [--name <design-name>] [--json]\n  arch-notebook --list-jobs <case.json> [--enabled-only] [--schema-adaptation-needed] [--json]\n  arch-notebook --list-batches <case.json> [--json]\n  arch-notebook --list-runs <case.json> [--json] [--job <name-or-id>] [--trigger <desktop|scheduled|cli|replay|legacy>] [--schema-adaptation-needed] [--offset <count>] [--limit <count>]\n  arch-notebook --export-runs <case.json> <output.csv|tsv> [--job <name-or-id>] [--trigger <desktop|scheduled|cli|replay|legacy>] [--schema-adaptation-needed] [--offset <count>] [--limit <count>] [--json]\n  arch-notebook --explain-job <case.json> <job-name-or-id> [--param name=value ...] [--json]\n  arch-notebook --validate-job <case.json> <job-name-or-id> [--query-only] [--param name=value ...] [--json]\n  arch-notebook --validate-enabled-jobs <case.json> [--json] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --check-enabled-job-queries <case.json> [--json] [--require-usable] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --validate-run <case.json> <run-id> [--json]\n  arch-notebook --run-enabled-jobs <case.json> [--json] [--resume-batch <batch-id>] [--export-chart-csv-dir <absolute-directory>] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --run-job <case.json> <job-name-or-id> [--param name=value ...] [--resume-batch <batch-id>] [--export-chart-csv <output.csv|tsv>] [--json]\n  arch-notebook --rerun-run <case.json> <run-id> [--json]\n\nJob and import design packages contain portable configuration, not case data or run history. Batch runs save snapshots and run history to the case file. JSON output is available for scheduler integration. Additional commands:"
         );
         println!(
             "  arch-notebook --export-sql-chart-csv <case.json> <snapshot-id> <output.csv|tsv> [--json]"
@@ -25833,7 +25906,7 @@ fn main() -> eframe::Result<()> {
         let Some(case_path) = args.get(1) else {
             report_cli_usage_error(usage, args.iter().any(|arg| arg == "--json"));
         };
-        let (json_output, selected_jobs, parameter_overrides, scoped_parameter_overrides, _) =
+        let (json_output, selected_jobs, parameter_overrides, scoped_parameter_overrides, _, _) =
             parse_batch_selection_args(&args, usage, false);
         match validate_enabled_automation_jobs_cli(
             case_path,
@@ -25873,7 +25946,7 @@ fn main() -> eframe::Result<()> {
             .filter(|arg| arg.as_str() != "--require-usable")
             .cloned()
             .collect::<Vec<_>>();
-        let (json_output, selected_jobs, parameter_overrides, scoped_parameter_overrides, _) =
+        let (json_output, selected_jobs, parameter_overrides, scoped_parameter_overrides, _, _) =
             parse_batch_selection_args(&filtered_args, usage, false);
         match validate_enabled_automation_jobs_cli(
             case_path,
@@ -25894,7 +25967,7 @@ fn main() -> eframe::Result<()> {
         return Ok(());
     }
     if args.first().is_some_and(|arg| arg == "--run-enabled-jobs") {
-        let usage = "usage: arch-notebook --run-enabled-jobs <case.json> [--json] [--resume-batch <batch-id>] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]";
+        let usage = "usage: arch-notebook --run-enabled-jobs <case.json> [--json] [--resume-batch <batch-id>] [--export-chart-csv-dir <absolute-directory>] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]";
         let Some(case_path) = args.get(1) else {
             report_cli_usage_error(usage, args.iter().any(|arg| arg == "--json"));
         };
@@ -25904,6 +25977,7 @@ fn main() -> eframe::Result<()> {
             parameter_overrides,
             scoped_parameter_overrides,
             resume_batch_id,
+            export_chart_csv_dir,
         ) = parse_batch_selection_args(&args, usage, true);
         match run_automation_cli(
             case_path,
@@ -25913,6 +25987,7 @@ fn main() -> eframe::Result<()> {
             &scoped_parameter_overrides,
             resume_batch_id,
             None,
+            export_chart_csv_dir.as_deref(),
             json_output,
         ) {
             Err(error) => report_cli_error("automation failed", error, json_output),
@@ -25987,6 +26062,7 @@ fn main() -> eframe::Result<()> {
             &[],
             resume_batch_id,
             export_chart_csv_path.as_deref(),
+            None,
             json_output,
         ) {
             Err(error) => report_cli_error("automation failed", error, json_output),
