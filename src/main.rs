@@ -11156,6 +11156,7 @@ fn snapshot_result_quality_label(quality: &str) -> &'static str {
 }
 
 fn automation_outcome_json(
+    case: &CaseFile,
     job: &AutomationJob,
     success: bool,
     message: &str,
@@ -11164,6 +11165,9 @@ fn automation_outcome_json(
     snapshot: Option<&ConnectionSnapshot>,
     previous: Option<&ConnectionSnapshot>,
 ) -> serde_json::Value {
+    let chart_id = job
+        .chart_id
+        .or_else(|| snapshot.and_then(|snapshot| snapshot.chart_id));
     let delta = snapshot.map(|snapshot| snapshot_delta_json(snapshot, previous));
     let regression_count = delta
         .as_ref()
@@ -11264,7 +11268,8 @@ fn automation_outcome_json(
         "status": if success { "PASS" } else { "FAIL" },
         "job": job.name,
         "job_id": job.id,
-        "chart_id": job.chart_id.or_else(|| snapshot.and_then(|snapshot| snapshot.chart_id)),
+        "chart_id": chart_id,
+        "chart_title": chart_id.and_then(|chart_id| chart_title_for_id(case, chart_id)),
         "run_id": run_id,
         "sqlite_lock_retries": sqlite_lock_retries,
         "duration_ms": serde_json::Value::Null,
@@ -21341,6 +21346,7 @@ fn run_automation_cli(
             .and_then(|index| app.case.snapshots.get(index));
         if json_output {
             outcomes.push(automation_outcome_json(
+                &app.case,
                 &job,
                 success,
                 &message,
@@ -21540,6 +21546,7 @@ fn validate_saved_automation_configuration_cli(
     let duration_ms = started.elapsed().as_millis() as u64;
     if json_output {
         let mut outcome = automation_outcome_json(
+            &app.case,
             &job,
             success,
             &message,
@@ -21631,6 +21638,7 @@ fn rerun_saved_automation_configuration_cli(
     let overall_success = success && chart_csv_export_error.is_none();
     if json_output {
         let mut outcome = automation_outcome_json(
+            &app.case,
             &job,
             success,
             &message,
@@ -24264,7 +24272,8 @@ fn validate_automation_job_cli(
     if let Some(error) = automation_job_configuration_error(&job) {
         let message = format!("SQL JOB CONFIGURATION INVALID · {error}");
         if json_output {
-            let outcome = automation_outcome_json(&job, false, &message, 0, None, None, None);
+            let outcome =
+                automation_outcome_json(&case, &job, false, &message, 0, None, None, None);
             println!(
                 "{}",
                 serde_json::to_string_pretty(&serde_json::json!({
@@ -24351,6 +24360,7 @@ fn validate_automation_job_cli(
         .and_then(|index| app.case.snapshots.get(index));
     if json_output {
         let outcome = automation_outcome_json(
+            &app.case,
             &job,
             success,
             &message,
@@ -24541,7 +24551,7 @@ fn validate_enabled_automation_jobs_cli(
             failures += 1;
             if json_output {
                 outcomes.push(automation_outcome_json(
-                    &job, false, &message, 0, None, None, None,
+                    &app.case, &job, false, &message, 0, None, None, None,
                 ));
             } else {
                 println!("FAIL · {} · {message}", job.name);
@@ -24566,7 +24576,7 @@ fn validate_enabled_automation_jobs_cli(
             failures += 1;
             if json_output {
                 outcomes.push(automation_outcome_json(
-                    &job, false, &message, 0, None, None, None,
+                    &app.case, &job, false, &message, 0, None, None, None,
                 ));
             } else {
                 println!("FAIL · {} · {}", job.name, message);
@@ -24630,6 +24640,7 @@ fn validate_enabled_automation_jobs_cli(
         }
         if json_output {
             outcomes.push(automation_outcome_json(
+                &app.case,
                 &job,
                 success,
                 &message,
@@ -25782,6 +25793,7 @@ fn list_automation_runs_cli(
                 maximum_skipped_rows: run.maximum_skipped_rows,
             };
             let mut outcome = automation_outcome_json(
+                &case,
                 &job,
                 run.success,
                 &run.message,
@@ -25797,12 +25809,6 @@ fn list_automation_runs_cli(
             outcome["duration_ms"] = serde_json::json!(run.duration_ms);
             outcome["sqlite_lock_retries"] = serde_json::json!(run.sqlite_lock_retries);
             outcome["enabled"] = serde_json::json!(run.enabled);
-            let destination_chart_id = run
-                .chart_id
-                .or_else(|| snapshot.and_then(|snapshot| snapshot.chart_id));
-            outcome["chart_title"] = serde_json::json!(
-                destination_chart_id.and_then(|chart_id| chart_title_for_id(&case, chart_id))
-            );
             outcome["configuration_recorded"] = serde_json::json!(run.configuration_recorded);
             outcome["trigger"] = serde_json::json!(run.trigger);
             outcome["parameter_overrides"] = serde_json::json!(run.parameter_overrides);
