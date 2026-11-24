@@ -1005,6 +1005,7 @@ struct App {
     connections_for_selected: bool,
     path_start: Option<Uuid>,
     path_end: Option<Uuid>,
+    path_entity_filter: String,
     saved_path_name: String,
     selection_set_name: String,
     saved_path_package_path: String,
@@ -1509,6 +1510,7 @@ impl Default for App {
             connections_for_selected: false,
             path_start: None,
             path_end: None,
+            path_entity_filter: String::new(),
             saved_path_name: String::new(),
             selection_set_name: String::new(),
             saved_path_package_path: data_dir.join("investigation-path.json").to_string_lossy().into_owned(),
@@ -1885,6 +1887,7 @@ impl App {
             connections_for_selected: false,
             path_start: None,
             path_end: None,
+            path_entity_filter: String::new(),
             saved_path_name: String::new(),
             selection_set_name: String::new(),
             saved_path_package_path: String::new(),
@@ -2213,6 +2216,7 @@ impl App {
                 self.automation_chart_export_dir.clear();
                 self.automation_job_name.clear();
                 self.selection_set_name.clear();
+                self.path_entity_filter.clear();
                 self.automation_run_parameter_text.clear();
                 self.selected_import_spec = None;
                 self.import_spec_name.clear();
@@ -8005,6 +8009,7 @@ impl App {
         self.selected_link = None;
         self.path_start = None;
         self.path_end = None;
+        self.path_entity_filter.clear();
         self.clear_path_result();
         self.duplicate_candidates.clear();
         self.merge_candidate = None;
@@ -15259,6 +15264,32 @@ impl eframe::App for App {
                         }
                         ui.add_space(16.0);
                         ui.label(egui::RichText::new("SHORTEST PATH").size(9.0).strong().color(cyan));
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.path_entity_filter)
+                                .hint_text("Find path endpoints by name, ID, type, alias, or attribute")
+                                .desired_width(220.0),
+                        );
+                        let path_candidates: Vec<(Uuid, String)> = self
+                            .case
+                            .entities
+                            .iter()
+                            .filter(|entity| {
+                                entity_matches_search(entity, &self.path_entity_filter)
+                            })
+                            .map(|entity| {
+                                (
+                                    entity.id,
+                                    format!("{} · {}", entity.name, entity.kind),
+                                )
+                            })
+                            .collect();
+                        if path_candidates.is_empty() {
+                            ui.label(
+                                egui::RichText::new("No entities match the endpoint search.")
+                                    .small()
+                                    .color(muted),
+                            );
+                        }
                         let selected_entity_label = |selected: Option<Uuid>, placeholder: &str| {
                             selected
                                 .and_then(|id| self.case.entities.iter().find(|entity| entity.id == id))
@@ -15269,12 +15300,12 @@ impl eframe::App for App {
                         egui::ComboBox::from_id_salt("path_start")
                             .selected_text(selected_entity_label(self.path_start, "Start entity"))
                             .show_ui(ui, |ui| {
-                                for entity in &self.case.entities {
+                                for (entity_id, entity_label) in &path_candidates {
                                     path_endpoints_changed |= ui
                                         .selectable_value(
                                             &mut self.path_start,
-                                            Some(entity.id),
-                                            format!("{} · {}", entity.name, entity.kind),
+                                            Some(*entity_id),
+                                            entity_label,
                                         )
                                         .changed();
                                 }
@@ -15282,12 +15313,12 @@ impl eframe::App for App {
                         egui::ComboBox::from_id_salt("path_end")
                             .selected_text(selected_entity_label(self.path_end, "End entity"))
                             .show_ui(ui, |ui| {
-                                for entity in &self.case.entities {
+                                for (entity_id, entity_label) in &path_candidates {
                                     path_endpoints_changed |= ui
                                         .selectable_value(
                                             &mut self.path_end,
-                                            Some(entity.id),
-                                            format!("{} · {}", entity.name, entity.kind),
+                                            Some(*entity_id),
+                                            entity_label,
                                         )
                                         .changed();
                                 }
