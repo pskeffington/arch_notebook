@@ -802,7 +802,9 @@ struct SqlValidationPreview {
 struct SkippedSqlEndpoint {
     connection_id: String,
     source: String,
+    source_entity_id: String,
     target: String,
+    target_entity_id: String,
 }
 
 #[derive(Clone)]
@@ -3678,7 +3680,9 @@ impl App {
                         skipped_endpoints.push(SkippedSqlEndpoint {
                             connection_id,
                             source: source_name,
+                            source_entity_id,
                             target: target_name,
+                            target_entity_id,
                         });
                     }
                     continue;
@@ -5366,7 +5370,9 @@ impl App {
                     .show(ui, |ui| {
                         ui.strong("Connection ID");
                         ui.strong("Source");
+                        ui.strong("Source ID");
                         ui.strong("Target");
+                        ui.strong("Target ID");
                         ui.end_row();
                         for row in &preview.skipped_endpoints {
                             ui.label(if row.connection_id.is_empty() {
@@ -5379,11 +5385,13 @@ impl App {
                             } else {
                                 &row.source
                             });
+                            ui.label(&row.source_entity_id);
                             ui.label(if row.target.is_empty() {
                                 "(blank or NULL)"
                             } else {
                                 &row.target
                             });
+                            ui.label(&row.target_entity_id);
                             ui.end_row();
                         }
                     });
