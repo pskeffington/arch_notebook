@@ -2874,10 +2874,7 @@ impl App {
             let mut entity_index = EntityIndex::new(&entities);
             let mut links = self.case.links.clone();
             let mut links_by_id: HashMap<(Option<String>, String), Vec<usize>> = HashMap::new();
-            let mut links_by_natural_key: HashMap<
-                (String, String, String, String, bool),
-                Vec<usize>,
-            > = HashMap::new();
+            let mut links_by_natural_key: HashMap<(String, String), Vec<usize>> = HashMap::new();
             for (index, link) in links.iter().enumerate() {
                 if !link.connection_id.is_empty() {
                     links_by_id
@@ -2885,28 +2882,16 @@ impl App {
                         .or_default()
                         .push(index);
                 } else if let Some(ingest_source) = &link.ingest_source {
-                    let source_name = entity_index
-                        .by_id
-                        .get(&link.from)
-                        .and_then(|position| entities.get(*position))
-                        .map(|entity| entity.name.as_str());
-                    let target_name = entity_index
-                        .by_id
-                        .get(&link.to)
-                        .and_then(|position| entities.get(*position))
-                        .map(|entity| entity.name.as_str());
-                    if let Some((source_name, target_name)) = source_name.zip(target_name) {
-                        links_by_natural_key
-                            .entry(indexed_link_natural_key(
-                                ingest_source,
-                                source_name,
-                                target_name,
-                                &link.label,
-                                link.directed,
-                            ))
-                            .or_default()
-                            .push(index);
-                    }
+                    links_by_natural_key
+                        .entry(indexed_link_natural_key(
+                            ingest_source,
+                            link.from,
+                            link.to,
+                            &link.label,
+                            link.directed,
+                        ))
+                        .or_default()
+                        .push(index);
                 }
             }
             for row in reader.records() {
@@ -3258,15 +3243,7 @@ impl App {
                     .and_then(|i| row.get(i))
                     .filter(|value| !value.is_empty())
                     .unwrap_or("ASSOCIATED WITH");
-                let natural_key = canonical_connection(
-                    source_name,
-                    source_type_value,
-                    target_name,
-                    target_type_value,
-                    relationship,
-                    directed,
-                )?
-                .4;
+                let natural_key = connection_refresh_key("", a, b, relationship, directed);
                 if external_id.is_empty()
                     && ingest_source.is_some()
                     && !imported_natural_keys.insert((ingest_source.clone(), natural_key.clone()))
@@ -3302,40 +3279,14 @@ impl App {
                     links_by_natural_key
                         .get(&indexed_link_natural_key(
                             source_key,
-                            source_name,
-                            target_name,
+                            a,
+                            b,
                             relationship,
                             directed,
                         ))
                         .into_iter()
                         .flatten()
                         .copied()
-                        .filter(|index| {
-                            let link = &links[*index];
-                            let Some(source_entity) = entity_index
-                                .by_id
-                                .get(&link.from)
-                                .and_then(|position| entities.get(*position))
-                            else {
-                                return false;
-                            };
-                            let Some(target_entity) = entity_index
-                                .by_id
-                                .get(&link.to)
-                                .and_then(|position| entities.get(*position))
-                            else {
-                                return false;
-                            };
-                            canonical_connection(
-                                &source_entity.name,
-                                &source_entity.kind,
-                                &target_entity.name,
-                                &target_entity.kind,
-                                &link.label,
-                                link.directed,
-                            )
-                            .is_ok_and(|(_, _, _, _, key)| key == natural_key)
-                        })
                         .collect()
                 } else {
                     Vec::new()
@@ -3404,8 +3355,6 @@ impl App {
                             &mut links_by_natural_key,
                             *index,
                             &links[*index],
-                            &entities,
-                            &entity_index,
                         );
                         updated += 1;
                     }
@@ -3417,8 +3366,6 @@ impl App {
                             &mut links_by_natural_key,
                             index,
                             &links[index],
-                            &entities,
-                            &entity_index,
                         );
                         created += 1;
                     }
@@ -8624,33 +8571,22 @@ fn record_imported_merged_records(
 
 fn indexed_link_natural_key(
     ingest_source: &str,
-    source_name: &str,
-    target_name: &str,
+    from: Uuid,
+    to: Uuid,
     relationship: &str,
     directed: bool,
-) -> (String, String, String, String, bool) {
-    let (source_name, target_name) =
-        if !directed && target_name.to_lowercase() < source_name.to_lowercase() {
-            (target_name, source_name)
-        } else {
-            (source_name, target_name)
-        };
+) -> (String, String) {
     (
         ingest_source.to_owned(),
-        source_name.to_lowercase(),
-        target_name.to_lowercase(),
-        relationship.trim().to_lowercase(),
-        directed,
+        connection_refresh_key("", from, to, relationship, directed),
     )
 }
 
 fn index_imported_link(
     links_by_id: &mut HashMap<(Option<String>, String), Vec<usize>>,
-    links_by_natural_key: &mut HashMap<(String, String, String, String, bool), Vec<usize>>,
+    links_by_natural_key: &mut HashMap<(String, String), Vec<usize>>,
     index: usize,
     link: &Link,
-    entities: &[Entity],
-    entity_index: &EntityIndex,
 ) {
     if !link.connection_id.is_empty() {
         let indices = links_by_id
@@ -8660,29 +8596,17 @@ fn index_imported_link(
             indices.push(index);
         }
     } else if let Some(ingest_source) = &link.ingest_source {
-        let source_name = entity_index
-            .by_id
-            .get(&link.from)
-            .and_then(|position| entities.get(*position))
-            .map(|entity| entity.name.as_str());
-        let target_name = entity_index
-            .by_id
-            .get(&link.to)
-            .and_then(|position| entities.get(*position))
-            .map(|entity| entity.name.as_str());
-        if let Some((source_name, target_name)) = source_name.zip(target_name) {
-            let indices = links_by_natural_key
-                .entry(indexed_link_natural_key(
-                    ingest_source,
-                    source_name,
-                    target_name,
-                    &link.label,
-                    link.directed,
-                ))
-                .or_default();
-            if !indices.contains(&index) {
-                indices.push(index);
-            }
+        let indices = links_by_natural_key
+            .entry(indexed_link_natural_key(
+                ingest_source,
+                link.from,
+                link.to,
+                &link.label,
+                link.directed,
+            ))
+            .or_default();
+        if !indices.contains(&index) {
+            indices.push(index);
         }
     }
 }
@@ -9533,8 +9457,12 @@ fn link_refresh_key(link: &Link) -> String {
 }
 
 fn same_sql_connection(existing: &Link, imported: &Link) -> bool {
-    existing.from == imported.from
-        && existing.to == imported.to
+    let same_endpoints = (existing.from == imported.from && existing.to == imported.to)
+        || (!existing.directed
+            && !imported.directed
+            && existing.from == imported.to
+            && existing.to == imported.from);
+    same_endpoints
         && existing.connection_id == imported.connection_id
         && existing.label == imported.label
         && existing.date == imported.date
