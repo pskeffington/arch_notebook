@@ -65,11 +65,11 @@ The saved-series review table can filter regressions, endpoint identity changes,
 
 ## Compare and export
 
-In **SQL Review**, comparisons default to the immediately preceding capture in the selected series. Use **Compare with** to select any earlier capture in that same series for longer-range analysis; the selected baseline changes the on-screen delta table and CSV/TSV export together.
+In **SQL Review**, comparisons default to the immediately preceding capture in the selected database, series, and destination chart. Use **Compare with** to select any earlier capture in that same chart-specific series for longer-range analysis; the selected baseline changes the on-screen delta table and CSV/TSV export together.
 
 ### CLI snapshot export
 
-Export one immutable SQL capture without opening the desktop app. The output contains the captured connection fields plus snapshot provenance, query, typed parameter values, SQLite schema version, and skipped-row count on each record. An empty capture still exports its header row. A `.tsv` or `.tab` output path selects tab-separated output; other paths use CSV. Export is atomic and refuses to overwrite the case file or any saved SQLite source.
+Export one immutable SQL capture without opening the desktop app. The output contains the captured connection fields plus snapshot and destination-chart IDs, query, typed parameter values, SQLite schema version, and skipped-row count on each record. An empty capture still exports its header row. A `.tsv` or `.tab` output path selects tab-separated output; other paths use CSV. Export is atomic and refuses to overwrite the case file or any saved SQLite source.
 
 ```sh
 cargo run --offline -- --export-sql-snapshot harbor-light.case.json <snapshot-id> capture.csv --json

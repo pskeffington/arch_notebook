@@ -24,7 +24,7 @@ use std::{
 };
 use uuid::Uuid;
 
-const CURRENT_CASE_FORMAT_VERSION: u32 = 14;
+const CURRENT_CASE_FORMAT_VERSION: u32 = 15;
 const SQL_QUERY_TIMEOUT_MINUTES: u64 = 15;
 const SQL_QUERY_TIMEOUT: Duration = Duration::from_secs(SQL_QUERY_TIMEOUT_MINUTES * 60);
 const SQLITE_LOCK_RETRY_ATTEMPTS: usize = 3;
@@ -4060,11 +4060,14 @@ impl App {
             let mut entities = self.case.entities.clone();
             let mut entity_index = EntityIndex::new(&entities);
             let mut links = self.case.links.clone();
-            let sql_owned_attribute_names: HashSet<String> = self
+            let mut sql_owned_attribute_names: HashSet<String> = self
                 .case
                 .snapshots
                 .iter()
-                .filter(|snapshot| snapshot.source_key == source_key)
+                .filter(|snapshot| {
+                    snapshot.source_key == source_key
+                        && snapshot.chart_id == Some(self.case.active_chart_id)
+                })
                 .flat_map(|snapshot| snapshot.connections.iter())
                 .flat_map(|fact| {
                     fact.source_attributes
@@ -4073,6 +4076,15 @@ impl App {
                         .map(|(name, _)| name.to_ascii_lowercase())
                 })
                 .collect();
+            for entity in &self.case.entities {
+                sql_owned_attribute_names.extend(
+                    entity
+                        .sql_attribute_values
+                        .iter()
+                        .filter(|(owner, _, _)| owner == &source_key)
+                        .map(|(_, name, _)| name.to_ascii_lowercase()),
+                );
+            }
             let previous_source_entities: HashSet<Uuid> = links
                 .iter()
                 .filter(|link| link.ingest_source.as_deref() == Some(source_key.as_str()))
@@ -6761,10 +6773,6 @@ impl App {
             .then_some(self.case.snapshots.len() - 1);
         let mut success = false;
         if ingestion_succeeded {
-            let source_key = snapshot_index
-                .and_then(|index| self.case.snapshots.get(index))
-                .map(|snapshot| snapshot.source_key.clone())
-                .unwrap_or_default();
             let count = snapshot_index
                 .and_then(|index| self.case.snapshots.get(index))
                 .map(|snapshot| snapshot.connections.len())
@@ -6779,12 +6787,18 @@ impl App {
                     count_connections_below_confidence(snapshot, job.minimum_confidence)
                 })
                 .unwrap_or_default();
-            let regression_count = automation_regression_count(&self.case, &source_key);
-            let added_connection_count = automation_added_connection_count(&self.case, &source_key);
-            let property_change_count =
-                automation_connection_property_change_count(&self.case, &source_key);
-            let entity_property_change_count =
-                automation_entity_property_change_count(&self.case, &source_key);
+            let regression_count = snapshot_index
+                .map(|index| automation_regression_count(&self.case, index))
+                .unwrap_or_default();
+            let added_connection_count = snapshot_index
+                .map(|index| automation_added_connection_count(&self.case, index))
+                .unwrap_or_default();
+            let property_change_count = snapshot_index
+                .map(|index| automation_connection_property_change_count(&self.case, index))
+                .unwrap_or_default();
+            let entity_property_change_count = snapshot_index
+                .map(|index| automation_entity_property_change_count(&self.case, index))
+                .unwrap_or_default();
             if count < job.minimum_connections {
                 self.status = format!(
                     "{} · BELOW MINIMUM ({} CONNECTIONS; {} REQUIRED)",
@@ -6865,7 +6879,9 @@ impl App {
             self.status = format!(
                 "{} · {}",
                 self.status,
-                automation_regression_summary(&self.case, &source_key)
+                snapshot_index
+                    .map(|index| automation_regression_summary(&self.case, index))
+                    .unwrap_or_else(|| "NO SNAPSHOT COMPARISON".into())
             );
             success = automation_limits_pass(
                 count,
@@ -6942,7 +6958,7 @@ impl App {
             batch_id: None,
             batch_configuration_fingerprint: None,
             job_id: job.id,
-            chart_id: job.chart_id,
+            chart_id: job.chart_id.or(Some(self.case.active_chart_id)),
             job_name: job.name.clone(),
             database_path: job.database_path.clone(),
             series: job.series.clone(),
@@ -7431,6 +7447,7 @@ impl App {
                     self.case
                         .snapshots
                         .iter()
+                        .filter(|snapshot| snapshot.chart_id == Some(self.case.active_chart_id))
                         .map(|snapshot| snapshot.source_key.clone()),
                 )
                 .collect();
@@ -7443,7 +7460,10 @@ impl App {
                         .case
                         .snapshots
                         .iter()
-                        .filter(|snapshot| snapshot.source_key == source_key)
+                        .filter(|snapshot| {
+                            snapshot.source_key == source_key
+                                && snapshot.chart_id == Some(self.case.active_chart_id)
+                        })
                         .collect();
                     let latest = snapshots.last().copied();
                     let link_count = self
@@ -7844,6 +7864,18 @@ impl App {
 
     fn export_sql_series(&mut self, source_key: &str) {
         let output_path = self.export_path.trim().to_owned();
+        let chart_id = self
+            .sql_snapshot_index
+            .and_then(|index| self.case.snapshots.get(index))
+            .filter(|snapshot| snapshot.source_key == source_key)
+            .or_else(|| {
+                self.case
+                    .snapshots
+                    .iter()
+                    .rev()
+                    .find(|snapshot| snapshot.source_key == source_key)
+            })
+            .and_then(|snapshot| snapshot.chart_id);
         let result = (|| -> Result<usize, String> {
             if output_path.is_empty() {
                 return Err("export path cannot be empty".into());
@@ -7856,7 +7888,9 @@ impl App {
                 .case
                 .snapshots
                 .iter()
-                .filter(|snapshot| snapshot.source_key == source_key)
+                .filter(|snapshot| {
+                    snapshot.source_key == source_key && snapshot.chart_id == chart_id
+                })
                 .collect();
             if snapshots.is_empty() {
                 return Err("no SQL captures are saved for this series".into());
@@ -10608,16 +10642,13 @@ fn automation_snapshot_regression_count(case: &CaseFile, snapshot_index: usize) 
         + usize::from(snapshot_sqlite_schema_version_change(baseline, current).is_some())
 }
 
-fn automation_regression_count(case: &CaseFile, source_key: &str) -> usize {
-    let mut snapshots = case
-        .snapshots
-        .iter()
-        .rev()
-        .filter(|snapshot| snapshot.source_key == source_key);
-    let Some(current) = snapshots.next() else {
+fn automation_regression_count(case: &CaseFile, current_index: usize) -> usize {
+    let Some(current) = case.snapshots.get(current_index) else {
         return 0;
     };
-    let Some(previous) = snapshots.next() else {
+    let Some(previous) =
+        previous_snapshot_index(case, current_index).and_then(|index| case.snapshots.get(index))
+    else {
         return 0;
     };
     compare_snapshots(previous, current)
@@ -10631,16 +10662,13 @@ fn automation_regression_count(case: &CaseFile, source_key: &str) -> usize {
         .count()
 }
 
-fn automation_added_connection_count(case: &CaseFile, source_key: &str) -> usize {
-    let mut snapshots = case
-        .snapshots
-        .iter()
-        .rev()
-        .filter(|snapshot| snapshot.source_key == source_key);
-    let Some(current) = snapshots.next() else {
+fn automation_added_connection_count(case: &CaseFile, current_index: usize) -> usize {
+    let Some(current) = case.snapshots.get(current_index) else {
         return 0;
     };
-    let Some(previous) = snapshots.next() else {
+    let Some(previous) =
+        previous_snapshot_index(case, current_index).and_then(|index| case.snapshots.get(index))
+    else {
         return 0;
     };
     compare_snapshots(previous, current)
@@ -10649,16 +10677,13 @@ fn automation_added_connection_count(case: &CaseFile, source_key: &str) -> usize
         .count()
 }
 
-fn automation_connection_property_change_count(case: &CaseFile, source_key: &str) -> usize {
-    let mut snapshots = case
-        .snapshots
-        .iter()
-        .rev()
-        .filter(|snapshot| snapshot.source_key == source_key);
-    let Some(current) = snapshots.next() else {
+fn automation_connection_property_change_count(case: &CaseFile, current_index: usize) -> usize {
+    let Some(current) = case.snapshots.get(current_index) else {
         return 0;
     };
-    let Some(previous) = snapshots.next() else {
+    let Some(previous) =
+        previous_snapshot_index(case, current_index).and_then(|index| case.snapshots.get(index))
+    else {
         return 0;
     };
     compare_snapshots(previous, current)
@@ -10671,16 +10696,13 @@ fn automation_connection_property_change_count(case: &CaseFile, source_key: &str
         .count()
 }
 
-fn automation_entity_property_change_count(case: &CaseFile, source_key: &str) -> usize {
-    let mut snapshots = case
-        .snapshots
-        .iter()
-        .rev()
-        .filter(|snapshot| snapshot.source_key == source_key);
-    let Some(current) = snapshots.next() else {
+fn automation_entity_property_change_count(case: &CaseFile, current_index: usize) -> usize {
+    let Some(current) = case.snapshots.get(current_index) else {
         return 0;
     };
-    let Some(previous) = snapshots.next() else {
+    let Some(previous) =
+        previous_snapshot_index(case, current_index).and_then(|index| case.snapshots.get(index))
+    else {
         return 0;
     };
     compare_snapshots(previous, current)
@@ -10809,7 +10831,11 @@ fn previous_snapshot_index(case: &CaseFile, current_index: usize) -> Option<usiz
     let current = case.snapshots.get(current_index)?;
     (0..current_index)
         .rev()
-        .find(|index| case.snapshots[*index].source_key == current.source_key)
+        .find(|index| same_snapshot_series(&case.snapshots[*index], current))
+}
+
+fn same_snapshot_series(first: &ConnectionSnapshot, second: &ConnectionSnapshot) -> bool {
+    first.source_key == second.source_key && first.chart_id == second.chart_id
 }
 
 fn snapshot_sql_configuration_changes(
@@ -11134,7 +11160,7 @@ fn automation_outcome_json(
         "status": if success { "PASS" } else { "FAIL" },
         "job": job.name,
         "job_id": job.id,
-        "chart_id": job.chart_id,
+        "chart_id": job.chart_id.or_else(|| snapshot.and_then(|snapshot| snapshot.chart_id)),
         "run_id": run_id,
         "sqlite_lock_retries": sqlite_lock_retries,
         "duration_ms": serde_json::Value::Null,
@@ -11189,16 +11215,13 @@ fn automation_outcome_json(
     })
 }
 
-fn automation_regression_summary(case: &CaseFile, source_key: &str) -> String {
-    let mut snapshots = case
-        .snapshots
-        .iter()
-        .rev()
-        .filter(|snapshot| snapshot.source_key == source_key);
-    let Some(current) = snapshots.next() else {
+fn automation_regression_summary(case: &CaseFile, current_index: usize) -> String {
+    let Some(current) = case.snapshots.get(current_index) else {
         return "NO SNAPSHOT COMPARISON".into();
     };
-    let Some(baseline) = snapshots.next() else {
+    let Some(baseline) =
+        previous_snapshot_index(case, current_index).and_then(|index| case.snapshots.get(index))
+    else {
         return "BASELINE · no previous snapshot".into();
     };
     let deltas = compare_snapshots(baseline, current);
@@ -12171,7 +12194,11 @@ impl eframe::App for App {
                             .snapshots
                             .iter()
                             .rev()
-                            .find(|snapshot| snapshot.source_key == source_key);
+                            .find(|snapshot| {
+                                snapshot.source_key == source_key
+                                    && (snapshot.chart_id.is_none()
+                                        || snapshot.chart_id == Some(self.case.active_chart_id))
+                            });
                         let source_link_count = self
                             .case
                             .links
@@ -13199,18 +13226,21 @@ impl eframe::App for App {
                                             );
                                         }
                                         ui.strong(&job.name);
-                                        let chart_title = job.chart_id.and_then(|chart_id| {
-                                            if chart_id == self.case.active_chart_id {
-                                                Some(self.case.active_chart_title.as_str())
-                                            } else {
-                                                self.case.chart_tabs.iter()
-                                                    .find(|chart| chart.id == chart_id)
-                                                    .map(|chart| chart.title.as_str())
+                                        let chart_title = match job.chart_id {
+                                            Some(chart_id) if chart_id == self.case.active_chart_id => {
+                                                self.case.active_chart_title.as_str()
                                             }
-                                        });
+                                            Some(chart_id) => self
+                                                .case
+                                                .chart_tabs
+                                                .iter()
+                                                .find(|chart| chart.id == chart_id)
+                                                .map(|chart| chart.title.as_str())
+                                                .unwrap_or("Missing chart"),
+                                            None => "Current chart (legacy job)",
+                                        };
                                         ui.label(format!(
-                                            "Destination · {}",
-                                            chart_title.unwrap_or("Current chart (legacy job)")
+                                            "Destination · {chart_title}"
                                         ));
                                         ui.label(format!("{} · {}", job.series, job.database_path));
                                         ui.label(format!(
@@ -14144,7 +14174,11 @@ impl eframe::App for App {
                                                 let source_snapshot = self.case.snapshots
                                                     .iter()
                                                     .rev()
-                                                    .find(|snapshot| snapshot.source_key == *source_key);
+                                                    .find(|snapshot| {
+                                                        snapshot.source_key == *source_key
+                                                            && (snapshot.chart_id.is_none()
+                                                                || snapshot.chart_id == Some(self.case.active_chart_id))
+                                                    });
                                                 let graphml_catalog = self.case.graphml_source_catalogs
                                                     .iter()
                                                     .find(|catalog| catalog["source_key"].as_str() == Some(source_key.as_str()));
@@ -14177,7 +14211,12 @@ impl eframe::App for App {
                                                 ui.label(link_count.to_string());
                                                 ui.horizontal(|ui| {
                                                     if ui.small_button("Highlight on chart").clicked() {
-                                                        source_to_highlight = Some(source_key.clone());
+                                                        source_to_highlight = Some((
+                                                            source_key.clone(),
+                                                            source_snapshot.and_then(|snapshot| {
+                                                                self.case.snapshots.iter().position(|candidate| candidate.id == snapshot.id)
+                                                            }),
+                                                        ));
                                                     }
                                                     if !entities.is_empty() && ui.small_button("View entities").clicked() {
                                                         self.data_query.clear();
@@ -14267,7 +14306,11 @@ impl eframe::App for App {
                                 {
                                     self.open_sql_snapshot_review(index);
                                 }
-                                if let Some(source_key) = source_to_highlight {
+                                if let Some((source_key, snapshot_index)) = source_to_highlight {
+                                    if let Some(snapshot_index) = snapshot_index {
+                                        self.sql_snapshot_source = Some(source_key.clone());
+                                        self.sql_snapshot_index = Some(snapshot_index);
+                                    }
                                     self.highlight_sql_source_on_chart(source_key);
                                 }
                                 if let Some(job_id) = automation_job_to_open {
@@ -14279,61 +14322,109 @@ impl eframe::App for App {
                                 return;
                             }
                             if self.data_mode==DataMode::SqlRegressions {
-                                let mut sources: Vec<(String, String, usize, usize)> = Vec::new();
-                                for snapshot in self.case.snapshots.iter().rev() {
-                                    if sources.iter().all(|(key, _, _, _)| key != &snapshot.source_key) {
-                                        let source_links: Vec<&Link> = self
-                                            .case
-                                            .links
-                                            .iter()
-                                            .filter(|link| {
-                                                link.ingest_source.as_deref()
-                                                    == Some(snapshot.source_key.as_str())
-                                            })
-                                            .collect();
-                                        let source_entities: HashSet<Uuid> = source_links
-                                            .iter()
-                                            .flat_map(|link| [link.from, link.to])
-                                            .collect();
-                                        sources.push((
-                                            snapshot.source_key.clone(),
-                                            format!("{} · {}", snapshot.series, snapshot.database_path),
-                                            source_links.len(),
-                                            source_entities.len(),
-                                        ));
+                                let mut sources: Vec<(String, Option<Uuid>, usize, String, usize, usize)> = Vec::new();
+                                for (snapshot_index, snapshot) in self.case.snapshots.iter().enumerate().rev() {
+                                    if sources.iter().any(|(key, chart_id, _, _, _, _)| {
+                                        key == &snapshot.source_key && *chart_id == snapshot.chart_id
+                                    }) {
+                                        continue;
+                                    }
+                                    let chart = snapshot.chart_id.and_then(|chart_id| {
+                                        self.case.chart_tabs.iter().find(|chart| chart.id == chart_id)
+                                    });
+                                    let chart_title = if snapshot.chart_id == Some(self.case.active_chart_id) {
+                                        self.case.active_chart_title.as_str()
+                                    } else if let Some(chart) = chart {
+                                        chart.title.as_str()
+                                    } else if snapshot.chart_id.is_none() {
+                                        "Legacy chart"
+                                    } else {
+                                        "Deleted chart"
+                                    };
+                                    let chart_links = if snapshot.chart_id.is_none()
+                                        || snapshot.chart_id == Some(self.case.active_chart_id)
+                                    {
+                                        self.case.links.as_slice()
+                                    } else {
+                                        chart.map(|chart| chart.links.as_slice()).unwrap_or(&[])
+                                    };
+                                    let source_links: Vec<&Link> = chart_links
+                                        .iter()
+                                        .filter(|link| {
+                                            link.ingest_source.as_deref()
+                                                == Some(snapshot.source_key.as_str())
+                                        })
+                                        .collect();
+                                    let source_entities: HashSet<Uuid> = source_links
+                                        .iter()
+                                        .flat_map(|link| [link.from, link.to])
+                                        .collect();
+                                    sources.push((
+                                        snapshot.source_key.clone(),
+                                        snapshot.chart_id,
+                                        snapshot_index,
+                                        format!("{} · {} · {}", snapshot.series, snapshot.database_path, chart_title),
+                                        source_links.len(),
+                                        source_entities.len(),
+                                    ));
+                                }
+                                let selected_pair = self.sql_snapshot_index
+                                    .and_then(|index| self.case.snapshots.get(index))
+                                    .filter(|snapshot| {
+                                        self.sql_snapshot_source.as_deref()
+                                            == Some(snapshot.source_key.as_str())
+                                    })
+                                    .map(|snapshot| (snapshot.source_key.clone(), snapshot.chart_id));
+                                if selected_pair.as_ref().is_none_or(|selected| {
+                                    sources.iter().all(|(key, chart_id, _, _, _, _)| {
+                                        (key, chart_id) != (&selected.0, &selected.1)
+                                    })
+                                }) && let Some((key, chart_id, index, _, _, _)) = sources.first()
+                                {
+                                    self.sql_snapshot_source = Some(key.clone());
+                                    self.sql_snapshot_index = Some(*index);
+                                    if let Some(chart_id) = chart_id
+                                        && *chart_id != self.case.active_chart_id
+                                        && self.case.chart_tabs.iter().any(|chart| chart.id == *chart_id)
+                                    {
+                                        self.switch_chart(*chart_id);
                                     }
                                 }
-                                if self.sql_snapshot_source.as_ref().is_none_or(|selected| {
-                                    sources.iter().all(|(key, _, _, _)| key != selected)
-                                }) {
-                                    self.sql_snapshot_source = sources.first().map(|(key, _, _, _)| key.clone());
-                                }
                                 if !sources.is_empty() {
-                                    let mut source_changed = false;
+                                    let mut selected_source = None;
                                     ui.horizontal(|ui| {
                                         ui.label("Review saved series");
                                         egui::ComboBox::from_id_salt("sql_snapshot_source")
                                             .selected_text(
-                                                self.sql_snapshot_source
-                                                    .as_ref()
-                                                    .and_then(|selected| sources.iter().find(|(key, _, _, _)| key == selected))
-                                                    .map(|(_, label, links, entities)| format!("{label} · {links} links · {entities} entities"))
+                                                selected_pair.as_ref()
+                                                    .and_then(|selected| sources.iter().find(|(key, chart_id, _, _, _, _)| (key, chart_id) == (&selected.0, &selected.1)))
+                                                    .or_else(|| sources.first())
+                                                    .map(|(_, _, _, label, links, entities)| format!("{label} · {links} links · {entities} entities"))
                                                     .as_deref()
                                                     .unwrap_or("Choose a series"),
                                             )
                                             .show_ui(ui, |ui| {
-                                                for (key, label, links, entities) in &sources {
-                                                    let response = ui.selectable_value(
-                                                        &mut self.sql_snapshot_source,
-                                                        Some(key.clone()),
+                                                for (key, chart_id, index, label, links, entities) in &sources {
+                                                    let selected = selected_pair.as_ref()
+                                                        .is_some_and(|current| current == &(key.clone(), *chart_id));
+                                                    if ui.selectable_label(
+                                                        selected,
                                                         format!("{label} · {links} links · {entities} entities"),
-                                                    );
-                                                    source_changed |= response.changed();
+                                                    ).clicked() {
+                                                        selected_source = Some((key.clone(), *chart_id, *index));
+                                                    }
                                                 }
                                             });
                                     });
-                                    if source_changed {
-                                        self.sql_snapshot_index = None;
+                                    if let Some((key, chart_id, index)) = selected_source {
+                                        self.sql_snapshot_source = Some(key);
+                                        self.sql_snapshot_index = Some(index);
+                                        if let Some(chart_id) = chart_id
+                                            && chart_id != self.case.active_chart_id
+                                            && self.case.chart_tabs.iter().any(|chart| chart.id == chart_id)
+                                        {
+                                            self.switch_chart(chart_id);
+                                        }
                                         self.sql_snapshot_filter.clear();
                                         self.sql_comparison_baseline_id = None;
                                         self.sql_delta_filter = SnapshotDeltaFilter::All;
@@ -14341,14 +14432,24 @@ impl eframe::App for App {
                                     }
                                 }
                                 let source_key = self.sql_snapshot_source.as_deref();
-                                let latest_index = self.case.snapshots.iter().rposition(|snapshot| {
-                                    Some(snapshot.source_key.as_str()) == source_key
-                                });
-                                let selected_index = self.sql_snapshot_index.filter(|index| {
+                                let selected_existing_index = self.sql_snapshot_index.filter(|index| {
                                     self.case.snapshots.get(*index).is_some_and(|snapshot| {
                                         Some(snapshot.source_key.as_str()) == source_key
                                     })
-                                }).or(latest_index);
+                                });
+                                let selected_chart_id = selected_existing_index
+                                    .and_then(|index| self.case.snapshots.get(index))
+                                    .map(|snapshot| snapshot.chart_id);
+                                let latest_index = self.case.snapshots.iter().rposition(|snapshot| {
+                                    Some(snapshot.source_key.as_str()) == source_key
+                                        && selected_chart_id.is_none_or(|chart_id| {
+                                            snapshot.chart_id == chart_id
+                                        })
+                                });
+                                let selected_index = selected_existing_index.or(latest_index);
+                                let current_series = selected_index
+                                    .and_then(|index| self.case.snapshots.get(index))
+                                    .map(|snapshot| (snapshot.source_key.clone(), snapshot.chart_id));
                                 let current_snapshot = selected_index.and_then(|index|self.case.snapshots.get(index)).cloned();
                                 let prior_snapshots: Vec<(usize, Uuid, String)> = selected_index
                                     .map(|current| {
@@ -14356,7 +14457,10 @@ impl eframe::App for App {
                                             .iter()
                                             .enumerate()
                                             .filter(|(_, snapshot)| {
-                                                Some(snapshot.source_key.as_str()) == source_key
+                                                current_series.as_ref().is_some_and(|(key, chart_id)| {
+                                                    &snapshot.source_key == key
+                                                        && snapshot.chart_id == *chart_id
+                                                })
                                             })
                                             .map(|(index, snapshot)| {
                                                 (
@@ -14836,6 +14940,10 @@ impl eframe::App for App {
                                     .filter(|(_, snapshot)| {
                                         self.sql_snapshot_source.as_deref()
                                             == Some(snapshot.source_key.as_str())
+                                            && current_series.as_ref().is_some_and(|(key, chart_id)| {
+                                                &snapshot.source_key == key
+                                                    && snapshot.chart_id == *chart_id
+                                            })
                                             && (snapshot_filter.is_empty()
                                                 || format!(
                                                     "{} {} {} {} {} {} {} {} {} {}",
@@ -14859,6 +14967,10 @@ impl eframe::App for App {
                                     .collect();
                                 let source_snapshot_count = self.case.snapshots.iter().filter(|snapshot| {
                                     self.sql_snapshot_source.as_deref() == Some(snapshot.source_key.as_str())
+                                        && current_series.as_ref().is_some_and(|(key, chart_id)| {
+                                            &snapshot.source_key == key
+                                                && snapshot.chart_id == *chart_id
+                                        })
                                 }).count();
                                 ui.label(egui::RichText::new(format!(
                                     "{} of {} captures",
@@ -16453,7 +16565,11 @@ impl eframe::App for App {
                                         .snapshots
                                         .iter()
                                         .rev()
-                                        .find(|snapshot| snapshot.source_key == source_key)
+                                        .find(|snapshot| {
+                                            snapshot.source_key == source_key
+                                                && (snapshot.chart_id.is_none()
+                                                    || snapshot.chart_id == Some(self.case.active_chart_id))
+                                        })
                                 })
                                 .and_then(|snapshot| {
                                     automation_job_for_snapshot(
@@ -16472,7 +16588,11 @@ impl eframe::App for App {
                                     self.case
                                         .snapshots
                                         .iter()
-                                        .any(|snapshot| snapshot.source_key == source_key)
+                                        .any(|snapshot| {
+                                            snapshot.source_key == source_key
+                                                && (snapshot.chart_id.is_none()
+                                                    || snapshot.chart_id == Some(self.case.active_chart_id))
+                                        })
                                 });
                             if let Some(link) = self.case.links.get_mut(index) {
                                 let ingest_source = link.ingest_source.clone();
@@ -16526,7 +16646,11 @@ impl eframe::App for App {
                                         .snapshots
                                         .iter()
                                         .rev()
-                                        .find(|snapshot| snapshot.source_key == source_key)
+                                        .find(|snapshot| {
+                                            snapshot.source_key == source_key
+                                                && (snapshot.chart_id.is_none()
+                                                    || snapshot.chart_id == Some(self.case.active_chart_id))
+                                        })
                                     {
                                         ui.label(
                                             egui::RichText::new(format!(
@@ -20589,12 +20713,22 @@ fn normalize_snapshot_database_paths(case: &mut CaseFile, case_path: &str) {
         }
     }
     case.format_version = CURRENT_CASE_FORMAT_VERSION;
+    let snapshot_chart_ids: HashMap<Uuid, Option<Uuid>> = case
+        .snapshots
+        .iter()
+        .map(|snapshot| (snapshot.id, snapshot.chart_id))
+        .collect();
     for run in &mut case.automation_runs {
         if run.snapshot_id.is_none() {
             run.snapshot_id = run
                 .snapshot_index
                 .and_then(|index| case.snapshots.get(index))
                 .map(|snapshot| snapshot.id);
+        }
+        if run.chart_id.is_none() {
+            run.chart_id = run
+                .snapshot_id
+                .and_then(|snapshot_id| snapshot_chart_ids.get(&snapshot_id).copied().flatten());
         }
     }
 }
@@ -23084,6 +23218,7 @@ fn write_sql_snapshots_csv<W: Write>(
     writer
         .write_record([
             "snapshot_id",
+            "chart_id",
             "source_key",
             "database_path",
             "configured_database_path",
@@ -23124,6 +23259,10 @@ fn write_sql_snapshots_csv<W: Write>(
             writer
                 .write_record([
                     snapshot.id.to_string(),
+                    snapshot
+                        .chart_id
+                        .map(|id| id.to_string())
+                        .unwrap_or_default(),
                     snapshot.source_key.clone(),
                     snapshot.database_path.clone(),
                     snapshot.configured_database_path.clone(),
@@ -23491,6 +23630,7 @@ fn write_automation_runs_csv_atomically(
                 "batch_id",
                 "job_id",
                 "job_name",
+                "chart_id",
                 "trigger",
                 "success",
                 "schema_adaptation_required",
@@ -23587,6 +23727,10 @@ fn write_automation_runs_csv_atomically(
                     run.batch_id.map(|id| id.to_string()).unwrap_or_default(),
                     run.job_id.to_string(),
                     run.job_name.clone(),
+                    run.chart_id
+                        .or_else(|| snapshot.and_then(|snapshot| snapshot.chart_id))
+                        .map(|id| id.to_string())
+                        .unwrap_or_default(),
                     automation_run_trigger_label(&run.trigger).to_owned(),
                     run.success.to_string(),
                     (!run.success && schema_adaptation_kind.is_some()).to_string(),
@@ -23758,6 +23902,7 @@ fn export_sql_snapshot_cli(
                 "output": output_path,
                 "format": delimited_text_format(output_path),
                 "snapshot_id": snapshot.id,
+                "chart_id": snapshot.chart_id,
                 "captured_at": snapshot.captured_at,
                 "sqlite_schema_version": snapshot.sqlite_schema_version,
                 "connections": snapshot.connections.len(),
@@ -23859,7 +24004,7 @@ fn export_sql_series_cli(
     let snapshots: Vec<&ConnectionSnapshot> = case
         .snapshots
         .iter()
-        .filter(|snapshot| snapshot.source_key == selected.source_key)
+        .filter(|snapshot| same_snapshot_series(snapshot, selected))
         .collect();
     if output_path.trim().is_empty() {
         return Err("export path cannot be empty".into());
