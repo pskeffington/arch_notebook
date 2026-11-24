@@ -5514,6 +5514,29 @@ impl App {
         true
     }
 
+    fn repair_automation_run(&mut self, run_id: Uuid) -> bool {
+        let repair_context = self
+            .case
+            .automation_runs
+            .iter()
+            .find(|run| run.id == run_id)
+            .and_then(|run| {
+                let kind = sql_schema_adaptation_kind(&run.message)?;
+                Some((
+                    run_id,
+                    kind.to_owned(),
+                    sql_schema_adaptation_reference(&run.message),
+                ))
+            });
+        if self.load_automation_run_into_editor(run_id) {
+            self.automation_repair_context = repair_context;
+            self.build_sql_query_from_schema();
+            true
+        } else {
+            false
+        }
+    }
+
     fn cancel_automation_job_edit(&mut self) {
         self.editing_automation_job = None;
         self.automation_repair_context = None;
@@ -12828,29 +12851,13 @@ impl eframe::App for App {
                                             self.edit_automation_job(id);
                                         }
                                         "repair" => {
-                                            let repair_context = repair_run_id.and_then(|run_id| {
-                                                self.case
-                                                    .automation_runs
-                                                    .iter()
-                                                    .find(|run| run.id == run_id)
-                                                    .and_then(|run| {
-                                                        let kind = sql_schema_adaptation_kind(&run.message)?;
-                                                        Some((
-                                                            run_id,
-                                                            kind.to_owned(),
-                                                            sql_schema_adaptation_reference(&run.message),
-                                                        ))
-                                                    })
-                                            });
-                                            let loaded = if let Some(run_id) = repair_run_id {
-                                                self.load_automation_run_into_editor(run_id)
+                                            if let Some(run_id) = repair_run_id {
+                                                self.repair_automation_run(run_id);
                                             } else {
                                                 self.edit_automation_job(id);
-                                                self.editing_automation_job == Some(id)
-                                            };
-                                            if loaded {
-                                                self.automation_repair_context = repair_context;
-                                                self.build_sql_query_from_schema();
+                                                if self.editing_automation_job == Some(id) {
+                                                    self.build_sql_query_from_schema();
+                                                }
                                             }
                                         }
                                         "run" => self.start_automation_jobs(vec![id], false),
@@ -13034,6 +13041,7 @@ impl eframe::App for App {
                                 let mut set_regression_review: Option<(Uuid, bool)> = None;
                                 let mut replay_run = None;
                                 let mut load_run = None;
+                                let mut repair_run = None;
                                 let mut save_run_note = None;
                                 egui::ScrollArea::vertical().max_height(210.0).show(ui, |ui| {
                                     for run in self
@@ -13369,7 +13377,11 @@ impl eframe::App for App {
                                                     "Load configuration into editor"
                                                 }).clicked()
                                             {
-                                                load_run = Some(run.id);
+                                                if sql_schema_adaptation_kind(&run.message).is_some() {
+                                                    repair_run = Some(run.id);
+                                                } else {
+                                                    load_run = Some(run.id);
+                                                }
                                             }
                                             if let Some(index) = snapshot_index {
                                                 if ui.small_button("Export capture CSV/TSV").clicked() {
@@ -13420,6 +13432,9 @@ impl eframe::App for App {
                                 }
                                 if let Some(run_id) = load_run {
                                     self.load_automation_run_into_editor(run_id);
+                                }
+                                if let Some(run_id) = repair_run {
+                                    self.repair_automation_run(run_id);
                                 }
                                 if let Some(index) = export_snapshot {
                                     self.export_sql_snapshot(index);
