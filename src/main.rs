@@ -5128,6 +5128,11 @@ impl App {
             Ok(job) => {
                 let name = job.name.clone();
                 let imported_job_id = job.id;
+                let chart_title = job
+                    .chart_id
+                    .and_then(|chart_id| chart_title_for_id(&self.case, chart_id))
+                    .unwrap_or("Unknown chart")
+                    .to_owned();
                 self.case.automation_jobs.push(job);
                 self.automation_job_filter = name.clone();
                 self.automation_job_import_path.clear();
@@ -5137,7 +5142,7 @@ impl App {
                 self.automation_job_import_series.clear();
                 self.automation_job_import_parameter_text.clear();
                 self.status = format!(
-                    "AUTOMATION JOB IMPORTED · {name} · {imported_job_id} · DISABLED UNTIL REVIEWED"
+                    "AUTOMATION JOB IMPORTED · {name} · {chart_title} · {imported_job_id} · DISABLED UNTIL REVIEWED"
                 );
             }
             Err(error) => self.status = format!("JOB PACKAGE IMPORT FAILED · {error}"),
@@ -25759,6 +25764,10 @@ fn import_automation_job_cli(
     apply_sql_parameter_overrides(std::slice::from_mut(&mut job), parameter_overrides, &[])?;
     let job_id = job.id;
     let job_name = job.name.clone();
+    let chart_id = job.chart_id;
+    let chart_title = chart_id
+        .and_then(|chart_id| chart_title_for_id(&case, chart_id))
+        .map(str::to_owned);
     case.automation_jobs.push(job);
     save_case_atomically(case_file, &case)?;
     if json_output {
@@ -25772,8 +25781,8 @@ fn import_automation_job_cli(
                 "input": input_path,
                 "job_id": job_id,
                 "job": job_name,
-            "chart_id": case.automation_jobs.last().and_then(|job| job.chart_id),
-            "chart_title": case.automation_jobs.last().and_then(|job| job.chart_id).and_then(|chart_id| chart_title_for_id(&case, chart_id)),
+                "chart_id": chart_id,
+                "chart_title": chart_title,
                 "database_path": case.automation_jobs.last().map(|job|job.database_path.as_str()),
                 "series": case.automation_jobs.last().map(|job|job.series.as_str()),
                 "enabled": false,
@@ -25782,7 +25791,10 @@ fn import_automation_job_cli(
             .map_err(|error| error.to_string())?
         );
     } else {
-        println!("AUTOMATION JOB IMPORTED · {job_name} · DISABLED UNTIL REVIEWED");
+        println!(
+            "AUTOMATION JOB IMPORTED · {job_name} · {} · DISABLED UNTIL REVIEWED",
+            chart_title.as_deref().unwrap_or("Unknown chart")
+        );
     }
     Ok(())
 }
