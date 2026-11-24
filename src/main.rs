@@ -20140,6 +20140,7 @@ fn run_automation_cli(
     }
     eprintln!("AUTOMATION BATCH ID · {batch_id}");
     let mut failures = 0;
+    let mut chart_export_failures = 0;
     let mut skipped = Vec::new();
     let mut outcomes = Vec::new();
     for job in jobs.iter_mut() {
@@ -20157,19 +20158,25 @@ fn run_automation_cli(
                 .cloned()
         });
         if let Some(checkpoint) = checkpoint {
-            if let Some(output_path) = chart_csv_output_paths.get(&job.id) {
-                let snapshot = checkpoint
-                    .snapshot_id
-                    .and_then(|snapshot_id| {
+            let chart_csv_export_error =
+                chart_csv_output_paths.get(&job.id).and_then(|output_path| {
+                    let snapshot = checkpoint.snapshot_id.and_then(|snapshot_id| {
                         app.case
                             .snapshots
                             .iter()
                             .find(|snapshot| snapshot.id == snapshot_id)
-                    })
-                    .ok_or_else(|| {
-                        "completed batch job has no saved snapshot for chart CSV export".to_owned()
-                    })?;
-                write_sql_snapshot_chart_csv_atomically(output_path, snapshot)?;
+                    });
+                    match snapshot {
+                        Some(snapshot) => {
+                            write_sql_snapshot_chart_csv_atomically(output_path, snapshot).err()
+                        }
+                        None => Some(
+                            "completed batch job has no saved snapshot for chart CSV export".into(),
+                        ),
+                    }
+                });
+            if chart_csv_export_error.is_some() {
+                chart_export_failures += 1;
             }
             skipped.push(serde_json::json!({
                 "job_id": job.id,
@@ -20199,6 +20206,7 @@ fn run_automation_cli(
                 "sqlite_lock_retries": checkpoint.sqlite_lock_retries,
                 "snapshot_id": checkpoint.snapshot_id,
                 "chart_csv_output": chart_csv_output_paths.get(&job.id),
+                "chart_csv_export_error": chart_csv_export_error,
                 "batch_id": batch_id,
             }));
             if !checkpoint.success {
@@ -20216,7 +20224,11 @@ fn run_automation_cli(
                     checkpoint.message
                 );
                 if let Some(output_path) = chart_csv_output_paths.get(&job.id) {
-                    println!("CHART CSV EXPORTED · {output_path}");
+                    if let Some(error) = &chart_csv_export_error {
+                        println!("CHART CSV EXPORT FAILED · {output_path} · {error}");
+                    } else {
+                        println!("CHART CSV EXPORTED · {output_path}");
+                    }
                 }
             }
             continue;
@@ -20276,13 +20288,19 @@ fn run_automation_cli(
                 .position(|snapshot| snapshot.id == id)
         });
         save_case_atomically(Path::new(case_path), &app.case)?;
-        if let Some(output_path) = chart_csv_output_paths.get(&job.id) {
-            let snapshot = snapshot_index
-                .and_then(|index| app.case.snapshots.get(index))
-                .ok_or_else(|| {
-                    "automation run did not produce a SQL snapshot for chart CSV export".to_owned()
-                })?;
-            write_sql_snapshot_chart_csv_atomically(output_path, snapshot)?;
+        let chart_csv_export_error = chart_csv_output_paths.get(&job.id).and_then(|output_path| {
+            let snapshot = snapshot_index.and_then(|index| app.case.snapshots.get(index));
+            match snapshot {
+                Some(snapshot) => {
+                    write_sql_snapshot_chart_csv_atomically(output_path, snapshot).err()
+                }
+                None => Some(
+                    "automation run did not produce a SQL snapshot for chart CSV export".into(),
+                ),
+            }
+        });
+        if chart_csv_export_error.is_some() {
+            chart_export_failures += 1;
         }
         let previous = snapshot_index
             .and_then(|index| previous_snapshot_index(&app.case, index))
@@ -20305,6 +20323,7 @@ fn run_automation_cli(
                 if let Some(output_path) = chart_csv_output_paths.get(&job.id) {
                     outcome["chart_csv_output"] = serde_json::json!(output_path);
                 }
+                outcome["chart_csv_export_error"] = serde_json::json!(chart_csv_export_error);
             }
         } else {
             println!(
@@ -20315,7 +20334,11 @@ fn run_automation_cli(
                 message
             );
             if let Some(output_path) = chart_csv_output_paths.get(&job.id) {
-                println!("CHART CSV EXPORTED · {output_path}");
+                if let Some(error) = &chart_csv_export_error {
+                    println!("CHART CSV EXPORT FAILED · {output_path} · {error}");
+                } else {
+                    println!("CHART CSV EXPORTED · {output_path}");
+                }
             }
         }
     }
@@ -20325,9 +20348,9 @@ fn run_automation_cli(
                 .iter()
                 .filter(|outcome| outcome["prior_status"] == "PASS")
                 .count();
-            println!("{}", serde_json::to_string_pretty(&serde_json::json!({"schema_version":1,"ok":failures==0,"saved":false,"case":case_path,"batch_id":batch_id,"passed":passed,"failed":failures,"skipped":skipped.len(),"outcomes":outcomes,"skipped_jobs":skipped})).map_err(|error|error.to_string())?);
+            println!("{}", serde_json::to_string_pretty(&serde_json::json!({"schema_version":1,"ok":failures==0 && chart_export_failures==0,"saved":false,"case":case_path,"batch_id":batch_id,"passed":passed,"failed":failures,"chart_export_failures":chart_export_failures,"skipped":skipped.len(),"outcomes":outcomes,"skipped_jobs":skipped})).map_err(|error|error.to_string())?);
         }
-        return Ok(failures == 0);
+        return Ok(failures == 0 && chart_export_failures == 0);
     }
     if json_output {
         let passed = outcomes
@@ -20338,9 +20361,9 @@ fn run_automation_cli(
                 .iter()
                 .filter(|outcome| outcome["prior_status"] == "PASS")
                 .count();
-        println!("{}", serde_json::to_string_pretty(&serde_json::json!({"schema_version":1,"ok":failures==0,"saved":!outcomes.is_empty(),"case":case_path,"batch_id":batch_id,"passed":passed,"failed":failures,"skipped":skipped.len(),"outcomes":outcomes,"skipped_jobs":skipped})).map_err(|error|error.to_string())?);
+        println!("{}", serde_json::to_string_pretty(&serde_json::json!({"schema_version":1,"ok":failures==0 && chart_export_failures==0,"saved":!outcomes.is_empty(),"case":case_path,"batch_id":batch_id,"passed":passed,"failed":failures,"chart_export_failures":chart_export_failures,"skipped":skipped.len(),"outcomes":outcomes,"skipped_jobs":skipped})).map_err(|error|error.to_string())?);
     }
-    Ok(failures == 0)
+    Ok(failures == 0 && chart_export_failures == 0)
 }
 
 fn apply_sql_parameter_overrides(
