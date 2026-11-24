@@ -814,6 +814,15 @@ struct SqlPlanStep {
     detail: String,
 }
 
+struct SqlPlanResult {
+    job_id: Uuid,
+    job_name: String,
+    database_path: String,
+    query: String,
+    parameters: Vec<(String, String)>,
+    result: Result<Vec<SqlPlanStep>, String>,
+}
+
 #[derive(Default)]
 struct SqlPlanSummary {
     scan_steps: usize,
@@ -1091,8 +1100,8 @@ struct App {
     )>,
     automation_worker: Option<Receiver<Result<AutomationWorkerResult, String>>>,
     automation_progress: Option<Arc<Mutex<String>>>,
-    sql_plan_worker: Option<Receiver<(Uuid, String, String, Result<Vec<SqlPlanStep>, String>)>>,
-    sql_plan_result: Option<(Uuid, String, String, Result<Vec<SqlPlanStep>, String>)>,
+    sql_plan_worker: Option<Receiver<SqlPlanResult>>,
+    sql_plan_result: Option<SqlPlanResult>,
     sql_schema_worker: Option<Receiver<(Uuid, String, String, SqlSchemaInspection)>>,
     sql_schema_request: Option<(Uuid, String, String)>,
     sql_lock_retry_count: usize,
@@ -5586,6 +5595,8 @@ impl App {
     }
 
     fn remember_automation_editor_before_edit(&mut self) {
+        self.sql_plan_worker = None;
+        self.sql_plan_result = None;
         if self.automation_editor_before_edit.is_none() {
             self.automation_editor_before_edit = Some((
                 self.automation_job_name.clone(),
@@ -6345,7 +6356,14 @@ impl App {
                     inspect_sql_query_plan(&database_path, &case_path, &query, &parameters)
                         .map(|(_, steps)| steps)
                 })();
-                let _ = sender.send((id, name, database_path, result));
+                let _ = sender.send(SqlPlanResult {
+                    job_id: id,
+                    job_name: name,
+                    database_path,
+                    query,
+                    parameters,
+                    result,
+                });
             });
         match spawn_result {
             Ok(_) => {
@@ -11089,15 +11107,28 @@ impl eframe::App for App {
         }
         if let Some(plan_state) = self.sql_plan_worker.as_ref().map(Receiver::try_recv) {
             match plan_state {
-                Ok((job_id, job_name, database_path, result)) => {
-                    self.status = match &result {
-                        Ok(steps) => {
-                            format!("SQL QUERY PLAN READY · {job_name} · {} STEPS", steps.len())
-                        }
-                        Err(error) => format!("SQL QUERY PLAN FAILED · {error}"),
-                    };
-                    self.sql_plan_result = Some((job_id, job_name, database_path, result));
+                Ok(result) => {
                     self.sql_plan_worker = None;
+                    let matches_saved_job = self.case.automation_jobs.iter().any(|job| {
+                        job.id == result.job_id
+                            && job.database_path == result.database_path
+                            && job.query == result.query
+                            && job.parameters == result.parameters
+                    });
+                    if matches_saved_job {
+                        self.status = match &result.result {
+                            Ok(steps) => format!(
+                                "SQL QUERY PLAN READY · {} · {} STEPS",
+                                result.job_name,
+                                steps.len()
+                            ),
+                            Err(error) => format!("SQL QUERY PLAN FAILED · {error}"),
+                        };
+                        self.sql_plan_result = Some(result);
+                    } else {
+                        self.sql_plan_result = None;
+                        self.status = "SQL QUERY PLAN DISCARDED · JOB CONFIGURATION CHANGED".into();
+                    }
                 }
                 Err(mpsc::TryRecvError::Disconnected) => {
                     self.sql_plan_worker = None;
@@ -12957,18 +12988,35 @@ impl eframe::App for App {
                                                 self.cancel_automation_job_edit();
                                             }
                                             self.case.automation_jobs.retain(|job| job.id != id);
+                                            if self
+                                                .sql_plan_result
+                                                .as_ref()
+                                                .is_some_and(|plan| plan.job_id == id)
+                                            {
+                                                self.sql_plan_result = None;
+                                            }
                                             self.status = "AUTOMATION JOB DELETED".into();
                                         }
                                         _ => {}
                                     }
                                 }
-                                if let Some((_, job_name, database_path, result)) = &self.sql_plan_result {
-                                    egui::CollapsingHeader::new(format!("Latest SQL query plan · {job_name}"))
-                                        .id_salt(("sql_query_plan_result", job_name))
+                                if let Some(plan) = &self.sql_plan_result {
+                                    egui::CollapsingHeader::new(format!("Latest SQL query plan · {}", plan.job_name))
+                                        .id_salt(("sql_query_plan_result", &plan.job_name))
                                         .default_open(true)
                                         .show(ui, |ui| {
-                                            ui.label(format!("SQLite source · {database_path}"));
-                                            match result {
+                                            ui.label(format!("SQLite source · {}", plan.database_path));
+                                            ui.label(format!("Parameters · {}", if plan.parameters.is_empty() { "(none)".into() } else { format_sql_parameters_for_display(&plan.parameters) }));
+                                            ui.label("Query used for this plan");
+                                            let mut query = plan.query.clone();
+                                            ui.add(
+                                                egui::TextEdit::multiline(&mut query)
+                                                    .desired_width(canvas_w - 30.0)
+                                                    .desired_rows(3)
+                                                    .code_editor()
+                                                    .interactive(false),
+                                            );
+                                            match &plan.result {
                                                 Ok(steps) => {
                                                     let summary = sql_plan_summary(steps);
                                                     ui.label(format!(
