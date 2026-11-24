@@ -12054,6 +12054,21 @@ impl eframe::App for App {
                             if ui.button("Save case").clicked() { self.save(); }
                             if ui.button("Save as").clicked() { self.save_as(); }
                             if ui.button("Open case").clicked() { self.request_case_action(PendingCaseAction::Open); }
+                            if ui
+                                .add_enabled(
+                                    self.automation_worker.is_none()
+                                        && self.automation_schedule_worker.is_none()
+                                        && Path::new(&self.case_path).is_file(),
+                                    egui::Button::new("Reload case"),
+                                )
+                                .on_hover_text(
+                                    "Reload the active case file from disk, including captures written by a scheduled SQL run. Unsaved changes prompt before they are discarded.",
+                                )
+                                .clicked()
+                            {
+                                self.case_path_input = self.case_path.clone();
+                                self.request_case_action(PendingCaseAction::Open);
+                            }
                             if ui.button("New case").clicked() { self.request_case_action(PendingCaseAction::New); }
                             ui.label(egui::RichText::new("LOCAL WORKSPACE  ·  UNCLASSIFIED").small().color(muted));
                         });
