@@ -1101,6 +1101,7 @@ struct App {
     new_entity_type_text: String,
     new_link_type_text: String,
     import_path: String,
+    import_interchange_into_new_chart: bool,
     import_headers: Vec<String>,
     import_preview: Vec<Vec<String>>,
     import_record_count: usize,
@@ -1607,6 +1608,7 @@ impl Default for App {
             new_entity_type_text: String::new(),
             new_link_type_text: String::new(),
             import_path: data_dir.join("sample_relationships.csv").to_string_lossy().into_owned(),
+            import_interchange_into_new_chart: false,
             import_headers: Vec::new(),
             import_preview: Vec::new(),
             import_record_count: 0,
@@ -2188,6 +2190,7 @@ impl App {
             new_entity_type_text: String::new(),
             new_link_type_text: String::new(),
             import_path: String::new(),
+            import_interchange_into_new_chart: false,
             import_headers: Vec::new(),
             import_preview: Vec::new(),
             import_record_count: 0,
@@ -2611,9 +2614,6 @@ impl App {
     ) {
         let source_catalogs = payload.source_catalogs;
         let chart_title = payload.chart_title;
-        let adopt_chart_title = self.case.entities.is_empty()
-            && self.case.links.is_empty()
-            && is_generated_chart_title(&self.case.active_chart_title);
         let temporary_path = match write_interchange_csv_temp(payload.csv_bytes, source_format) {
             Ok(path) => path,
             Err(error) => {
@@ -2621,6 +2621,15 @@ impl App {
                 return;
             }
         };
+        let previous_chart_id = self.case.active_chart_id;
+        if self.import_interchange_into_new_chart {
+            self.create_chart(false);
+        }
+        let created_chart_id =
+            (self.case.active_chart_id != previous_chart_id).then_some(self.case.active_chart_id);
+        let adopt_chart_title = self.case.entities.is_empty()
+            && self.case.links.is_empty()
+            && is_generated_chart_title(&self.case.active_chart_title);
         let original_path = self.import_path.clone();
         let original_mapping = self.import_column_mapping.clone();
         self.import_path = temporary_path.to_string_lossy().into_owned();
@@ -2649,6 +2658,13 @@ impl App {
         } else {
             format!("{source_format} IMPORT FAILED · {import_status}")
         };
+        if self.status.contains("IMPORT FAILED")
+            && let Some(chart_id) = created_chart_id
+        {
+            let failure_status = std::mem::take(&mut self.status);
+            self.delete_chart(chart_id);
+            self.status = failure_status;
+        }
         if let Err(error) = fs::remove_file(&temporary_path) {
             self.status = format!("{} · TEMP FILE CLEANUP FAILED · {error}", self.status);
         }
@@ -12282,8 +12298,21 @@ impl eframe::App for App {
                     } else if ui.button("Import CSV/TSV").clicked() {
                         self.inspect_delimited_import();
                     }
-                    if ui.button("Import GraphML").clicked(){self.import_graphml();}
-                    if ui.button("Import KML").clicked(){self.import_kml();}
+                    ui.horizontal(|ui| {
+                        if ui.button("Import GraphML").clicked() {
+                            self.import_graphml();
+                        }
+                        if ui.button("Import KML").clicked() {
+                            self.import_kml();
+                        }
+                        ui.checkbox(
+                            &mut self.import_interchange_into_new_chart,
+                            "Import into new chart",
+                        )
+                        .on_hover_text(
+                            "Create a separate chart for the next GraphML or KML import instead of merging it into the active chart.",
+                        );
+                    });
                     if ui.button("Export CSV/TSV").clicked(){self.export_delimited();}
                     if ui.button("Export GraphML").clicked(){self.export_graphml();}
                     if ui.button("Export KML").clicked(){self.export_kml();}
