@@ -7645,6 +7645,22 @@ impl App {
         self.show_timeline = false;
     }
 
+    fn sql_snapshot_index_for_source(&self, source_key: &str) -> Option<usize> {
+        self.sql_snapshot_index
+            .filter(|index| {
+                self.case
+                    .snapshots
+                    .get(*index)
+                    .is_some_and(|snapshot| snapshot.source_key == source_key)
+            })
+            .or_else(|| {
+                self.case
+                    .snapshots
+                    .iter()
+                    .rposition(|snapshot| snapshot.source_key == source_key)
+            })
+    }
+
     fn highlight_sql_source_on_chart(&mut self, source_key: String) {
         let mut source_entities: Vec<Uuid> = self
             .case
@@ -14413,27 +14429,19 @@ impl eframe::App for App {
                             if matches!(self.data_mode, DataMode::Relationships | DataMode::Entities)
                                 && let Some(source_filter) = self.data_source_filter.clone()
                             {
-                                let source_snapshot = self
-                                    .case
-                                    .snapshots
-                                    .iter()
-                                    .rev()
-                                    .find(|snapshot| snapshot.source_key == source_filter);
-                                let has_source_snapshot = source_snapshot.is_some();
+                                let source_snapshot_index =
+                                    self.sql_snapshot_index_for_source(&source_filter);
+                                let source_snapshot = source_snapshot_index
+                                    .and_then(|index| self.case.snapshots.get(index));
                                 let label = source_snapshot
                                     .map(|snapshot| format!("{} · {}", snapshot.series, snapshot.database_path))
                                     .unwrap_or_else(|| source_filter.clone());
                                 ui.horizontal(|ui| {
                                     ui.label(egui::RichText::new(format!("Data source filter · {label}")).small().color(cyan));
-                                    if has_source_snapshot
+                                    if source_snapshot_index.is_some()
                                         && ui.small_button("Review SQL snapshots").clicked()
                                     {
-                                        if let Some(index) = self
-                                            .case
-                                            .snapshots
-                                            .iter()
-                                            .rposition(|snapshot| snapshot.source_key == source_filter)
-                                        {
+                                        if let Some(index) = source_snapshot_index {
                                             self.open_sql_snapshot_review(index);
                                         }
                                     }
@@ -16159,12 +16167,7 @@ impl eframe::App for App {
                             self.show_timeline = false;
                         }
                         if let Some(source_key) = review_link_source {
-                            if let Some(index) = self
-                                .case
-                                .snapshots
-                                .iter()
-                                .rposition(|snapshot| snapshot.source_key == source_key)
-                            {
+                            if let Some(index) = self.sql_snapshot_index_for_source(&source_key) {
                                 self.open_sql_snapshot_review(index);
                             }
                         }
