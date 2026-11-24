@@ -8,7 +8,7 @@ In **Automation**, **Unreviewed regressions, properties, or schema changes** fil
 
 Use **Preflight enabled jobs and overrides** to check every enabled query read-only with the current one-run SQL parameter overrides and inspect per-job progress and diagnostics before a batch run. Completed results show each job's destination and failure details; choose **Repair SQL** for schema errors or **Edit job** for other failures to act on the result directly. The panel focuses the job list on the selected job so it remains visible after editing. The preflight does not save run history or change job parameters. Schedule install, check, remove, and preflight results remain visible in the Automation panel for the case that was acted on. Schedule installation separately preflights the saved job parameters before changing the scheduler, so one-run overrides never alter scheduled captures.
 
-The Automation job search matches job names, database paths, series, SQL text, and saved SQL parameter names and values. `--list-jobs --json` includes each saved job's destination chart ID and title; `--list-runs --json` includes the chart title resolved for each capture alongside its chart ID.
+The Automation job search matches job names, destination chart titles or IDs, database paths, series, SQL text, and saved SQL parameter names and values. `--list-jobs --json` includes each saved job's destination chart ID and title; `--list-runs --json` includes the chart title resolved for each capture alongside its chart ID.
 
 ### Sharing and adapting jobs
 

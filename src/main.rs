@@ -13313,7 +13313,7 @@ impl eframe::App for App {
                                     ui.label(egui::RichText::new("JOBS").small().strong().color(cyan));
                                     ui.add(
                                         egui::TextEdit::singleline(&mut self.automation_job_filter)
-                                            .hint_text("Find by job, database, series, SQL, or parameter")
+                                            .hint_text("Find by job, chart, database, series, SQL, or parameter")
                                             .desired_width(280.0),
                                     );
                                     if ui.small_button("Clear").clicked() {
@@ -13328,8 +13328,17 @@ impl eframe::App for App {
                                     .filter(|job| {
                                         job_filter.is_empty()
                                             || format!(
-                                                "{} {} {} {} {}",
+                                                "{} {} {} {} {} {}",
                                                 job.name,
+                                                job.chart_id
+                                                    .and_then(|chart_id| {
+                                                        self.case
+                                                            .chart_tabs
+                                                            .iter()
+                                                            .find(|chart| chart.id == chart_id)
+                                                            .map(|chart| format!("{} {chart_id}", chart.title))
+                                                    })
+                                                    .unwrap_or_default(),
                                                 job.database_path,
                                                 job.series,
                                                 job.query,
