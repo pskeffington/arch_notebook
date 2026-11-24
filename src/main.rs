@@ -2622,7 +2622,8 @@ impl App {
             }
         };
         let previous_chart_id = self.case.active_chart_id;
-        if self.import_interchange_into_new_chart {
+        let import_into_new_chart = std::mem::take(&mut self.import_interchange_into_new_chart);
+        if import_into_new_chart {
             self.create_chart(false);
         }
         let created_chart_id =
