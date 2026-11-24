@@ -10709,14 +10709,21 @@ fn automation_run_matches_filter(
         .snapshot_id
         .and_then(|id| case.snapshots.iter().position(|snapshot| snapshot.id == id))
         .or(run.snapshot_index);
-    let destination_chart = snapshot_index
-        .and_then(|index| case.snapshots.get(index))
-        .and_then(|snapshot| snapshot.chart_id)
-        .and_then(|chart_id| {
-            case.chart_tabs
+    let destination_chart = run
+        .chart_id
+        .or_else(|| {
+            snapshot_index
+                .and_then(|index| case.snapshots.get(index))
+                .and_then(|snapshot| snapshot.chart_id)
+        })
+        .map(|chart_id| {
+            let title = case
+                .chart_tabs
                 .iter()
                 .find(|chart| chart.id == chart_id)
-                .map(|chart| format!("{} {chart_id}", chart.title))
+                .map(|chart| chart.title.as_str())
+                .unwrap_or_default();
+            format!("{title} {chart_id}")
         })
         .unwrap_or_default();
     let has_unreviewed_regression = if unreviewed_regressions_only {
@@ -13331,12 +13338,15 @@ impl eframe::App for App {
                                                 "{} {} {} {} {} {}",
                                                 job.name,
                                                 job.chart_id
-                                                    .and_then(|chart_id| {
-                                                        self.case
+                                                    .map(|chart_id| {
+                                                        let title = self
+                                                            .case
                                                             .chart_tabs
                                                             .iter()
                                                             .find(|chart| chart.id == chart_id)
-                                                            .map(|chart| format!("{} {chart_id}", chart.title))
+                                                            .map(|chart| chart.title.as_str())
+                                                            .unwrap_or_default();
+                                                        format!("{title} {chart_id}")
                                                     })
                                                     .unwrap_or_default(),
                                                 job.database_path,
