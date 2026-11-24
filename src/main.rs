@@ -24,7 +24,7 @@ use std::{
 };
 use uuid::Uuid;
 
-const CURRENT_CASE_FORMAT_VERSION: u32 = 15;
+const CURRENT_CASE_FORMAT_VERSION: u32 = 16;
 const SQL_QUERY_TIMEOUT_MINUTES: u64 = 15;
 const SQL_QUERY_TIMEOUT: Duration = Duration::from_secs(SQL_QUERY_TIMEOUT_MINUTES * 60);
 const SQLITE_LOCK_RETRY_ATTEMPTS: usize = 3;
@@ -907,6 +907,10 @@ struct CaseFile {
     active_chart_id: Uuid,
     #[serde(default = "default_chart_title")]
     active_chart_title: String,
+    #[serde(default = "default_chart_zoom")]
+    active_chart_zoom: f32,
+    #[serde(default)]
+    active_chart_pan: [f32; 2],
     #[serde(default)]
     chart_tabs: Vec<ChartDocument>,
     #[serde(default)]
@@ -931,8 +935,62 @@ struct CaseFile {
 struct ChartDocument {
     id: Uuid,
     title: String,
+    #[serde(default = "default_chart_zoom")]
+    zoom: f32,
+    #[serde(default)]
+    pan: [f32; 2],
     entities: Vec<Entity>,
     links: Vec<Link>,
+}
+
+fn default_chart_zoom() -> f32 {
+    1.0
+}
+
+fn clamp_chart_zoom(zoom: f32) -> f32 {
+    if zoom.is_finite() {
+        zoom.clamp(0.25, 3.0)
+    } else {
+        default_chart_zoom()
+    }
+}
+
+fn chart_pan_from_saved(pan: [f32; 2]) -> egui::Vec2 {
+    egui::Vec2::new(
+        if pan[0].is_finite() { pan[0] } else { 0.0 },
+        if pan[1].is_finite() { pan[1] } else { 0.0 },
+    )
+}
+
+fn normalize_chart_viewports(case: &mut CaseFile) {
+    case.active_chart_zoom = clamp_chart_zoom(case.active_chart_zoom);
+    case.active_chart_pan = [
+        if case.active_chart_pan[0].is_finite() {
+            case.active_chart_pan[0]
+        } else {
+            0.0
+        },
+        if case.active_chart_pan[1].is_finite() {
+            case.active_chart_pan[1]
+        } else {
+            0.0
+        },
+    ];
+    for chart in &mut case.chart_tabs {
+        chart.zoom = clamp_chart_zoom(chart.zoom);
+        chart.pan = [
+            if chart.pan[0].is_finite() {
+                chart.pan[0]
+            } else {
+                0.0
+            },
+            if chart.pan[1].is_finite() {
+                chart.pan[1]
+            } else {
+                0.0
+            },
+        ];
+    }
 }
 
 fn default_chart_title() -> String {
@@ -1499,6 +1557,8 @@ impl Default for App {
             Err(error) => format!("USER DATA SETUP FAILED · {error}"),
         };
         let saved_case_json = serde_json::to_string(&case).ok();
+        let initial_chart_zoom = clamp_chart_zoom(case.active_chart_zoom);
+        let initial_chart_pan = chart_pan_from_saved(case.active_chart_pan);
         Self {
             case,
             selected: None,
@@ -1508,8 +1568,8 @@ impl Default for App {
             show_timeline: false,
             timeline_range: None,
             timeline_brush_anchor: None,
-            chart_zoom: 1.0,
-            chart_pan: egui::Vec2::ZERO,
+            chart_zoom: initial_chart_zoom,
+            chart_pan: initial_chart_pan,
             chart_pan_origin: egui::Vec2::ZERO,
             chart_focus: None,
             chart_focus_link: None,
@@ -1833,6 +1893,8 @@ fn demo_case() -> CaseFile {
         links,
         active_chart_id: Uuid::new_v4(),
         active_chart_title: default_chart_title(),
+        active_chart_zoom: default_chart_zoom(),
+        active_chart_pan: [0.0, 0.0],
         chart_tabs: Vec::new(),
         snapshots: Vec::new(),
         automation_jobs: Vec::new(),
@@ -1846,6 +1908,12 @@ fn demo_case() -> CaseFile {
 }
 
 impl App {
+    fn sync_active_chart_viewport(&mut self) {
+        self.chart_zoom = clamp_chart_zoom(self.chart_zoom);
+        self.case.active_chart_zoom = self.chart_zoom;
+        self.case.active_chart_pan = [self.chart_pan.x, self.chart_pan.y];
+    }
+
     fn reset_chart_creation_drafts(&mut self) {
         self.new_link_from = None;
         self.new_link_to = None;
@@ -1867,21 +1935,26 @@ impl App {
             self.status = "CHART TAB NO LONGER EXISTS".into();
             return;
         };
+        self.sync_active_chart_viewport();
         let target = self.case.chart_tabs.remove(position);
         self.case.chart_tabs.push(ChartDocument {
             id: self.case.active_chart_id,
             title: std::mem::replace(&mut self.case.active_chart_title, target.title),
+            zoom: self.chart_zoom,
+            pan: [self.chart_pan.x, self.chart_pan.y],
             entities: std::mem::take(&mut self.case.entities),
             links: std::mem::take(&mut self.case.links),
         });
         self.case.active_chart_id = target.id;
+        self.case.active_chart_zoom = clamp_chart_zoom(target.zoom);
+        self.case.active_chart_pan = target.pan;
         self.case.entities = target.entities;
         self.case.links = target.links;
+        self.chart_zoom = self.case.active_chart_zoom;
+        self.chart_pan = chart_pan_from_saved(target.pan);
         self.reset_chart_creation_drafts();
         self.selected = None;
         self.selected_link = None;
-        self.chart_zoom = 1.0;
-        self.chart_pan = egui::Vec2::ZERO;
         self.chart_focus = None;
         self.chart_focus_link = None;
         self.chart_fit_entities = None;
@@ -1955,14 +2028,19 @@ impl App {
             (Vec::new(), Vec::new())
         };
         let old_title = self.case.active_chart_title.clone();
+        self.sync_active_chart_viewport();
         self.case.chart_tabs.push(ChartDocument {
             id: self.case.active_chart_id,
             title: old_title,
+            zoom: self.chart_zoom,
+            pan: [self.chart_pan.x, self.chart_pan.y],
             entities: std::mem::take(&mut self.case.entities),
             links: std::mem::take(&mut self.case.links),
         });
         self.case.active_chart_id = Uuid::new_v4();
         self.case.active_chart_title = format!("Chart {}", self.case.chart_tabs.len() + 1);
+        self.case.active_chart_zoom = default_chart_zoom();
+        self.case.active_chart_pan = [0.0, 0.0];
         self.case.entities = entities;
         self.case.links = links;
         self.page = WorkspacePage::Chart;
@@ -1970,7 +2048,7 @@ impl App {
         self.reset_chart_creation_drafts();
         self.selected = None;
         self.selected_link = None;
-        self.chart_zoom = 1.0;
+        self.chart_zoom = default_chart_zoom();
         self.chart_pan = egui::Vec2::ZERO;
         self.chart_focus = None;
         self.chart_focus_link = None;
@@ -2056,7 +2134,11 @@ impl App {
     }
 
     fn automation_context(case: CaseFile, case_path: &str) -> Self {
+        let mut case = case;
+        normalize_chart_viewports(&mut case);
         let saved_case_json = serde_json::to_string(&case).ok();
+        let chart_zoom = clamp_chart_zoom(case.active_chart_zoom);
+        let chart_pan = chart_pan_from_saved(case.active_chart_pan);
         Self {
             case,
             selected: None,
@@ -2066,8 +2148,8 @@ impl App {
             show_timeline: false,
             timeline_range: None,
             timeline_brush_anchor: None,
-            chart_zoom: 1.0,
-            chart_pan: egui::Vec2::ZERO,
+            chart_zoom,
+            chart_pan,
             chart_pan_origin: egui::Vec2::ZERO,
             chart_focus: None,
             chart_focus_link: None,
@@ -2195,7 +2277,10 @@ impl App {
     }
 
     fn current_case_json(&self) -> Option<String> {
-        serde_json::to_string(&self.case).ok()
+        let mut case = self.case.clone();
+        case.active_chart_zoom = clamp_chart_zoom(self.chart_zoom);
+        case.active_chart_pan = [self.chart_pan.x, self.chart_pan.y];
+        serde_json::to_string(&case).ok()
     }
 
     fn install_automation_schedule(&mut self) {
@@ -2368,6 +2453,7 @@ impl App {
     }
 
     fn save(&mut self) {
+        self.sync_active_chart_viewport();
         let path = Path::new(self.case_path.trim());
         let result = if path.as_os_str().is_empty() {
             Err("case path cannot be empty".to_string())
@@ -2386,6 +2472,7 @@ impl App {
     }
 
     fn save_as(&mut self) {
+        self.sync_active_chart_viewport();
         let path = Path::new(self.case_path_input.trim());
         let path_changed = path != Path::new(self.case_path.trim());
         let result = if path.as_os_str().is_empty() {
@@ -2426,6 +2513,8 @@ impl App {
                 let cleared_one_run_overrides =
                     !self.automation_run_parameter_text.trim().is_empty();
                 normalize_snapshot_database_paths(&mut c, &requested_path);
+                self.chart_zoom = clamp_chart_zoom(c.active_chart_zoom);
+                self.chart_pan = chart_pan_from_saved(c.active_chart_pan);
                 self.case = c;
                 self.reset_chart_creation_drafts();
                 self.reset_case_transient_analysis();
@@ -2446,8 +2535,6 @@ impl App {
                 self.selection_set_name.clear();
                 self.path_entity_filter.clear();
                 self.automation_run_parameter_text.clear();
-                self.chart_zoom = 1.0;
-                self.chart_pan = egui::Vec2::ZERO;
                 self.chart_pan_origin = egui::Vec2::ZERO;
                 self.chart_focus = None;
                 self.chart_focus_link = None;
@@ -8431,6 +8518,8 @@ impl App {
             links: Vec::new(),
             active_chart_id: Uuid::new_v4(),
             active_chart_title: default_chart_title(),
+            active_chart_zoom: default_chart_zoom(),
+            active_chart_pan: [0.0, 0.0],
             chart_tabs: Vec::new(),
             snapshots: Vec::new(),
             automation_jobs: Vec::new(),
@@ -20596,6 +20685,7 @@ fn sql_source_key(database_path: &str, series: &str) -> String {
 }
 
 fn normalize_snapshot_database_paths(case: &mut CaseFile, case_path: &str) {
+    normalize_chart_viewports(case);
     let mut source_key_rewrites = HashMap::new();
     let mut database_path_rewrites = HashMap::new();
     let mut ambiguous_database_paths = HashSet::new();

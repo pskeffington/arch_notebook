@@ -16,7 +16,7 @@ Create a job, preflight it, then run it in the app, from the CLI, or on a system
 
 ## Notebook
 
-- Work across multiple named chart tabs; create a blank chart or copy the current selection to a new chart.
+- Work across multiple named chart tabs; create a blank chart or copy the current selection to a new chart. Each chart retains its zoom and pan across tab switches and case reloads.
 - Chart entities and connections; inspect timelines, paths, records, and sources.
 - Import and export CSV/TSV, GraphML, and KML.
 - Save cases, SQL snapshots, jobs, and run history locally.
