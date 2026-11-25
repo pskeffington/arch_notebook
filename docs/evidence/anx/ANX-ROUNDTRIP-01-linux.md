@@ -22,7 +22,7 @@ The importer now assigns deterministic record-level source scopes only to repeat
 | Standalone label round trip | PASS | One label retains UUID, text, normalized position, font size, color, legend state, entries and truncation state. |
 | Rust tests, formatter, diff check and debug build | PASS | Commands and exit codes below. |
 | IBM schema/application compatibility | NOT RUN | No IBM XSD, Analyst's Notebook, or Chart Reader was available. This test does not establish vendor interoperability. |
-| Remote CI for this candidate | PENDING | The CI step has been added; this implementation candidate has not yet been pushed/dispatched. |
+| Remote CI for this candidate | PASS | [Run 45705884851](https://github.com/pskeffington/arch_notebook/actions/runs/45705884851) ran against `c95c4a66a70c37bf117a51c7d43b796c8e00c348`; Linux test/SQL/ANX acceptance, Arch packaging, Linux x86_64/ARM64 and macOS Intel/Apple Silicon all passed. |
 
 ## Commands and observed exit codes
 
@@ -49,4 +49,4 @@ The harness printed its JSON report to stdout; its default temporary directory w
 
 ## Limits and next action
 
-This evidence covers Arch Notebook's supported internal subset only. It does not validate IBM XSD conformance, IBM application rendering, unsupported ANX chart-item forms, or external transfer fidelity. Run the new Linux CI gate, then validate representative exported/imported files against an IBM-provided schema and application before claiming IBM interoperability. Preserve the separate native UI-00 gate before starting UI-01.
+This evidence covers Arch Notebook's supported internal subset only. It does not validate IBM XSD conformance, IBM application rendering, unsupported ANX chart-item forms, or external transfer fidelity. Validate representative exported/imported files against an IBM-provided schema and application before claiming IBM interoperability. Preserve the separate native UI-00 gate before starting UI-01.
