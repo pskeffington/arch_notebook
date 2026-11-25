@@ -9,6 +9,10 @@ The build workflow creates Linux x86_64 and ARM64 archives, an Arch Linux x86_64
 - No published GitHub Release was listed at review time. Native installation, interactive acceptance, scheduler execution and external IBM i2 import still require recorded evidence; macOS notarization is not established.
 - Keep the release unpublished until owner approval. Verify the actual release candidate's CI and checksums rather than relying on the historical baseline.
 
+## End-to-end application acceptance
+
+See [email analysis acceptance](docs/email-analysis-acceptance.md). The reported successful corpus run advances the functional milestone; exact-version runtime evidence, GUI/vector quality and release acceptance remain separate gates.
+
 ## Publish a version
 
 1. Set the new semantic version in `Cargo.toml` and update user-facing release notes.
