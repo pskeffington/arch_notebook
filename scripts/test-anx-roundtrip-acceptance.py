@@ -209,6 +209,34 @@ def main() -> int:
                     f"{expected.get(field)!r} -> {actual.get(field)!r}"
                 )
 
+    malformed_anx = work / "unsupported-shape.anx"
+    malformed_xml = (
+        "<?xml version='1.0' encoding='utf-16'?>"
+        "<Chart><ChartItemCollection><ChartItem Id='UNSUPPORTED-1' Label='Unsupported item'>"
+        "<End X='0' Y='0'><Entity EntityId='1' Identity='UNSUPPORTED-1' LabelIsIdentity='false'>"
+        "<UnsupportedShape /></Entity></End></ChartItem></ChartItemCollection></Chart>"
+    )
+    malformed_anx.write_bytes(malformed_xml.encode("utf-16"))
+    failure_case = work / "failure.case.json"
+    failure_case.write_text(json.dumps(source, indent=2) + "\n", encoding="utf-8")
+    failure_case_before = failure_case.read_bytes()
+    rejected = subprocess.run(
+        [str(binary), "--import-anx", str(failure_case), str(malformed_anx), "--json"],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if rejected.returncode == 0:
+        raise RuntimeError("ANX importer silently accepted an unsupported entity shape")
+    try:
+        rejection_report = json.loads(rejected.stdout)
+    except json.JSONDecodeError as error:
+        raise RuntimeError(f"rejected ANX import did not return JSON: {error}") from error
+    if "unsupported or missing shape" not in rejection_report.get("error", ""):
+        raise RuntimeError(f"unsupported shape failed for an unexpected reason: {rejection_report}")
+    if failure_case.read_bytes() != failure_case_before:
+        raise RuntimeError("failed ANX import changed the preexisting case file")
+
     report = {
         "schema_version": 1,
         "result": "PASS",
@@ -220,10 +248,13 @@ def main() -> int:
         "relationships": len(destination_links),
         "relationships_with_preserved_repeated_ids": len(repeated_ids),
         "labels": len(destination_labels),
+        "unsupported_shape_rejected": True,
+        "failed_import_case_unchanged": True,
         "local_sql_source_keys_included": exported.get("local_sql_source_keys_included"),
         "commands": [
             {"label": "anx_export", "exit_code": 0},
             {"label": "anx_import", "exit_code": 0},
+            {"label": "unsupported_shape_import", "exit_code": rejected.returncode},
         ],
         "ibm_schema_or_application_validation": "NOT PERFORMED",
         "work_dir": str(work),
