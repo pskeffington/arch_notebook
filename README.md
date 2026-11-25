@@ -33,6 +33,8 @@ Version 0.1.0 is under active development. The [2026-11-23 implementation baseli
 | CSV/TSV, GraphML and KML interchange | Implemented |
 | Historical SQL capture export to chart-import CSV/TSV, via desktop and CLI | Implemented |
 | Native IBM i2 ANX import/export | Not implemented |
+| End-to-end email analysis | Evidence package pending |
+| GUI and vector-rendering refinement | In progress |
 | Interactive host acceptance and external IBM import validation | Pending evidence |
 | Published release and macOS notarization | Not published / signing evidence pending |
 
@@ -41,6 +43,10 @@ Recent work added index and SQL-definition inspection, schema drift reporting in
 Native Linux host build and scheduler acceptance remain pending documented execution results. See [build and deployment](docs/build-and-deploy.md).
 
 Native-host acceptance uses fictional fixtures for snapshot comparison, schema drift, interchange and scheduled execution. External IBM i2 import fidelity and native ANX support remain outside the verified scope.
+
+## Real-world email analysis
+
+The email-analysis workflow supports correspondence-derived actor relationships and native graph visualization. End-to-end corpus processing is the current functional milestone; the [acceptance record](docs/email-analysis-acceptance.md) tracks technical evidence and GUI/vector-rendering refinements. Formal run verification remains pending.
 
 ## Start here
 
