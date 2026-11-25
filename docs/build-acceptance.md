@@ -73,3 +73,32 @@ These modified and untracked paths were present during acceptance. The worktree 
 3. Exercise SQL scheduling, cancellation, resume, and failure review with a disposable case on supported platforms.
 4. Validate ANX fixtures with IBM's XSD and application, then update the parity map with the results.
 5. Repeat the checks against a clean, immutable source commit before any release decision.
+
+## Feature-branch increment: reusable chart templates
+
+**Task / owner:** Continue Analyst's Notebook parity, especially adaptability; orchestrator-owned implementation.
+**Repository / branch:** `/home/sysadmin/github/arch_notebook` / `codex/analyst-notebook-parity`.
+**Baseline:** `204b114f9188d59ffeacf913a13acdd49cc593c2`.
+**Source commit:** `ada3a012b813ed75fd0f119b2976e53c5c3d3810` (`feat: add reusable chart templates`).
+**Changed paths:** `src/main.rs`, `docs/notebook-workflows.md`, `docs/analyst-notebook-parity.md`.
+**Scope:** Case-local chart templates store entity-type representations/colors and relationship vocabulary; apply styles to matching chart entities; provide defaults for manually added entities; persist the active template with chart tabs; allow template deletion. Import mapping and SQL query transformation are outside this increment.
+
+| Gate | Result | Evidence and limits |
+| --- | --- | --- |
+| Feature source recorded on non-main branch | PASS | Source commit above is on `codex/analyst-notebook-parity`; local only, not pushed. |
+| Formatting and diff validation | PASS | `cargo fmt --all -- --check` and `git diff --check` exited 0 against the feature source. |
+| Offline integration check | PASS | `CARGO_TARGET_DIR=/tmp/arch-notebook-target cargo check --locked --offline` exited 0. |
+| Debug build | PASS | `CARGO_TARGET_DIR=/tmp/arch-notebook-target cargo build --locked --offline` exited 0. |
+| Release build | PASS | `CARGO_TARGET_DIR=/tmp/arch-notebook-target cargo build --release --locked --offline` exited 0. |
+| Template runtime behavior / independent review | BLOCKED | No automated tests or independent review were run. Build evidence does not verify save, apply, delete, or chart-switch interactions in a running UI. |
+| IBM visual and ANX parity | BLOCKED | No IBM application or IBM XSD/fixture validation was available. |
+| Release authorization | BLOCKED | No publication or deployment was requested or performed. |
+
+The four build commands above completed with exit code 0. The artifacts were produced from the committed Rust source; documentation-only acceptance logging is committed separately. Their SHA-256 digests are:
+
+| Artifact | SHA-256 |
+| --- | --- |
+| `/tmp/arch-notebook-target/debug/arch-notebook` | `7956f64c8c8ca576eee056d91649042955543471f422a4b26f6534fe454e2442` |
+| `/tmp/arch-notebook-target/release/arch-notebook` | `b48b93962e3d3a5f265c9a7aa1da46eab73b91454a614e0b0b41b70b26949c53` |
+
+The product change is committed and reproducibly builds locally. Next acceptance work is interactive template workflow review, automated verification when requested, and IBM-backed interoperability review when the vendor artifacts are available.
