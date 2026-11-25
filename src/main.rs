@@ -2110,6 +2110,7 @@ struct App {
     timeline_range: Option<(i64, i64)>,
     timeline_brush_anchor: Option<i64>,
     chart_zoom: f32,
+    chart_canvas_aspect: f32,
     analysis_pane_width: f32,
     chart_pan: egui::Vec2,
     chart_pan_origin: egui::Vec2,
@@ -2725,6 +2726,7 @@ impl Default for App {
             timeline_range: None,
             timeline_brush_anchor: None,
             chart_zoom: initial_chart_zoom,
+            chart_canvas_aspect: 1.6,
             analysis_pane_width,
             chart_pan: initial_chart_pan,
             chart_pan_origin: egui::Vec2::ZERO,
@@ -3740,6 +3742,7 @@ impl App {
             timeline_range: None,
             timeline_brush_anchor: None,
             chart_zoom,
+            chart_canvas_aspect: 1.6,
             analysis_pane_width: load_analysis_pane_width(&app_data_dir()),
             chart_pan,
             chart_pan_origin: egui::Vec2::ZERO,
@@ -11904,10 +11907,8 @@ impl App {
                         .cmp(&self.case.entities[*b].name.to_lowercase())
                         .then_with(|| self.case.entities[*a].id.cmp(&self.case.entities[*b].id))
                 });
-                let aspect = 1.6_f32;
-                let columns = ((movable_count as f32 * aspect).sqrt().ceil() as usize)
-                    .clamp(1, movable_count);
-                let rows = movable_count.div_ceil(columns);
+                let (columns, rows) =
+                    grid_layout_dimensions(movable_count, self.chart_canvas_aspect);
                 for (rank, index) in order.into_iter().enumerate() {
                     let column = rank % columns;
                     let row = rank / columns;
@@ -13171,6 +13172,19 @@ fn entity_type_layout_positions(entities: &[Entity]) -> HashMap<Uuid, (f32, f32)
         }
     }
     positions
+}
+
+fn grid_layout_dimensions(entity_count: usize, chart_aspect: f32) -> (usize, usize) {
+    if entity_count == 0 {
+        return (0, 0);
+    }
+    let aspect = if chart_aspect.is_finite() {
+        chart_aspect.clamp(0.75, 2.5)
+    } else {
+        1.6
+    };
+    let columns = ((entity_count as f32 * aspect).sqrt().ceil() as usize).clamp(1, entity_count);
+    (columns, entity_count.div_ceil(columns))
 }
 
 fn linked_entities_for(
@@ -18488,6 +18502,7 @@ impl eframe::App for App {
                     }
                     });
                     let canvas_w=(ui.available_width()-right-8.0).max(320.0);
+                    self.chart_canvas_aspect = (canvas_w / avail.y.max(1.0)).clamp(0.75, 2.5);
                     ui.allocate_ui_with_layout(egui::vec2(canvas_w,avail.y),egui::Layout::top_down(egui::Align::Min),|ui|{
                         ui.set_min_size(egui::vec2(canvas_w,avail.y));
                         if self.page==WorkspacePage::Data {
@@ -40957,6 +40972,7 @@ mod tests {
     use super::{
         ConnectionFact, ConnectionSnapshot, Entity, EntityRepresentation, Uuid,
         canonical_connection, compare_snapshots, entity_type_layout_positions,
+        grid_layout_dimensions,
     };
 
     fn layout_entity(name: &str, kind: &str, position_locked: bool) -> Entity {
@@ -41080,5 +41096,18 @@ mod tests {
         assert!(alpha.0 > harbor.0);
         assert!(alpha.0 < zulu.0);
         assert_eq!(alpha.1, zulu.1);
+    }
+
+    #[test]
+    fn alphabetical_grid_tracks_the_chart_canvas_aspect() {
+        let (narrow_columns, narrow_rows) = grid_layout_dimensions(20, 0.75);
+        let (wide_columns, wide_rows) = grid_layout_dimensions(20, 2.5);
+        assert!(wide_columns > narrow_columns);
+        assert!(wide_rows < narrow_rows);
+        assert_eq!(grid_layout_dimensions(0, 2.5), (0, 0));
+        assert_eq!(
+            grid_layout_dimensions(5, f32::NAN),
+            grid_layout_dimensions(5, 1.6)
+        );
     }
 }
