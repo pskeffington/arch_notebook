@@ -22,3 +22,5 @@
 ## Email analysis follow-on — 2026-11-25
 
 The November 25 development record reports a successful end-to-end TRANS → Arch Notebook test using a Clinton email PDF dump, linking actors through correspondence and displaying the resulting graph. Prioritize the [acceptance evidence package](docs/email-analysis-acceptance.md), then GUI layout and vector rendering refinements. Preserve working ingestion and relationship semantics; use fictional fixtures for regression tests. Do not mark exact-revision runtime acceptance passed until artifacts are reviewed.
+
+Visual evidence reviewed: 2,813 displayed chart entities and 6,173 relationships. See `docs/email-analysis-acceptance.md` for source artifact hashes. Prioritize composite-contact normalization, extraction contamination, edge congestion and label layout; preserve source lineage. Do not publish raw screenshots containing local paths or correspondence identifiers.
