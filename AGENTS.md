@@ -21,4 +21,4 @@
 
 ## Email analysis follow-on — 2026-11-25
 
-The Clinton email workflow has a reported successful end-to-end run linking actors through email correspondence. Prioritize the [acceptance evidence package](docs/email-analysis-acceptance.md), then GUI layout and vector rendering refinements. Preserve working ingestion and relationship semantics; use fictional fixtures for regression tests. Do not mark exact-revision runtime acceptance passed until artifacts are reviewed.
+The November 25 development record reports a successful end-to-end TRANS → Arch Notebook test using a Clinton email PDF dump, linking actors through correspondence and displaying the resulting graph. Prioritize the [acceptance evidence package](docs/email-analysis-acceptance.md), then GUI layout and vector rendering refinements. Preserve working ingestion and relationship semantics; use fictional fixtures for regression tests. Do not mark exact-revision runtime acceptance passed until artifacts are reviewed.
