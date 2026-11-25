@@ -52,6 +52,14 @@ jobs:
             --installer scripts/install-linux-automation.sh \
             --source-sql archive/research.databases/sample_connections.sql \
             --sql-acceptance scripts/test-sql-automation-acceptance.py
+      - name: Verify isolated macOS LaunchAgent management
+        run: |
+          python3 scripts/test-macos-sql-scheduler-acceptance.py \
+            --binary target/debug/arch-notebook \
+            --installer scripts/install-macos-automation.sh \
+            --runner scripts/run-macos-automation.sh \
+            --source-sql archive/research.databases/sample_connections.sql \
+            --sql-acceptance scripts/test-sql-automation-acceptance.py
       - name: Verify ANX export and import round trip
         run: |
           python3 scripts/test-anx-roundtrip-acceptance.py \
