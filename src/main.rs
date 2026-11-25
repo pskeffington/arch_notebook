@@ -1335,6 +1335,10 @@ struct CaseFile {
     #[serde(default)]
     chart_tabs: Vec<ChartDocument>,
     #[serde(default)]
+    chart_templates: Vec<ChartTemplate>,
+    #[serde(default)]
+    active_chart_template: Option<Uuid>,
+    #[serde(default)]
     snapshots: Vec<ConnectionSnapshot>,
     #[serde(default)]
     automation_jobs: Vec<AutomationJob>,
@@ -1364,6 +1368,23 @@ struct ChartDocument {
     links: Vec<Link>,
     #[serde(default)]
     labels: Vec<ChartLabel>,
+    #[serde(default)]
+    template_id: Option<Uuid>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct ChartTemplate {
+    id: Uuid,
+    name: String,
+    entity_styles: Vec<ChartTemplateEntityStyle>,
+    relationship_types: Vec<String>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct ChartTemplateEntityStyle {
+    kind: String,
+    representation: EntityRepresentation,
+    color: [u8; 3],
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -3095,6 +3116,8 @@ fn demo_case() -> CaseFile {
         active_chart_zoom: default_chart_zoom(),
         active_chart_pan: [0.0, 0.0],
         chart_tabs: Vec::new(),
+        chart_templates: Vec::new(),
+        active_chart_template: None,
         snapshots: Vec::new(),
         automation_jobs: Vec::new(),
         automation_runs: Vec::new(),
@@ -3235,6 +3258,7 @@ impl App {
         };
         self.sync_active_chart_viewport();
         let target = self.case.chart_tabs.remove(position);
+        let outgoing_template = self.case.active_chart_template;
         self.case.chart_tabs.push(ChartDocument {
             id: self.case.active_chart_id,
             title: std::mem::replace(&mut self.case.active_chart_title, target.title),
@@ -3243,8 +3267,10 @@ impl App {
             entities: std::mem::take(&mut self.case.entities),
             links: std::mem::take(&mut self.case.links),
             labels: std::mem::take(&mut self.case.labels),
+            template_id: outgoing_template,
         });
         self.case.active_chart_id = target.id;
+        self.case.active_chart_template = target.template_id;
         self.case.active_chart_zoom = clamp_chart_zoom(target.zoom);
         self.case.active_chart_pan = target.pan;
         self.case.entities = target.entities;
@@ -3373,8 +3399,11 @@ impl App {
             entities: std::mem::take(&mut self.case.entities),
             links: std::mem::take(&mut self.case.links),
             labels: std::mem::take(&mut self.case.labels),
+            template_id: self.case.active_chart_template,
         });
+        let inherited_template = self.case.active_chart_template;
         self.case.active_chart_id = Uuid::new_v4();
+        self.case.active_chart_template = inherited_template;
         self.case.active_chart_title = format!("Chart {}", self.case.chart_tabs.len() + 1);
         self.case.active_chart_zoom = default_chart_zoom();
         self.case.active_chart_pan = [0.0, 0.0];
@@ -3437,8 +3466,11 @@ impl App {
             entities: std::mem::take(&mut self.case.entities),
             links: std::mem::take(&mut self.case.links),
             labels: std::mem::take(&mut self.case.labels),
+            template_id: self.case.active_chart_template,
         });
+        let inherited_template = self.case.active_chart_template;
         self.case.active_chart_id = Uuid::new_v4();
+        self.case.active_chart_template = inherited_template;
         self.case.entities = copied_entities;
         self.case.links = copied_links;
         self.case.labels = copied_labels;
@@ -3509,11 +3541,28 @@ impl App {
     }
 
     fn add_entity_with_type(&mut self, kind: &str) {
+        let template_style = self
+            .case
+            .active_chart_template
+            .and_then(|template_id| {
+                self.case
+                    .chart_templates
+                    .iter()
+                    .find(|template| template.id == template_id)
+            })
+            .and_then(|template| {
+                template
+                    .entity_styles
+                    .iter()
+                    .find(|style| style.kind.eq_ignore_ascii_case(kind))
+            });
         let item = Entity {
             id: Uuid::new_v4(),
             name: "New entity".into(),
             kind: kind.into(),
-            representation: EntityRepresentation::Icon,
+            representation: template_style
+                .map(|style| style.representation)
+                .unwrap_or(EntityRepresentation::Icon),
             detail: String::new(),
             attributes: Vec::new(),
             sql_attribute_values: Vec::new(),
@@ -3524,12 +3573,141 @@ impl App {
             x: 0.5,
             y: 0.5,
             position_locked: false,
-            color: [55, 128, 162],
+            color: template_style
+                .map(|style| style.color)
+                .unwrap_or([55, 128, 162]),
         };
         self.select_chart_entity(item.id, false);
         self.case.entities.push(item);
         self.duplicate_candidates.clear();
         self.invalidate_network_groups();
+    }
+
+    fn save_chart_template(&mut self) {
+        let mut entity_styles = Vec::new();
+        for entity in &self.case.entities {
+            if entity.kind.trim().is_empty()
+                || entity_styles
+                    .iter()
+                    .any(|style: &ChartTemplateEntityStyle| {
+                        style.kind.eq_ignore_ascii_case(entity.kind.trim())
+                    })
+            {
+                continue;
+            }
+            entity_styles.push(ChartTemplateEntityStyle {
+                kind: entity.kind.trim().chars().take(128).collect(),
+                representation: entity.representation,
+                color: entity.color,
+            });
+            if entity_styles.len() == 64 {
+                break;
+            }
+        }
+        let mut relationship_types = Vec::new();
+        for link in &self.case.links {
+            let label = link.label.trim();
+            if !label.is_empty()
+                && !relationship_types
+                    .iter()
+                    .any(|known: &String| known.eq_ignore_ascii_case(label))
+            {
+                relationship_types.push(label.chars().take(128).collect());
+            }
+            if relationship_types.len() == 64 {
+                break;
+            }
+        }
+        if entity_styles.is_empty() && relationship_types.is_empty() {
+            self.status = "ADD A TYPED ITEM BEFORE SAVING A CHART TEMPLATE".into();
+            return;
+        }
+        let name: String = self
+            .case
+            .active_chart_title
+            .trim()
+            .chars()
+            .take(64)
+            .collect();
+        if name.is_empty() {
+            self.status = "CHART TEMPLATE NEEDS A NAME".into();
+            return;
+        }
+        if let Some(existing) = self
+            .case
+            .chart_templates
+            .iter_mut()
+            .find(|template| template.name.eq_ignore_ascii_case(&name))
+        {
+            existing.entity_styles = entity_styles;
+            existing.relationship_types = relationship_types;
+            self.case.active_chart_template = Some(existing.id);
+            self.status = format!("CHART TEMPLATE UPDATED · {name}");
+            return;
+        }
+        if self.case.chart_templates.len() >= 32 {
+            self.status = "CASE TEMPLATE LIMIT REACHED · REMOVE A TEMPLATE BEFORE SAVING".into();
+            return;
+        }
+        let template = ChartTemplate {
+            id: Uuid::new_v4(),
+            name: name.clone(),
+            entity_styles,
+            relationship_types,
+        };
+        self.case.active_chart_template = Some(template.id);
+        self.case.chart_templates.push(template);
+        self.status = format!("CHART TEMPLATE SAVED · {name}");
+    }
+
+    fn apply_chart_template(&mut self, template_id: Uuid) {
+        let Some(template) = self
+            .case
+            .chart_templates
+            .iter()
+            .find(|template| template.id == template_id)
+            .cloned()
+        else {
+            self.status = "CHART TEMPLATE NO LONGER EXISTS".into();
+            return;
+        };
+        for entity in &mut self.case.entities {
+            if let Some(style) = template
+                .entity_styles
+                .iter()
+                .find(|style| style.kind.eq_ignore_ascii_case(&entity.kind))
+            {
+                entity.representation = style.representation;
+                entity.color = style.color;
+            }
+        }
+        self.case.active_chart_template = Some(template_id);
+        self.invalidate_network_groups();
+        self.status = format!("CHART TEMPLATE APPLIED · {}", template.name);
+    }
+
+    fn delete_chart_template(&mut self, template_id: Uuid) {
+        let Some(template) = self
+            .case
+            .chart_templates
+            .iter()
+            .find(|template| template.id == template_id)
+            .map(|template| template.name.clone())
+        else {
+            return;
+        };
+        self.case
+            .chart_templates
+            .retain(|template| template.id != template_id);
+        if self.case.active_chart_template == Some(template_id) {
+            self.case.active_chart_template = None;
+        }
+        for chart in &mut self.case.chart_tabs {
+            if chart.template_id == Some(template_id) {
+                chart.template_id = None;
+            }
+        }
+        self.status = format!("CHART TEMPLATE DELETED · {template}");
     }
 
     fn invalidate_network_groups(&mut self) {
@@ -11929,6 +12107,8 @@ impl App {
             active_chart_zoom: default_chart_zoom(),
             active_chart_pan: [0.0, 0.0],
             chart_tabs: Vec::new(),
+            chart_templates: Vec::new(),
+            active_chart_template: None,
             snapshots: Vec::new(),
             automation_jobs: Vec::new(),
             automation_runs: Vec::new(),
@@ -17268,6 +17448,20 @@ impl eframe::App for App {
                             link_types.push(label.to_owned());
                         }
                     }
+                    if let Some(template) = self
+                        .case
+                        .active_chart_template
+                        .and_then(|id| self.case.chart_templates.iter().find(|item| item.id == id))
+                    {
+                        for label in &template.relationship_types {
+                            if !link_types
+                                .iter()
+                                .any(|known| known.eq_ignore_ascii_case(label))
+                            {
+                                link_types.push(label.clone());
+                            }
+                        }
+                    }
                     link_types.sort_by_key(|label| label.to_ascii_lowercase());
                     ui.menu_button("＋ Link", |ui| {
                         if link_entities.len() < 2 {
@@ -17474,6 +17668,29 @@ impl eframe::App for App {
                         }
                     });
                     ui.menu_button("View…", |ui| {
+                        ui.menu_button("Chart templates", |ui| {
+                            if ui.button("Save current chart as template").clicked() {
+                                self.save_chart_template();
+                                ui.close_menu();
+                            }
+                            ui.separator();
+                            if self.case.chart_templates.is_empty() {
+                                ui.label("No templates saved in this case.");
+                            }
+                            let templates = self.case.chart_templates.clone();
+                            for template in templates {
+                                let selected = self.case.active_chart_template == Some(template.id);
+                                ui.horizontal(|ui| {
+                                    if ui.selectable_label(selected, &template.name).clicked() {
+                                        self.apply_chart_template(template.id);
+                                        ui.close_menu();
+                                    }
+                                    if ui.small_button("×").on_hover_text("Delete this case template").clicked() {
+                                        self.delete_chart_template(template.id);
+                                    }
+                                });
+                            }
+                        });
                         ui.label("Chart layout");
                         egui::ComboBox::from_id_salt("layout_mode")
                             .selected_text(match self.layout_mode {
@@ -37930,6 +38147,8 @@ fn create_import_design_package_cli(
             active_chart_zoom: default_chart_zoom(),
             active_chart_pan: [0.0, 0.0],
             chart_tabs: Vec::new(),
+            chart_templates: Vec::new(),
+            active_chart_template: None,
             snapshots: Vec::new(),
             automation_jobs: Vec::new(),
             automation_runs: Vec::new(),
