@@ -144,3 +144,5 @@ Next work: improve analyst-facing vector organization for larger relationship gr
 | Interactive chart review | BLOCKED | The changed layout controls were not exercised in a running GUI; no visual acceptance is claimed. |
 
 The alphabetical grid uses a fixed 1.6 chart aspect estimate because layout runs outside the rendering scope where the live chart rectangle is available. Review the result at different window sizes and consider passing the actual canvas aspect into the layout action in a later UI-focused change.
+
+**Follow-up verification:** Entity-type position calculation is now an isolated pure function with a regression test covering deterministic name order, type grouping, and exclusion of pinned entities from the generated positions. `cargo fmt --all -- --check`, `git diff --check`, offline tests (5 passed, 0 failed), offline `cargo check`, and offline debug build all exited 0. Interactive chart review remains BLOCKED.

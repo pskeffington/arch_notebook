@@ -11885,49 +11885,11 @@ impl App {
                 };
             }
             LayoutMode::EntityType => {
-                let mut groups: HashMap<String, Vec<usize>> = HashMap::new();
-                for (index, entity) in self.case.entities.iter().enumerate() {
-                    if !entity.position_locked {
-                        let kind = if entity.kind.trim().is_empty() {
-                            "(unspecified)".to_owned()
-                        } else {
-                            entity.kind.trim().to_lowercase()
-                        };
-                        groups.entry(kind).or_default().push(index);
-                    }
-                }
-                let mut groups = groups.into_iter().collect::<Vec<_>>();
-                groups.sort_by(|a, b| a.0.cmp(&b.0));
-                let group_count = groups.len();
-                let rows = groups
-                    .iter()
-                    .map(|(_, indices)| indices.len().div_ceil(3))
-                    .max()
-                    .unwrap_or(1);
-                let group_width = 0.84 / group_count.max(1) as f32;
-                for (group_index, (_, indices)) in groups.iter_mut().enumerate() {
-                    indices.sort_by(|a, b| {
-                        self.case.entities[*a]
-                            .name
-                            .to_lowercase()
-                            .cmp(&self.case.entities[*b].name.to_lowercase())
-                            .then_with(|| self.case.entities[*a].id.cmp(&self.case.entities[*b].id))
-                    });
-                    let columns = indices.len().min(3);
-                    for (rank, index) in indices.iter().enumerate() {
-                        let local_column = rank % 3;
-                        let local_row = rank / 3;
-                        self.case.entities[*index].x = if columns == 1 {
-                            0.08 + (group_index as f32 + 0.5) * group_width
-                        } else {
-                            let within_group = (local_column as f32 + 0.5) / columns as f32;
-                            0.08 + (group_index as f32 + within_group) * group_width
-                        };
-                        self.case.entities[*index].y = if rows == 1 {
-                            0.5
-                        } else {
-                            0.08 + local_row as f32 * 0.84 / (rows - 1) as f32
-                        };
+                let positions = entity_type_layout_positions(&self.case.entities);
+                for entity in &mut self.case.entities {
+                    if let Some((x, y)) = positions.get(&entity.id) {
+                        entity.x = *x;
+                        entity.y = *y;
                     }
                 }
             }
@@ -13160,6 +13122,55 @@ fn grouped_connections(
 
 fn connected_entity_counts(case: &CaseFile) -> HashMap<Uuid, usize> {
     connected_entity_counts_for_relationship(case, None)
+}
+
+fn entity_type_layout_positions(entities: &[Entity]) -> HashMap<Uuid, (f32, f32)> {
+    let mut groups: HashMap<String, Vec<&Entity>> = HashMap::new();
+    for entity in entities.iter().filter(|entity| !entity.position_locked) {
+        let kind = if entity.kind.trim().is_empty() {
+            "(unspecified)".to_owned()
+        } else {
+            entity.kind.trim().to_lowercase()
+        };
+        groups.entry(kind).or_default().push(entity);
+    }
+    let mut groups = groups.into_iter().collect::<Vec<_>>();
+    groups.sort_by(|first, second| first.0.cmp(&second.0));
+    let group_count = groups.len();
+    let rows = groups
+        .iter()
+        .map(|(_, entities)| entities.len().div_ceil(3))
+        .max()
+        .unwrap_or(1);
+    let group_width = 0.84 / group_count.max(1) as f32;
+    let mut positions = HashMap::new();
+    for (group_index, (_, entities)) in groups.iter_mut().enumerate() {
+        entities.sort_by(|first, second| {
+            first
+                .name
+                .to_lowercase()
+                .cmp(&second.name.to_lowercase())
+                .then_with(|| first.id.cmp(&second.id))
+        });
+        let columns = entities.len().min(3);
+        for (rank, entity) in entities.iter().enumerate() {
+            let local_column = rank % 3;
+            let local_row = rank / 3;
+            let x = if columns == 1 {
+                0.08 + (group_index as f32 + 0.5) * group_width
+            } else {
+                let within_group = (local_column as f32 + 0.5) / columns as f32;
+                0.08 + (group_index as f32 + within_group) * group_width
+            };
+            let y = if rows == 1 {
+                0.5
+            } else {
+                0.08 + local_row as f32 * 0.84 / (rows - 1) as f32
+            };
+            positions.insert(entity.id, (x, y));
+        }
+    }
+    positions
 }
 
 fn linked_entities_for(
@@ -40943,7 +40954,30 @@ fn main() -> eframe::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ConnectionFact, ConnectionSnapshot, canonical_connection, compare_snapshots};
+    use super::{
+        ConnectionFact, ConnectionSnapshot, Entity, EntityRepresentation, Uuid,
+        canonical_connection, compare_snapshots, entity_type_layout_positions,
+    };
+
+    fn layout_entity(name: &str, kind: &str, position_locked: bool) -> Entity {
+        Entity {
+            id: Uuid::new_v4(),
+            name: name.into(),
+            kind: kind.into(),
+            representation: EntityRepresentation::Icon,
+            detail: String::new(),
+            attributes: Vec::new(),
+            sql_attribute_values: Vec::new(),
+            sql_attribute_baselines: Vec::new(),
+            aliases: Vec::new(),
+            external_ids: Vec::new(),
+            merged_records: Vec::new(),
+            x: 0.5,
+            y: 0.5,
+            position_locked,
+            color: [55, 128, 162],
+        }
+    }
 
     #[test]
     fn undirected_connection_identity_is_endpoint_order_independent() {
@@ -41027,5 +41061,24 @@ mod tests {
         );
         let current = make_snapshot(format!("natural-v2:{new_key}"));
         assert!(compare_snapshots(&old, &current).is_empty());
+    }
+
+    #[test]
+    fn entity_type_layout_clusters_sorted_names_and_preserves_pins() {
+        let entities = vec![
+            layout_entity("Zulu", "PERSON", false),
+            layout_entity("Alpha", "PERSON", false),
+            layout_entity("Pinned", "PERSON", true),
+            layout_entity("Harbor", "LOCATION", false),
+        ];
+        let positions = entity_type_layout_positions(&entities);
+        assert_eq!(positions.len(), 3);
+        assert!(!positions.contains_key(&entities[2].id));
+        let alpha = positions[&entities[1].id];
+        let zulu = positions[&entities[0].id];
+        let harbor = positions[&entities[3].id];
+        assert!(alpha.0 > harbor.0);
+        assert!(alpha.0 < zulu.0);
+        assert_eq!(alpha.1, zulu.1);
     }
 }
