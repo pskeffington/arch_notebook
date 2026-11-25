@@ -6,6 +6,7 @@ The build workflow creates Linux x86_64 and ARM64 archives, an Arch Linux x86_64
 
 - Current Cargo version: 0.1.0.
 - Implementation baseline [2dadb09](https://github.com/pskeffington/arch_notebook/commit/2dadb09570e2a871489b2146f9ad1e1410b70929) passed [CI run 45269810987](https://github.com/pskeffington/arch_notebook/actions/runs/45269810987) on all five platform jobs. Release attachment was skipped as expected on a branch build.
+- The later feature-branch candidate `986f3e8` passed [CI run 45723413554](https://github.com/pskeffington/arch_notebook/actions/runs/45723413554), including SQL/ANX acceptance, isolated Linux and macOS scheduler installer checks, Linux x86_64/ARM64, Arch packaging, and macOS Intel/Apple Silicon. The LaunchAgent check stubs host commands and is not native macOS scheduler evidence.
 - No published GitHub Release was listed at review time. Native installation, interactive acceptance, scheduler execution and external IBM i2 import still require recorded evidence; macOS notarization is not established.
 - Keep the release unpublished until owner approval. Verify the actual release candidate's CI and checksums rather than relying on the historical baseline.
 

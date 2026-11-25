@@ -40,4 +40,4 @@ The scheduler harness calls `test-sql-automation-acceptance.py` with a retained 
 
 ## Limits and next action
 
-This is not evidence that a native timer fired, survived sleep/reboot, recovered a partially completed batch, or emitted records into a real user journal. Run the interactive systemd service/timer workflow on a native Linux host, then exercise cancellation and resume. macOS LaunchAgent behavior remains separate.
+This is not evidence that a native timer fired, survived sleep/reboot, recovered a partially completed batch, or emitted records into a real user journal. Run the interactive systemd service/timer workflow on a native Linux host, then exercise cancellation and resume. The macOS installer now has a separate [isolated LaunchAgent acceptance record](SQL-SCHED-02-macos-isolated.md); native macOS launchd behavior remains unverified.
