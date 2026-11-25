@@ -6359,10 +6359,19 @@ impl App {
                 }
             }
             links.retain(|link| link.ingest_source.as_deref() != Some(source_key.as_str()));
+            if let Some(progress) = self.automation_progress.as_ref()
+                && let Ok(mut progress) = progress.lock()
+            {
+                *progress = format!(
+                    "Applying SQL capture · {} usable relationships · {skipped_rows} blank-endpoint rows skipped",
+                    facts.len()
+                );
+            }
             let mut captured_entity_attributes: HashMap<(Uuid, String), (String, usize)> =
                 HashMap::new();
             let mut captured_entity_representations =
                 HashMap::<Uuid, (EntityRepresentation, usize)>::new();
+            let mut last_apply_progress = Instant::now();
             for (fact_index, fact) in facts.iter().enumerate() {
                 let row_number = fact_rows[fact_index];
                 if self.automation_cancel.load(Ordering::Acquire) {
@@ -6465,6 +6474,26 @@ impl App {
                     ingest_source: Some(source_key.clone()),
                     attributes: fact.attributes.clone(),
                 });
+                if last_apply_progress.elapsed() >= Duration::from_secs(1)
+                    && let Some(progress) = self.automation_progress.as_ref()
+                    && let Ok(mut progress) = progress.lock()
+                {
+                    *progress = format!(
+                        "Applying SQL capture · {} of {} relationships · {} chart entities",
+                        fact_index + 1,
+                        facts.len(),
+                        entities.len()
+                    );
+                    last_apply_progress = Instant::now();
+                }
+            }
+            if let Some(progress) = self.automation_progress.as_ref()
+                && let Ok(mut progress) = progress.lock()
+            {
+                *progress = format!(
+                    "Finalizing SQL snapshot · {} captured relationships · {skipped_rows} blank-endpoint rows skipped",
+                    facts.len()
+                );
             }
             let snapshot = ConnectionSnapshot {
                 id: Uuid::new_v4(),
