@@ -34,13 +34,13 @@ Version 0.1.0 is under active development. The [2026-11-23 implementation baseli
 | Historical SQL capture export to chart-import CSV/TSV, via desktop and CLI | Implemented |
 | Native IBM i2 ANX import/export | Not implemented |
 | Interactive host acceptance and external IBM import validation | Pending evidence |
-| Published release and macOS notarization | Pending owner approval / signing evidence |
+| Published release and macOS notarization | Not published / signing evidence pending |
 
 Recent work added index and SQL-definition inspection, schema drift reporting in SQL Review and automation, KML placemark import, and chart-import exports of selected historical captures. See [SQL ingestion and interchange](docs/sql-ingestion.md) for details. SQLite schema_version is a drift signal, not a complete schema fingerprint. CSV/TSV is the supported IBM i2 handoff; native ANX is not supported.
 
-**Linux host progress (2026-11-25):** The operator reports that automatic builds appear to be working on the Linux box. This is a preliminary host observation, separate from CI success; the host architecture, build logs, installed version and runtime/scheduler acceptance remain to be recorded.
+Native Linux host build and scheduler acceptance remain pending documented execution results. See [build and deployment](docs/build-and-deploy.md).
 
-Next acceptance pass: use the fictional fixtures to exercise baseline/current capture, schema and property drift, chart export/reimport, and scheduled capture on native hosts; record commands, host versions, output and defects. Then validate the CSV/TSV import in IBM i2 if an installation is available. Obtain the vendor ANX schema and fixtures before implementing ANX. CI success establishes build/package success, not interactive or production acceptance.
+Native-host acceptance uses fictional fixtures for snapshot comparison, schema drift, interchange and scheduled execution. External IBM i2 import fidelity and native ANX support remain outside the verified scope.
 
 ## Start here
 
