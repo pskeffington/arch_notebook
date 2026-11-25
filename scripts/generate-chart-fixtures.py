@@ -8,8 +8,7 @@ import hashlib
 import json
 import math
 import uuid
-import sys
-from collections import Counter, defaultdict, deque
+from collections import Counter, deque
 from pathlib import Path
 
 
@@ -17,20 +16,6 @@ NAMESPACE = uuid.UUID("9613f5a0-8893-4b2b-9c8c-2618f356b3df")
 CASE_FORMAT_VERSION = 19
 MAX_EDGES = 100_000
 ENTITY_KINDS = ("PERSON", "ORGANIZATION", "LOCATION", "ACCOUNT", "DEVICE")
-
-
-class Tee:
-    def __init__(self, *streams):
-        self.streams = streams
-
-    def write(self, value):
-        for stream in self.streams:
-            stream.write(value)
-        return len(value)
-
-    def flush(self):
-        for stream in self.streams:
-            stream.flush()
 
 
 def stable_id(kind: str, value: int | str) -> str:
@@ -138,7 +123,9 @@ def correctness_case() -> dict:
         }],
         "active_chart_id": stable_id("chart", "correctness"),
         "active_chart_title": "Correctness Chart",
-        "active_chart_zoom": 1.0,
+        # Zoom pushes the long edge endpoints beyond the normal viewport while
+        # its center curve still crosses the visible chart area.
+        "active_chart_zoom": 2.0,
         "active_chart_pan": [0.0, 0.0],
         "chart_tabs": [],
         "chart_templates": [],
@@ -321,7 +308,6 @@ def main() -> int:
     parser.add_argument("--nodes", type=int, default=1_000)
     parser.add_argument("--minimal-count", type=int, choices=(0, 1, 2), default=0)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--diagnostics", type=Path, help="append bounded chart-kernel timing samples as JSONL")
     args = parser.parse_args()
     if args.family == "correctness":
         case = correctness_case()
@@ -332,14 +318,6 @@ def main() -> int:
     if len(case["links"]) > MAX_EDGES:
         raise SystemExit(f"fixture exceeds edge cap ({MAX_EDGES})")
     summary = summarize(case, args.output)
-    if args.diagnostics:
-        original_stdout = sys.stdout
-        try:
-            with args.diagnostics.open("a", encoding="utf-8") as diagnostics_stream:
-                sys.stdout = Tee(original_stdout, diagnostics_stream)
-                print(json.dumps({"event": "fixture_generated", "family": args.family, "nodes_requested": args.nodes, **summary}, sort_keys=True))
-        finally:
-            sys.stdout = original_stdout
     print(json.dumps({"schema_version": 1, "family": args.family, "seed": "uuid5-fixed-namespace-v1", **summary}, sort_keys=True))
     return 0
 

@@ -51,10 +51,6 @@ jobs:
           python3 scripts/generate-chart-fixtures.py --family dense --nodes 10000 --output /tmp/dense-b.case.json
           cmp /tmp/dense-a.case.json /tmp/dense-b.case.json
           test "$(python3 -c 'import json; print(len(json.load(open("/tmp/dense-a.case.json")["links"])))')" -eq 100000
-      - name: Verify bounded diagnostics output
-        run: |
-          python3 scripts/run-chart-diagnostics.py --family sparse --nodes 100 --sample-count 2 --output /tmp/chart-diagnostics.json
-          python3 -c 'import json; d=json.load(open("/tmp/chart-diagnostics.json")); assert d["sample_count"] == 2 and d["measurement_type"] == "synthetic_cpu_kernel_timing_not_frame_rate"'
 
   desktop:
     name: ${{ matrix.name }}

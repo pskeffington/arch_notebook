@@ -15,7 +15,7 @@ use std::{
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, OnceLock,
         atomic::{AtomicBool, Ordering},
         mpsc::{self, Receiver},
     },
@@ -37,6 +37,46 @@ const SQL_ENTITY_LOOKUP_MAX_TOTAL_BYTES: usize = 64 * 1024;
 const SQL_ENTITY_LOOKUP_MAX_SCANNED_ROWS: usize = 1_000_000;
 const SQLITE_LOCK_RETRY_ATTEMPTS: usize = 3;
 const SQLITE_LOCK_RETRY_DELAY: Duration = Duration::from_secs(2);
+const MAX_CHART_DIAGNOSTIC_SAMPLES_PER_METRIC: usize = 64;
+
+static CHART_DIAGNOSTIC_PATH: OnceLock<Option<PathBuf>> = OnceLock::new();
+static CHART_DIAGNOSTIC_COUNTS: OnceLock<Mutex<HashMap<&'static str, usize>>> = OnceLock::new();
+
+fn record_chart_diagnostic(
+    metric: &'static str,
+    elapsed: Duration,
+    entity_count: usize,
+    relationship_count: usize,
+    label_count: usize,
+) {
+    let path = CHART_DIAGNOSTIC_PATH
+        .get_or_init(|| env::var_os("ARCH_NOTEBOOK_CHART_DIAGNOSTICS").map(PathBuf::from));
+    let Some(path) = path else { return };
+    let counts = CHART_DIAGNOSTIC_COUNTS.get_or_init(|| Mutex::new(HashMap::new()));
+    let Ok(mut counts) = counts.lock() else {
+        return;
+    };
+    let count = counts.entry(metric).or_default();
+    if *count >= MAX_CHART_DIAGNOSTIC_SAMPLES_PER_METRIC {
+        return;
+    }
+    *count += 1;
+    let event = serde_json::json!({
+        "schema_version": 1,
+        "event": "chart_cpu_timing",
+        "metric": metric,
+        "sample": *count,
+        "elapsed_ns": elapsed.as_nanos(),
+        "entities": entity_count,
+        "relationship_records": relationship_count,
+        "labels": label_count,
+        "sample_cap_per_metric": MAX_CHART_DIAGNOSTIC_SAMPLES_PER_METRIC,
+        "measurement_scope": "native_app_cpu_work_not_frame_presentation",
+    });
+    if let Ok(mut output) = fs::OpenOptions::new().create(true).append(true).open(path) {
+        let _ = writeln!(output, "{event}");
+    }
+}
 
 fn sqlite_capture_error(error: rusqlite::Error, retryable_lock: &AtomicBool) -> String {
     if matches!(
@@ -5753,8 +5793,7 @@ impl App {
         let parameters = parse_sql_parameters(&self.sql_parameter_text);
         let previously_selected = self
             .selected_link
-            .and_then(|index| self.case.links.get(index))
-            .cloned();
+            .and_then(|index| selected_link_identity(&self.case.links, index));
         let retryable_lock_error = AtomicBool::new(false);
         let mut skipped_endpoints = Vec::new();
         let result = (|| -> Result<(Vec<Entity>, Vec<Link>, ConnectionSnapshot), String> {
@@ -8911,8 +8950,7 @@ impl App {
         let case_path = self.case_path.clone();
         let selected_link_record = self
             .selected_link
-            .and_then(|index| self.case.links.get(index))
-            .cloned();
+            .and_then(|index| selected_link_identity(&self.case.links, index));
         let progress = Arc::new(Mutex::new("Opening the read-only SQL source".to_owned()));
         let worker_progress = Arc::clone(&progress);
         let (sender, receiver) = mpsc::channel();
@@ -8999,8 +9037,7 @@ impl App {
         let expected_disk_json = self.disk_case_json.clone().unwrap_or_default();
         let selected_link_record = self
             .selected_link
-            .and_then(|index| self.case.links.get(index))
-            .cloned();
+            .and_then(|index| selected_link_identity(&self.case.links, index));
         let batch_id = replay_run_id
             .is_none()
             .then(|| resume_batch_id.unwrap_or_else(Uuid::new_v4));
@@ -13809,76 +13846,54 @@ fn network_articulation_points(case: &CaseFile) -> Vec<(Uuid, usize)> {
     points
 }
 
-fn refreshed_link_index(links: &[Link], selected: &Link) -> Option<usize> {
-    if !selected.connection_id.is_empty() {
-        return links.iter().position(|link| {
-            link.connection_id == selected.connection_id
-                && link.ingest_source == selected.ingest_source
-        });
-    }
-    if selected.ingest_source.is_some() {
-        return links.iter().position(|link| {
-            link.ingest_source == selected.ingest_source
-                && link.from == selected.from
-                && link.to == selected.to
-                && link.label == selected.label
-                && link.directed == selected.directed
-        });
-    }
-    let equivalent = |link: &Link| {
-        link.ingest_source.is_none()
-            && link.from == selected.from
-            && link.to == selected.to
-            && link.connection_id == selected.connection_id
-            && link.label == selected.label
-            && link.date == selected.date
-            && link.confidence == selected.confidence
-            && link.directed == selected.directed
-            && link.notes == selected.notes
-            && link.source_reference == selected.source_reference
-    };
-    links.iter().position(equivalent)
+#[derive(Clone)]
+struct SelectedLinkIdentity {
+    record: Link,
+    duplicate_ordinal: usize,
 }
 
-#[cfg(test)]
-fn refreshed_link_index_at(links: &[Link], selected_index: usize) -> Option<usize> {
-    let selected = links.get(selected_index)?;
+fn same_link_identity(link: &Link, selected: &Link) -> bool {
     if !selected.connection_id.is_empty() {
-        return links.iter().position(|link| {
-            link.connection_id == selected.connection_id
-                && link.ingest_source == selected.ingest_source
-        });
+        return link.connection_id == selected.connection_id
+            && link.ingest_source == selected.ingest_source;
     }
     if selected.ingest_source.is_some() {
-        return links.iter().position(|link| {
-            link.ingest_source == selected.ingest_source
-                && link.from == selected.from
-                && link.to == selected.to
-                && link.label == selected.label
-                && link.directed == selected.directed
-        });
-    }
-    let equivalent = |link: &Link| {
-        link.ingest_source.is_none()
+        return link.ingest_source == selected.ingest_source
             && link.from == selected.from
             && link.to == selected.to
-            && link.connection_id == selected.connection_id
             && link.label == selected.label
-            && link.date == selected.date
-            && link.confidence == selected.confidence
-            && link.directed == selected.directed
-            && link.notes == selected.notes
-            && link.source_reference == selected.source_reference
-    };
-    let ordinal = links[..selected_index]
+            && link.directed == selected.directed;
+    }
+    link.ingest_source.is_none()
+        && link.from == selected.from
+        && link.to == selected.to
+        && link.connection_id == selected.connection_id
+        && link.label == selected.label
+        && link.date == selected.date
+        && link.confidence == selected.confidence
+        && link.directed == selected.directed
+        && link.notes == selected.notes
+        && link.source_reference == selected.source_reference
+}
+
+fn selected_link_identity(links: &[Link], selected_index: usize) -> Option<SelectedLinkIdentity> {
+    let record = links.get(selected_index)?.clone();
+    let duplicate_ordinal = links[..selected_index]
         .iter()
-        .filter(|link| equivalent(link))
+        .filter(|link| same_link_identity(link, &record))
         .count();
+    Some(SelectedLinkIdentity {
+        record,
+        duplicate_ordinal,
+    })
+}
+
+fn refreshed_link_index(links: &[Link], selected: &SelectedLinkIdentity) -> Option<usize> {
     links
         .iter()
         .enumerate()
-        .filter(|(_, link)| equivalent(link))
-        .nth(ordinal)
+        .filter(|(_, link)| same_link_identity(link, &selected.record))
+        .nth(selected.duplicate_ordinal)
         .map(|(index, _)| index)
 }
 
@@ -22102,6 +22117,7 @@ impl eframe::App for App {
                         let chart_zoom = self.chart_zoom;
                         let chart_pan = self.chart_pan;
                         let center=|e:&Entity|{let base=egui::pos2(rect.left()+e.x*rect.width(),rect.top()+e.y*rect.height());rect.center()+(base-rect.center())*chart_zoom+chart_pan};
+                        let chart_prepare_started = Instant::now();
                         let link_lanes = link_lane_offsets(&self.case);
                         let entity_indices: HashMap<Uuid, usize> = self
                             .case
@@ -22167,6 +22183,13 @@ impl eframe::App for App {
                         }
                         let (_, theme_line_event_frames) =
                             theme_line_event_assignments(&self.case.entities, &self.case.links);
+                        record_chart_diagnostic(
+                            "chart_prepare",
+                            chart_prepare_started.elapsed(),
+                            self.case.entities.len(),
+                            self.case.links.len(),
+                            self.case.labels.len(),
+                        );
                         for theme_line in self
                             .case
                             .entities
@@ -22652,6 +22675,7 @@ impl eframe::App for App {
                             egui::FontId::proportional(8.0),
                             muted,
                         );
+                        let navigator_started = Instant::now();
                         let map_point = |entity: &Entity| chart_navigator_map_point(entity, navigator_map);
                         for link in &self.case.links {
                             if let (Some(from), Some(to)) = (
@@ -22705,9 +22729,17 @@ impl eframe::App for App {
                             egui::Stroke::new(1.2_f32, cyan),
                             egui::StrokeKind::Inside,
                         );
+                        record_chart_diagnostic(
+                            "navigator_cpu_submit",
+                            navigator_started.elapsed(),
+                            self.case.entities.len(),
+                            self.case.links.len(),
+                            self.case.labels.len(),
+                        );
                         if response.clicked()
                             && let Some(pos) = response.interact_pointer_pos()
                         {
+                            let chart_picking_started = Instant::now();
                             if navigator_rect.contains(pos) {
                                 if navigator_map.contains(pos) {
                                     let x = ((pos.x - navigator_map.left())
@@ -22920,6 +22952,13 @@ impl eframe::App for App {
                                     self.clear_chart_entity_selection();
                                     self.selected_link = None;
                                 }
+                                record_chart_diagnostic(
+                                    "chart_pick",
+                                    chart_picking_started.elapsed(),
+                                    self.case.entities.len(),
+                                    self.case.links.len(),
+                                    self.case.labels.len(),
+                                );
                                 if response.double_clicked() && !self.link_creation_armed {
                                     if self.selected_link.is_some() {
                                         self.page = WorkspacePage::Data;
@@ -41219,7 +41258,7 @@ mod tests {
     }
 
     #[test]
-    fn anonymous_duplicate_selection_survives_preceding_record_removal() {
+    fn anonymous_duplicate_selection_tracks_shifts_and_clears_when_ambiguous() {
         let entity_a = Uuid::from_u128(10);
         let entity_b = Uuid::from_u128(11);
         let make_link = || super::Link {
@@ -41236,10 +41275,15 @@ mod tests {
             ingest_source: None,
             attributes: Vec::new(),
         };
-        let mut links = vec![make_link(), make_link(), make_link()];
-        assert_eq!(super::refreshed_link_index_at(&links, 2), Some(2));
+        let mut prefix = make_link();
+        prefix.label = "UNRELATED PREFIX".into();
+        let mut links = vec![prefix, make_link(), make_link(), make_link()];
+        let selected = super::selected_link_identity(&links, 3).expect("selected duplicate");
         links.remove(0);
-        assert_eq!(super::refreshed_link_index_at(&links, 1), Some(1));
+        assert_eq!(super::refreshed_link_index(&links, &selected), Some(2));
+        links.remove(0);
+        links.remove(0);
+        assert_eq!(super::refreshed_link_index(&links, &selected), None);
     }
 
     #[test]
@@ -41259,7 +41303,8 @@ mod tests {
             attributes: Vec::new(),
         };
         let links = vec![make_link("source-a"), make_link("source-b")];
-        assert_eq!(super::refreshed_link_index(&links, &links[1]), Some(1));
+        let selected = super::selected_link_identity(&links, 1).expect("selected record");
+        assert_eq!(super::refreshed_link_index(&links, &selected), Some(1));
     }
 
     #[test]
