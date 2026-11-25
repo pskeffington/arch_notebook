@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "generated_by": "scripts/generate-chart-fixtures.py",
+  "seed": "uuid5-fixed-namespace-v1",
+  "files": {
+    "correctness.case.json": {
+      "sha256": "0448e981087c4e17cccc4c566e411811619d47f8e47b755f439c466d2dddfeab",
+      "entities": 8,
+      "relationship_records": 8,
+      "weak_components": 5,
+      "directed_records": 5,
+      "undirected_records": 3,
+      "parallel_record_groups": 2,
+      "parallel_records_in_groups": 4,
+      "self_loop_records": 1
+    }
+  },
+  "workload_matrix": {
+    "sparse": {"nodes": [100, 1000, 10000], "relationships_per_node": 3},
+    "hub": {"nodes": [100, 1000, 10000], "relationships_per_node": 3},
+    "disconnected": {"nodes": [100, 1000, 10000], "relationships_per_node": 2, "includes_isolated_entity": true},
+    "dense": {"nodes": [100, 1000, 10000], "relationships": "min(10*N, 100000)", "cluster_width_cap": 100},
+    "max_relationships": 100000
+  }
+}

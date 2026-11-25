@@ -13825,7 +13825,7 @@ fn refreshed_link_index(links: &[Link], selected: &Link) -> Option<usize> {
                 && link.directed == selected.directed
         });
     }
-    links.iter().position(|link| {
+    let equivalent = |link: &Link| {
         link.ingest_source.is_none()
             && link.from == selected.from
             && link.to == selected.to
@@ -13836,7 +13836,71 @@ fn refreshed_link_index(links: &[Link], selected: &Link) -> Option<usize> {
             && link.directed == selected.directed
             && link.notes == selected.notes
             && link.source_reference == selected.source_reference
-    })
+    };
+    links.iter().position(equivalent)
+}
+
+#[cfg(test)]
+fn refreshed_link_index_at(links: &[Link], selected_index: usize) -> Option<usize> {
+    let selected = links.get(selected_index)?;
+    if !selected.connection_id.is_empty() {
+        return links.iter().position(|link| {
+            link.connection_id == selected.connection_id
+                && link.ingest_source == selected.ingest_source
+        });
+    }
+    if selected.ingest_source.is_some() {
+        return links.iter().position(|link| {
+            link.ingest_source == selected.ingest_source
+                && link.from == selected.from
+                && link.to == selected.to
+                && link.label == selected.label
+                && link.directed == selected.directed
+        });
+    }
+    let equivalent = |link: &Link| {
+        link.ingest_source.is_none()
+            && link.from == selected.from
+            && link.to == selected.to
+            && link.connection_id == selected.connection_id
+            && link.label == selected.label
+            && link.date == selected.date
+            && link.confidence == selected.confidence
+            && link.directed == selected.directed
+            && link.notes == selected.notes
+            && link.source_reference == selected.source_reference
+    };
+    let ordinal = links[..selected_index]
+        .iter()
+        .filter(|link| equivalent(link))
+        .count();
+    links
+        .iter()
+        .enumerate()
+        .filter(|(_, link)| equivalent(link))
+        .nth(ordinal)
+        .map(|(index, _)| index)
+}
+
+fn chart_navigator_map_point(entity: &Entity, map: egui::Rect) -> egui::Pos2 {
+    egui::pos2(
+        map.left() + entity.x.clamp(0.0, 1.0) * map.width(),
+        map.top() + entity.y.clamp(0.0, 1.0) * map.height(),
+    )
+}
+
+fn chart_navigator_viewport(
+    viewport: egui::Rect,
+    canvas: egui::Rect,
+    map: egui::Rect,
+) -> egui::Rect {
+    let project = |point: egui::Pos2| {
+        egui::pos2(
+            map.left() + (point.x - canvas.left()) / canvas.width() * map.width(),
+            map.top() + (point.y - canvas.top()) / canvas.height() * map.height(),
+        )
+    };
+    egui::Rect::from_min_max(project(viewport.min), project(viewport.max)).intersect(map)
 }
 
 fn connection_refresh_key(
@@ -22588,12 +22652,7 @@ impl eframe::App for App {
                             egui::FontId::proportional(8.0),
                             muted,
                         );
-                        let map_point = |entity: &Entity| {
-                            egui::pos2(
-                                navigator_map.left() + entity.x * navigator_map.width(),
-                                navigator_map.top() + entity.y * navigator_map.height(),
-                            )
-                        };
+                        let map_point = |entity: &Entity| chart_navigator_map_point(entity, navigator_map);
                         for link in &self.case.links {
                             if let (Some(from), Some(to)) = (
                                 entity_indices
@@ -22635,19 +22694,11 @@ impl eframe::App for App {
                             + (rect.min - rect.center() - self.chart_pan) / self.chart_zoom;
                         let visible_max = rect.center()
                             + (rect.max - rect.center() - self.chart_pan) / self.chart_zoom;
-                        let viewport_point = |point: egui::Pos2| {
-                            egui::pos2(
-                                navigator_map.left()
-                                    + ((point.x - rect.left()) / rect.width()) * navigator_map.width(),
-                                navigator_map.top()
-                                    + ((point.y - rect.top()) / rect.height()) * navigator_map.height(),
-                            )
-                        };
-                        let viewport = egui::Rect::from_two_pos(
-                            viewport_point(visible_min),
-                            viewport_point(visible_max),
-                        )
-                        .intersect(navigator_map);
+                        let viewport = chart_navigator_viewport(
+                            egui::Rect::from_two_pos(visible_min, visible_max),
+                            rect,
+                            navigator_map,
+                        );
                         p.rect_stroke(
                             viewport,
                             1.0,
@@ -40970,7 +41021,7 @@ fn main() -> eframe::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ConnectionFact, ConnectionSnapshot, Entity, EntityRepresentation, Uuid,
+        CaseFile, ConnectionFact, ConnectionSnapshot, Entity, EntityRepresentation, Uuid,
         canonical_connection, compare_snapshots, entity_type_layout_positions,
         grid_layout_dimensions,
     };
@@ -41109,5 +41160,125 @@ mod tests {
             grid_layout_dimensions(5, f32::NAN),
             grid_layout_dimensions(5, 1.6)
         );
+    }
+
+    #[test]
+    fn connection_curve_has_finite_endpoints_and_bends_for_parallel_lanes() {
+        let start = egui::pos2(40.0, 70.0);
+        let end = egui::pos2(240.0, 170.0);
+        let center = super::connection_curve_points(start, end, 0.0);
+        let upper_lane = super::connection_curve_points(start, end, 12.0);
+        assert_eq!(center.first(), Some(&start));
+        assert_eq!(center.last(), Some(&end));
+        assert_eq!(upper_lane.first(), Some(&start));
+        assert_eq!(upper_lane.last(), Some(&end));
+        assert!(
+            center
+                .iter()
+                .all(|point| point.x.is_finite() && point.y.is_finite())
+        );
+        assert_ne!(center[8], upper_lane[8]);
+    }
+
+    #[test]
+    fn chart_fit_ignores_missing_ids_and_returns_none_for_empty_selection() {
+        let mut entities = vec![layout_entity("A", "PERSON", false)];
+        entities[0].id = Uuid::from_u128(1);
+        entities[0].x = 0.2;
+        entities[0].y = 0.8;
+        let case = CaseFile {
+            format_version: 19,
+            title: "fixture".into(),
+            description: String::new(),
+            entities,
+            links: Vec::new(),
+            labels: Vec::new(),
+            active_chart_id: Uuid::from_u128(2),
+            active_chart_title: "fixture".into(),
+            active_chart_zoom: 1.0,
+            active_chart_pan: [0.0, 0.0],
+            chart_tabs: Vec::new(),
+            chart_templates: Vec::new(),
+            active_chart_template: None,
+            snapshots: Vec::new(),
+            automation_jobs: Vec::new(),
+            automation_runs: Vec::new(),
+            automation_batches: Vec::new(),
+            import_specifications: Vec::new(),
+            graphml_source_catalogs: Vec::new(),
+            saved_paths: Vec::new(),
+            selection_sets: Vec::new(),
+        };
+        let rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1000.0, 700.0));
+        assert!(super::chart_fit_transform(&case, &[], rect).is_none());
+        let result =
+            super::chart_fit_transform(&case, &[Uuid::from_u128(99), Uuid::from_u128(1)], rect)
+                .expect("one selected entity exists");
+        assert!(result.0.is_finite() && (0.25..=3.0).contains(&result.0));
+        assert!(result.1.x.is_finite() && result.1.y.is_finite());
+    }
+
+    #[test]
+    fn anonymous_duplicate_selection_survives_preceding_record_removal() {
+        let entity_a = Uuid::from_u128(10);
+        let entity_b = Uuid::from_u128(11);
+        let make_link = || super::Link {
+            from: entity_a,
+            to: entity_b,
+            connection_id: String::new(),
+            label: "DUPLICATE FIXTURE".into(),
+            date: "2025-01-01".into(),
+            confidence: 2,
+            directed: false,
+            notes: "same anonymous record".into(),
+            source_notes: String::new(),
+            source_reference: String::new(),
+            ingest_source: None,
+            attributes: Vec::new(),
+        };
+        let mut links = vec![make_link(), make_link(), make_link()];
+        assert_eq!(super::refreshed_link_index_at(&links, 2), Some(2));
+        links.remove(0);
+        assert_eq!(super::refreshed_link_index_at(&links, 1), Some(1));
+    }
+
+    #[test]
+    fn source_scoped_connection_ids_remain_distinct() {
+        let make_link = |source: &str| super::Link {
+            from: Uuid::from_u128(20),
+            to: Uuid::from_u128(21),
+            connection_id: "shared-id".into(),
+            label: "SHARED".into(),
+            date: "2025-01-01".into(),
+            confidence: 2,
+            directed: true,
+            notes: String::new(),
+            source_notes: String::new(),
+            source_reference: String::new(),
+            ingest_source: Some(source.into()),
+            attributes: Vec::new(),
+        };
+        let links = vec![make_link("source-a"), make_link("source-b")];
+        assert_eq!(super::refreshed_link_index(&links, &links[1]), Some(1));
+    }
+
+    #[test]
+    fn navigator_projection_clamps_entities_and_clips_offscreen_viewports() {
+        let entity = layout_entity("edge", "PERSON", false);
+        let map = egui::Rect::from_min_size(egui::pos2(10.0, 20.0), egui::vec2(100.0, 60.0));
+        let mut edge = entity;
+        edge.x = 1.2;
+        edge.y = -0.2;
+        assert_eq!(
+            super::chart_navigator_map_point(&edge, map),
+            map.right_top()
+        );
+        let canvas = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1000.0, 500.0));
+        let viewport =
+            egui::Rect::from_min_size(egui::pos2(-200.0, 100.0), egui::vec2(400.0, 300.0));
+        let projected = super::chart_navigator_viewport(viewport, canvas, map);
+        assert_eq!(projected.left(), map.left());
+        assert!(projected.right() <= map.right());
+        assert!(projected.top() >= map.top() && projected.bottom() <= map.bottom());
     }
 }

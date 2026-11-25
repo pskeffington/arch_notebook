@@ -17,6 +17,45 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
 jobs:
+  test:
+    name: Linux tests and chart fixture determinism
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Select stable Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup component add rustfmt
+      - name: Install Linux build libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes pkg-config libegl1-mesa-dev libgl1-mesa-dev \
+            libsqlite3-dev libwayland-dev libx11-dev libxcb1-dev libxcursor-dev libxkbcommon-dev
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Fetch locked dependencies
+        run: cargo fetch --locked
+      - name: Run unit and chart-kernel regression tests
+        run: cargo test --locked --offline
+      - name: Verify deterministic correctness fixture
+        run: |
+          python3 scripts/generate-chart-fixtures.py --family correctness --output /tmp/correctness-a.case.json
+          python3 scripts/generate-chart-fixtures.py --family correctness --output /tmp/correctness-b.case.json
+          cmp /tmp/correctness-a.case.json /tmp/correctness-b.case.json
+          python3 -m json.tool /tmp/correctness-a.case.json >/dev/null
+          cmp fixtures/chart/correctness.case.json /tmp/correctness-a.case.json
+      - name: Verify workload caps and determinism
+        run: |
+          python3 scripts/generate-chart-fixtures.py --family dense --nodes 10000 --output /tmp/dense-a.case.json
+          python3 scripts/generate-chart-fixtures.py --family dense --nodes 10000 --output /tmp/dense-b.case.json
+          cmp /tmp/dense-a.case.json /tmp/dense-b.case.json
+          test "$(python3 -c 'import json; print(len(json.load(open("/tmp/dense-a.case.json")["links"])))')" -eq 100000
+      - name: Verify bounded diagnostics output
+        run: |
+          python3 scripts/run-chart-diagnostics.py --family sparse --nodes 100 --sample-count 2 --output /tmp/chart-diagnostics.json
+          python3 -c 'import json; d=json.load(open("/tmp/chart-diagnostics.json")); assert d["sample_count"] == 2 and d["measurement_type"] == "synthetic_cpu_kernel_timing_not_frame_rate"'
+
   desktop:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.runner }}
