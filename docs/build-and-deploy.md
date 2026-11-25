@@ -112,3 +112,7 @@ ditto "$release_dir/Arch Notebook.app" "/Applications/Arch Notebook.app"
 The CI-provided `SHA256SUMS` covers the CI assets. A separately attached notarized macOS zip has its own `SHA256SUMS-macos-notarized`; verify it with `(cd "$release_dir" && shasum -a 256 --check SHA256SUMS-macos-notarized)` before extracting it.
 
 See [RELEASING.md](../RELEASING.md) for the version, tag, and signed macOS release process.
+
+## Native application acceptance
+
+The [email analysis acceptance record](email-analysis-acceptance.md) separates corpus ingestion and relationship visualization from GUI/vector rendering quality and exact-version runtime verification. Build/package results alone do not establish these gates.
