@@ -57,7 +57,7 @@ jobs:
           python3 scripts/generate-chart-fixtures.py --family dense --nodes 10000 --output /tmp/dense-a.case.json
           python3 scripts/generate-chart-fixtures.py --family dense --nodes 10000 --output /tmp/dense-b.case.json
           cmp /tmp/dense-a.case.json /tmp/dense-b.case.json
-          test "$(python3 -c 'import json; print(len(json.load(open("/tmp/dense-a.case.json")["links"])))')" -eq 100000
+          test "$(python3 -c 'import json; print(len(json.load(open("/tmp/dense-a.case.json"))["links"]))')" -eq 100000
 
   desktop:
     name: ${{ matrix.name }}
