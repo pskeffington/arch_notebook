@@ -171,13 +171,14 @@ try:
     arguments = shlex.split(line.partition("=")[2])
 except (OSError, ValueError):
     arguments = []
-if len(arguments) >= 5 and arguments[3] == "--export-chart-csv-dir":
-    print(arguments[4].replace("%%", "%").replace("$$", "$"))
-else:
+try:
+    export_dir_index = arguments.index("--export-chart-csv-dir")
+    print(arguments[export_dir_index + 1].replace("%%", "%").replace("$$", "$"))
+except (ValueError, IndexError):
     print("disabled")
 PY
 )"
-require_usable_connections="$(awk -F= '/^Environment=ARCH_NOTEBOOK_INSTALL_PREFLIGHT_REQUIRE_USABLE_CONNECTIONS=/ { print $2; exit }' "$config_home/systemd/user/$schedule_name.service")"
+require_usable_connections="$(awk -F= '/^Environment=ARCH_NOTEBOOK_INSTALL_PREFLIGHT_REQUIRE_USABLE_CONNECTIONS=/ { print $NF; exit }' "$config_home/systemd/user/$schedule_name.service")"
 case "$require_usable_connections" in
   true|false) ;;
   *) require_usable_connections="true" ;;

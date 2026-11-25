@@ -45,6 +45,13 @@ jobs:
           python3 scripts/test-sql-automation-acceptance.py \
             --binary target/debug/arch-notebook \
             --source-sql archive/research.databases/sample_connections.sql
+      - name: Verify Linux SQL scheduler unit management
+        run: |
+          python3 scripts/test-linux-sql-scheduler-acceptance.py \
+            --binary target/debug/arch-notebook \
+            --installer scripts/install-linux-automation.sh \
+            --source-sql archive/research.databases/sample_connections.sql \
+            --sql-acceptance scripts/test-sql-automation-acceptance.py
       - name: Verify ANX export and import round trip
         run: |
           python3 scripts/test-anx-roundtrip-acceptance.py \
