@@ -127,7 +127,39 @@ PY
     exit 0
   fi
   cadence="$(awk -F= '/^OnCalendar=/ { print $2; exit }' "$timer_file")"
-  if [[ "$cadence" == "*:0/15" ]]; then cadence="every 15 minutes"; fi
+  schedule_time=""
+  schedule_weekday=""
+  schedule_day=""
+  if [[ "$cadence" == "*:0/15" ]]; then
+    cadence="every 15 minutes"
+  elif [[ "$cadence" =~ ^\*-\*-\*[[:space:]]+(([01][0-9]|2[0-3]):[0-5][0-9]):00$ ]]; then
+    cadence="daily"
+    schedule_time="${BASH_REMATCH[1]}"
+  elif [[ "$cadence" =~ ^([[:alpha:]]{3})[[:space:]]+\*-\*-\*[[:space:]]+(([01][0-9]|2[0-3]):[0-5][0-9]):00$ ]]; then
+    cadence="weekly"
+    schedule_time="${BASH_REMATCH[2]}"
+    case "${BASH_REMATCH[1]}" in
+      Sun) schedule_weekday="Sunday" ;;
+      Mon) schedule_weekday="Monday" ;;
+      Tue) schedule_weekday="Tuesday" ;;
+      Wed) schedule_weekday="Wednesday" ;;
+      Thu) schedule_weekday="Thursday" ;;
+      Fri) schedule_weekday="Friday" ;;
+      Sat) schedule_weekday="Saturday" ;;
+    esac
+  elif [[ "$cadence" =~ ^\*-\*-([0-2][0-9])[[:space:]]+(([01][0-9]|2[0-3]):[0-5][0-9]):00$ ]]; then
+    cadence="monthly"
+    schedule_day="$((10#${BASH_REMATCH[1]}))"
+    schedule_time="${BASH_REMATCH[2]}"
+  elif [[ "$cadence" == "monthly" ]]; then
+    schedule_time="00:00"
+    schedule_day="1"
+  elif [[ "$cadence" == "weekly" ]]; then
+    schedule_time="00:00"
+    schedule_weekday="Monday"
+  elif [[ "$cadence" == "daily" ]]; then
+    schedule_time="00:00"
+  fi
   if [[ -z "$cadence" ]]; then cadence="unknown cadence"; fi
   chart_export_dir="$(python3 - "$config_home/systemd/user/$schedule_name.service" <<'PY'
 import shlex
@@ -145,6 +177,11 @@ else:
     print("disabled")
 PY
 )"
+require_usable_connections="$(awk -F= '/^Environment=ARCH_NOTEBOOK_INSTALL_PREFLIGHT_REQUIRE_USABLE_CONNECTIONS=/ { print $2; exit }' "$config_home/systemd/user/$schedule_name.service")"
+case "$require_usable_connections" in
+  true|false) ;;
+  *) require_usable_connections="true" ;;
+esac
   if command -v systemctl >/dev/null 2>&1; then
     enabled=0
     active=0
@@ -164,10 +201,17 @@ PY
   fi
   if [[ $# -eq 2 ]]; then
     printf 'Arch Notebook SQL schedule for %s: %s; %s.\n' "$case_path" "$cadence" "$state"
+    if [[ -n "$schedule_time" ]]; then printf 'Schedule time: %s\n' "$schedule_time"; fi
+    if [[ -n "$schedule_weekday" ]]; then printf 'Schedule weekday: %s\n' "$schedule_weekday"; fi
+    if [[ -n "$schedule_day" ]]; then printf 'Schedule day: %s\n' "$schedule_day"; fi
   else
     echo "Legacy Arch Notebook SQL schedule: $cadence; $state."
+    if [[ -n "$schedule_time" ]]; then printf 'Schedule time: %s\n' "$schedule_time"; fi
+    if [[ -n "$schedule_weekday" ]]; then printf 'Schedule weekday: %s\n' "$schedule_weekday"; fi
+    if [[ -n "$schedule_day" ]]; then printf 'Schedule day: %s\n' "$schedule_day"; fi
   fi
   printf 'Chart CSV export directory: %s\n' "$chart_export_dir"
+  printf 'Schedule install preflight requires usable connections: %s\n' "$require_usable_connections"
   exit 0
 fi
 
@@ -178,13 +222,51 @@ fi
 
 schedule="${ARCH_NOTEBOOK_AUTOMATION_SCHEDULE:-hourly}"
 schedule_label="$schedule"
+schedule_time="${ARCH_NOTEBOOK_AUTOMATION_TIME:-00:00}"
+schedule_weekday="${ARCH_NOTEBOOK_AUTOMATION_WEEKDAY:-1}"
+schedule_day="${ARCH_NOTEBOOK_AUTOMATION_MONTH_DAY:-1}"
 case "$schedule" in
   15m)
     schedule='*:0/15'
     schedule_label="every 15 minutes"
     ;;
-  hourly|daily|weekly) ;;
-  *) echo "ARCH_NOTEBOOK_AUTOMATION_SCHEDULE must be 15m, hourly, daily, or weekly." >&2; exit 2 ;;
+  daily|weekly|monthly)
+    if [[ ! "$schedule_time" =~ ^([01][0-9]|2[0-3]):[0-5][0-9]$ ]]; then
+      echo "ARCH_NOTEBOOK_AUTOMATION_TIME must use 24-hour HH:MM format." >&2
+      exit 2
+    fi
+    case "$schedule" in
+      daily) schedule="*-*-* ${schedule_time}:00" ;;
+      weekly)
+        if [[ ! "$schedule_weekday" =~ ^[0-6]$ ]]; then
+          echo "ARCH_NOTEBOOK_AUTOMATION_WEEKDAY must be 0 (Sunday) through 6 (Saturday)." >&2
+          exit 2
+        fi
+        case "$schedule_weekday" in
+          0) weekday_name="Sun" ; weekday_label="Sunday" ;;
+          1) weekday_name="Mon" ; weekday_label="Monday" ;;
+          2) weekday_name="Tue" ; weekday_label="Tuesday" ;;
+          3) weekday_name="Wed" ; weekday_label="Wednesday" ;;
+          4) weekday_name="Thu" ; weekday_label="Thursday" ;;
+          5) weekday_name="Fri" ; weekday_label="Friday" ;;
+          6) weekday_name="Sat" ; weekday_label="Saturday" ;;
+        esac
+        schedule="${weekday_name} *-*-* ${schedule_time}:00"
+        schedule_label="weekly on ${weekday_label} at ${schedule_time}"
+        ;;
+      monthly)
+        if [[ ! "$schedule_day" =~ ^([1-9]|1[0-9]|2[0-8])$ ]]; then
+          echo "ARCH_NOTEBOOK_AUTOMATION_MONTH_DAY must be between 1 and 28." >&2
+          exit 2
+        fi
+        printf -v schedule_day_padded '%02d' "$schedule_day"
+        schedule="*-*-${schedule_day_padded} ${schedule_time}:00"
+        schedule_label="monthly on day ${schedule_day} at ${schedule_time}"
+        ;;
+    esac
+    ;;
+  hourly) ;;
+  *) echo "ARCH_NOTEBOOK_AUTOMATION_SCHEDULE must be 15m, hourly, daily, weekly, or monthly." >&2; exit 2 ;;
 esac
 
 home_dir="${HOME:?HOME must be set}"
@@ -256,8 +338,21 @@ if ! command -v systemctl >/dev/null 2>&1; then
 fi
 
 # One locked preflight checks that enabled jobs exist and their queries work.
-if ! "$binary" --check-enabled-job-queries "$case_file" --require-usable; then
-  echo "One or more enabled SQL jobs failed preflight or returned no usable connections; fix the job, database, or query before installing the timer." >&2
+require_usable_connections="${ARCH_NOTEBOOK_REQUIRE_USABLE_CONNECTIONS:-true}"
+case "$require_usable_connections" in
+  true|false) ;;
+  *) echo "ARCH_NOTEBOOK_REQUIRE_USABLE_CONNECTIONS must be true or false." >&2; exit 2 ;;
+esac
+preflight_args=(--check-enabled-job-queries "$case_file" --progress)
+if [[ "$require_usable_connections" == "true" ]]; then
+  preflight_args+=(--require-usable)
+fi
+if ! "$binary" "${preflight_args[@]}"; then
+  if [[ "$require_usable_connections" == "true" ]]; then
+    echo "One or more enabled SQL jobs failed preflight or returned no usable connections; fix the job, database, or query before installing the timer." >&2
+  else
+    echo "One or more enabled SQL jobs failed query preflight; fix the job, database, or query before installing the timer." >&2
+  fi
   exit 1
 fi
 
@@ -269,12 +364,12 @@ esac
 unit_dir="$config_home/systemd/user"
 mkdir -p "$unit_dir"
 
-python3 - "$unit_dir" "$binary" "$case_file" "$schedule" "$schedule_name" "$chart_export_dir" <<'PY'
+python3 - "$unit_dir" "$binary" "$case_file" "$schedule" "$schedule_name" "$chart_export_dir" "$require_usable_connections" <<'PY'
 import os
 import sys
 import tempfile
 
-unit_dir, binary, case_file, schedule, schedule_name, chart_export_dir = sys.argv[1:]
+unit_dir, binary, case_file, schedule, schedule_name, chart_export_dir, require_usable_connections = sys.argv[1:]
 
 def quote_exec_arg(value: str) -> str:
     if any(ord(character) < 32 or ord(character) == 127 for character in value):
@@ -291,10 +386,11 @@ Description=Run Arch Notebook SQL automation jobs
 Type=oneshot
 TimeoutStartSec=infinity
 Environment=ARCH_NOTEBOOK_AUTOMATION_TRIGGER=scheduled
+Environment=ARCH_NOTEBOOK_INSTALL_PREFLIGHT_REQUIRE_USABLE_CONNECTIONS={require_usable_connections}
 ExecStart={command}
-""".format(command=" ".join(map(quote_exec_arg, [
-    # Scheduler output goes to the journal; keep it to per-job summaries.
-    binary, "--run-enabled-jobs", case_file,
+""".format(require_usable_connections=require_usable_connections, command=" ".join(map(quote_exec_arg, [
+    # Scheduler output goes to the journal; report job boundaries and long-query heartbeats.
+    binary, "--run-enabled-jobs", case_file, "--progress",
     *( ["--export-chart-csv-dir", chart_export_dir] if chart_export_dir else [] ),
 ])))
 
@@ -339,5 +435,6 @@ systemctl --user daemon-reload
 systemctl --user enable --now "$schedule_name.timer"
 systemctl --user restart "$schedule_name.timer"
 echo "Enabled $schedule_label Arch Notebook automation for: $case_file"
+echo "Schedule install preflight requires usable connections: $require_usable_connections"
 echo "Check status with: systemctl --user status $schedule_name.timer"
 echo "View run output with: journalctl --user -u $schedule_name.service"

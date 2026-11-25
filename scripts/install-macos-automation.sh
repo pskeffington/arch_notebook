@@ -110,9 +110,30 @@ plist_path, label, domain, case_path = sys.argv[1:]
 with open(plist_path, "rb") as source:
     settings = plistlib.load(source)
 seconds = settings.get("StartInterval")
-cadence = {900: "every 15 minutes", 3600: "hourly", 86400: "daily", 604800: "weekly"}.get(seconds, f"every {seconds} seconds")
+calendar = settings.get("StartCalendarInterval")
+schedule_day = None
+schedule_weekday = None
+if isinstance(calendar, dict) and isinstance(calendar.get("Day"), int):
+    cadence = "monthly"
+    schedule_day = calendar["Day"]
+    schedule_time = f"{calendar.get('Hour', 0):02d}:{calendar.get('Minute', 0):02d}"
+elif isinstance(calendar, dict) and isinstance(calendar.get("Weekday"), int):
+    cadence = "weekly"
+    schedule_weekday = calendar["Weekday"]
+    schedule_time = f"{calendar.get('Hour', 0):02d}:{calendar.get('Minute', 0):02d}"
+elif isinstance(calendar, dict) and "Hour" in calendar and "Minute" in calendar:
+    cadence = "daily"
+    schedule_time = f"{calendar['Hour']:02d}:{calendar['Minute']:02d}"
+else:
+    cadence = {900: "every 15 minutes", 3600: "hourly", 86400: "daily", 604800: "weekly"}.get(seconds, f"every {seconds} seconds")
+    schedule_time = "00:00" if seconds in (86400, 604800) else None
 arguments = settings.get("ProgramArguments", [])
 chart_export_dir = arguments[4] if len(arguments) >= 5 else "disabled"
+require_usable_connections = settings.get("EnvironmentVariables", {}).get(
+    "ARCH_NOTEBOOK_INSTALL_PREFLIGHT_REQUIRE_USABLE_CONNECTIONS", "true"
+)
+if require_usable_connections not in ("true", "false"):
+    require_usable_connections = "true"
 loaded = subprocess.run(
     ["launchctl", "print", f"{domain}/{label}"],
     stdout=subprocess.DEVNULL,
@@ -121,7 +142,14 @@ loaded = subprocess.run(
 ).returncode == 0
 state = "loaded" if loaded else "configured but not loaded in the user LaunchAgent domain"
 print(f"Arch Notebook SQL schedule for {case_path}: {cadence}; {state}.")
+if schedule_time is not None:
+    print(f"Schedule time: {schedule_time}")
+if schedule_weekday is not None and 0 <= schedule_weekday <= 6:
+    print(f"Schedule weekday: {['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][schedule_weekday]}")
+if schedule_day is not None:
+    print(f"Schedule day: {schedule_day}")
 print(f"Chart CSV export directory: {chart_export_dir}")
+print(f"Schedule install preflight requires usable connections: {require_usable_connections}")
 PY
   exit $?
 fi
@@ -132,9 +160,37 @@ if [[ $# -lt 1 || $# -gt 2 ]]; then
 fi
 
 schedule="${ARCH_NOTEBOOK_AUTOMATION_SCHEDULE:-hourly}"
+schedule_weekday="${ARCH_NOTEBOOK_AUTOMATION_WEEKDAY:-1}"
+schedule_day="${ARCH_NOTEBOOK_AUTOMATION_MONTH_DAY:-1}"
 case "$schedule" in
-  15m|hourly|daily|weekly) ;;
-  *) echo "ARCH_NOTEBOOK_AUTOMATION_SCHEDULE must be 15m, hourly, daily, or weekly." >&2; exit 2 ;;
+  daily|weekly|monthly)
+    schedule_time="${ARCH_NOTEBOOK_AUTOMATION_TIME:-00:00}"
+    if [[ ! "$schedule_time" =~ ^([01][0-9]|2[0-3]):[0-5][0-9]$ ]]; then
+      echo "ARCH_NOTEBOOK_AUTOMATION_TIME must use 24-hour HH:MM format." >&2
+      exit 2
+    fi
+    if [[ "$schedule" == "monthly" && ! "$schedule_day" =~ ^([1-9]|1[0-9]|2[0-8])$ ]]; then
+      echo "ARCH_NOTEBOOK_AUTOMATION_MONTH_DAY must be between 1 and 28." >&2
+      exit 2
+    fi
+    if [[ "$schedule" == "weekly" ]]; then
+      if [[ ! "$schedule_weekday" =~ ^[0-6]$ ]]; then
+        echo "ARCH_NOTEBOOK_AUTOMATION_WEEKDAY must be 0 (Sunday) through 6 (Saturday)." >&2
+        exit 2
+      fi
+      case "$schedule_weekday" in
+        0) weekday_label="Sunday" ;;
+        1) weekday_label="Monday" ;;
+        2) weekday_label="Tuesday" ;;
+        3) weekday_label="Wednesday" ;;
+        4) weekday_label="Thursday" ;;
+        5) weekday_label="Friday" ;;
+        6) weekday_label="Saturday" ;;
+      esac
+    fi
+    ;;
+  15m|hourly) schedule_time="00:00" ;;
+  *) echo "ARCH_NOTEBOOK_AUTOMATION_SCHEDULE must be 15m, hourly, daily, weekly, or monthly." >&2; exit 2 ;;
 esac
 
 case_file="$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"
@@ -176,8 +232,21 @@ if [[ -n "$chart_export_dir" ]]; then
   chart_export_dir="$(cd "$chart_export_dir" && pwd -P)"
 fi
 # One locked preflight checks that enabled jobs exist and their queries work.
-if ! "$binary" --check-enabled-job-queries "$case_file" --require-usable; then
-  echo "One or more enabled SQL jobs failed preflight or returned no usable connections; fix the job, database, or query before installing the LaunchAgent." >&2
+require_usable_connections="${ARCH_NOTEBOOK_REQUIRE_USABLE_CONNECTIONS:-true}"
+case "$require_usable_connections" in
+  true|false) ;;
+  *) echo "ARCH_NOTEBOOK_REQUIRE_USABLE_CONNECTIONS must be true or false." >&2; exit 2 ;;
+esac
+preflight_args=(--check-enabled-job-queries "$case_file" --progress)
+if [[ "$require_usable_connections" == "true" ]]; then
+  preflight_args+=(--require-usable)
+fi
+if ! "$binary" "${preflight_args[@]}"; then
+  if [[ "$require_usable_connections" == "true" ]]; then
+    echo "One or more enabled SQL jobs failed preflight or returned no usable connections; fix the job, database, or query before installing the LaunchAgent." >&2
+  else
+    echo "One or more enabled SQL jobs failed query preflight; fix the job, database, or query before installing the LaunchAgent." >&2
+  fi
   exit 1
 fi
 
@@ -196,22 +265,42 @@ log_dir="$HOME/Library/Logs/ArchNotebook/$schedule_id"
 plist_path="$agent_dir/$label.plist"
 mkdir -p "$agent_dir" "$log_dir"
 
-candidate_plist="$(python3 - "$plist_path" "$runner" "$binary" "$case_file" "$log_dir" "$label" "$schedule" "$chart_export_dir" <<'PY'
+candidate_plist="$(python3 - "$plist_path" "$runner" "$binary" "$case_file" "$log_dir" "$label" "$schedule" "$chart_export_dir" "$schedule_time" "$schedule_weekday" "$schedule_day" "$require_usable_connections" <<'PY'
 import os
 import plistlib
 import sys
 import tempfile
 
-destination, runner, binary, case_file, log_dir, label, schedule, chart_export_dir = sys.argv[1:]
-interval_seconds = {"15m": 900, "hourly": 3600, "daily": 86400, "weekly": 604800}[schedule]
+destination, runner, binary, case_file, log_dir, label, schedule, chart_export_dir, schedule_time, schedule_weekday, schedule_day, require_usable_connections = sys.argv[1:]
 payload = {
     "Label": label,
     "ProgramArguments": [runner, binary, case_file, log_dir] + ([chart_export_dir] if chart_export_dir else []),
     "RunAtLoad": True,
-    "StartInterval": interval_seconds,
     "StandardOutPath": "/dev/null",
     "StandardErrorPath": "/dev/null",
+    "EnvironmentVariables": {
+        "ARCH_NOTEBOOK_INSTALL_PREFLIGHT_REQUIRE_USABLE_CONNECTIONS": require_usable_connections,
+    },
 }
+if schedule == "monthly":
+    payload["StartCalendarInterval"] = {
+        "Day": int(schedule_day),
+        "Hour": int(schedule_time[:2]),
+        "Minute": int(schedule_time[3:]),
+    }
+elif schedule == "weekly":
+    payload["StartCalendarInterval"] = {
+        "Weekday": int(schedule_weekday),
+        "Hour": int(schedule_time[:2]),
+        "Minute": int(schedule_time[3:]),
+    }
+elif schedule == "daily":
+    payload["StartCalendarInterval"] = {
+        "Hour": int(schedule_time[:2]),
+        "Minute": int(schedule_time[3:]),
+    }
+else:
+    payload["StartInterval"] = {"15m": 900, "hourly": 3600, "daily": 86400, "weekly": 604800}[schedule]
 directory = os.path.dirname(destination)
 fd, temporary = tempfile.mkstemp(prefix=f".{label}.", suffix=".plist", dir=directory)
 try:
@@ -268,5 +357,10 @@ if [[ -n "$backup_plist" ]]; then
   backup_plist=""
 fi
 echo "Installed and loaded $plist_path"
-echo "The first run starts at login/load; later runs start $schedule."
+echo "Schedule install preflight requires usable connections: $require_usable_connections"
+if [[ "$schedule" == "weekly" ]]; then
+  echo "The first run starts at login/load; later runs start weekly on $weekday_label at $schedule_time."
+else
+  echo "The first run starts at login/load; later runs start $schedule."
+fi
 echo "Logs: $log_dir/arch-notebook-automation{,-error}.log"

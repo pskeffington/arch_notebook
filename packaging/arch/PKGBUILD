@@ -5,8 +5,9 @@ pkgdesc='Rust desktop relationship analysis and SQL regression workbench'
 arch=('x86_64' 'aarch64')
 url='https://github.com/pskeffington/arch_notebook'
 license=('MIT')
-depends=('gcc-libs' 'glibc' 'libglvnd' 'libx11' 'libxcb' 'libxcursor' 'libxi' 'libxinerama' 'libxkbcommon' 'libxkbcommon-x11' 'libxrandr' 'libxrender' 'sqlite' 'wayland')
+depends=('gcc-libs' 'glibc' 'libglvnd' 'libx11' 'libxcb' 'libxcursor' 'libxi' 'libxinerama' 'libxkbcommon' 'libxkbcommon-x11' 'libxrandr' 'libxrender' 'shared-mime-info' 'sqlite' 'wayland')
 makedepends=('cargo' 'git' 'pkgconf' 'rust')
+install=arch-notebook.install
 provides=('arch-notebook')
 conflicts=('arch-notebook')
 source=()
@@ -35,6 +36,9 @@ package() {
   cd "${ARCH_NOTEBOOK_SOURCE_DIR:-$srcdir/$pkgname}"
   install -Dm755 target/release/arch-notebook "$pkgdir/usr/bin/arch-notebook"
   install -Dm644 packaging/arch/arch-notebook.desktop "$pkgdir/usr/share/applications/arch-notebook.desktop"
+  install -Dm644 assets/icons/arch-notebook.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/arch-notebook.svg"
+  install -Dm644 assets/icons/arch-notebook.png "$pkgdir/usr/share/icons/hicolor/1024x1024/apps/arch-notebook.png"
+  install -Dm644 packaging/arch/arch-notebook-case.xml "$pkgdir/usr/share/mime/packages/arch-notebook-case.xml"
   install -Dm644 packaging/systemd/arch-notebook-automation.service "$pkgdir/usr/share/arch-notebook/systemd/arch-notebook-automation.service"
   install -Dm644 packaging/systemd/arch-notebook-automation.timer "$pkgdir/usr/share/arch-notebook/systemd/arch-notebook-automation.timer"
   install -Dm755 scripts/install-linux-automation.sh "$pkgdir/usr/bin/arch-notebook-install-automation"

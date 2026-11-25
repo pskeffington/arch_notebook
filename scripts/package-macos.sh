@@ -36,6 +36,30 @@ mkdir -p "$repo_root/dist"
 rm -rf "$app_bundle"
 mkdir -p "$app_bundle/Contents/MacOS" "$app_bundle/Contents/Resources"
 install -m 755 "$binary_path" "$app_bundle/Contents/MacOS/arch-notebook"
+install -m 644 "$repo_root/assets/icons/arch-notebook.png" \
+  "$app_bundle/Contents/Resources/arch-notebook.png"
+iconset_path="$repo_root/dist/arch-notebook.iconset"
+rm -rf "$iconset_path"
+mkdir -p "$iconset_path"
+make_icon() {
+  local size="$1" filename="$2"
+  sips -s format png -z "$size" "$size" \
+    "$repo_root/assets/icons/arch-notebook.png" \
+    --out "$iconset_path/$filename" >/dev/null
+}
+make_icon 16 icon_16x16.png
+make_icon 32 icon_16x16@2x.png
+make_icon 32 icon_32x32.png
+make_icon 64 icon_32x32@2x.png
+make_icon 128 icon_128x128.png
+make_icon 256 icon_128x128@2x.png
+make_icon 256 icon_256x256.png
+make_icon 512 icon_256x256@2x.png
+make_icon 512 icon_512x512.png
+make_icon 1024 icon_512x512@2x.png
+iconutil -c icns "$iconset_path" \
+  -o "$app_bundle/Contents/Resources/arch-notebook.icns"
+rm -rf "$iconset_path"
 install -m 755 "$repo_root/scripts/install-macos-automation.sh" \
   "$app_bundle/Contents/Resources/install-macos-automation.sh"
 install -m 755 "$repo_root/scripts/run-macos-automation.sh" \
@@ -52,6 +76,7 @@ cat > "$app_bundle/Contents/Info.plist" <<PLIST
   <key>CFBundleVersion</key><string>$version</string>
   <key>CFBundleShortVersionString</key><string>$version</string>
   <key>CFBundleExecutable</key><string>arch-notebook</string>
+  <key>CFBundleIconFile</key><string>arch-notebook</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>LSMinimumSystemVersion</key><string>12.0</string>
 </dict>

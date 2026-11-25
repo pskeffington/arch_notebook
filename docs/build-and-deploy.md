@@ -16,7 +16,7 @@ cd arch_notebook/packaging/arch
 makepkg -si
 ```
 
-The package includes the desktop menu entry and declares its shared-library dependencies. `makepkg` downloads the locked Cargo dependencies and builds the release binary for the host architecture. After opening the app and configuring enabled automation jobs, install the hourly user timer with:
+The package installs the desktop menu entry and the Arch Notebook icon in the standard hicolor icon theme, registers `.case.json` files with the Linux desktop, and declares its shared-library dependencies. `makepkg` downloads the locked Cargo dependencies and builds the release binary for the host architecture. The icon art in `assets/icons/` is also embedded into the running window. After opening the app and configuring enabled automation jobs, install the hourly user timer with:
 
 ```sh
 arch-notebook-install-automation
@@ -39,7 +39,7 @@ tar -xzf "$archive_dir.tar.gz"
 "$archive_dir/install-linux-user.sh" "$archive_dir"
 ```
 
-The installer puts the executable and its automation installer in `~/.local/bin`, and the desktop launcher under `${XDG_DATA_HOME:-~/.local/share}/applications`. Add `~/.local/bin` to `PATH` to launch it from a terminal. The companion installer lets the app’s **Install/update schedule** button configure systemd after the extracted archive has been removed. To remove this user installation, delete `~/.local/bin/arch-notebook`, `~/.local/bin/arch-notebook-install-automation`, and `${XDG_DATA_HOME:-$HOME/.local/share}/applications/arch-notebook.desktop`; case files and SQL databases are kept separately.
+The installer puts the executable and its automation installer in `~/.local/bin`, the desktop launcher under `${XDG_DATA_HOME:-~/.local/share}/applications`, and the matching scalable and high-resolution icon in the hicolor theme. Add `~/.local/bin` to `PATH` to launch it from a terminal. The companion installer lets the app’s **Install/update schedule** button configure systemd after the extracted archive has been removed. To remove this user installation, delete `~/.local/bin/arch-notebook`, `~/.local/bin/arch-notebook-install-automation`, `${XDG_DATA_HOME:-$HOME/.local/share}/applications/arch-notebook.desktop`, and the two `arch-notebook` files under `${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor`; case files and SQL databases are kept separately.
 
 To schedule hourly SQL ingestion, first launch the app and enable the desired jobs in the case. Then run the bundled installer with the case path and binary path if `~/.local/bin` is not on `PATH`:
 
@@ -60,7 +60,7 @@ Install Xcode Command Line Tools and Rust, then build a self-contained `.app` bu
 open "dist/Arch Notebook.app"
 ```
 
-The script supports native Apple Silicon (`arm64`) and Intel (`x86_64`) hosts. For direct distribution outside the Mac App Store, sign with a Developer ID certificate and notarize with Apple. Configure a `notarytool` keychain profile, then run:
+The script supports native Apple Silicon (`arm64`) and Intel (`x86_64`) hosts. The app bundle and running window use the same icon art as the Linux packages. For direct distribution outside the Mac App Store, sign with a Developer ID certificate and notarize with Apple. Configure a `notarytool` keychain profile, then run:
 
 ```sh
 export APPLE_SIGNING_IDENTITY="Developer ID Application: Your Name (TEAMID)"
