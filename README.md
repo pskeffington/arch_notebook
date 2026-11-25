@@ -33,7 +33,7 @@ Version 0.1.0 is under active development. The [2026-11-23 implementation baseli
 | CSV/TSV, GraphML and KML interchange | Implemented |
 | Historical SQL capture export to chart-import CSV/TSV, via desktop and CLI | Implemented |
 | Native IBM i2 ANX import/export | Not implemented |
-| End-to-end email analysis | Evidence package pending |
+| TRANS → Arch Notebook PDF corpus workflow | Successful test run recorded; technical artifacts pending |
 | GUI and vector-rendering refinement | In progress |
 | Interactive host acceptance and external IBM import validation | Pending evidence |
 | Published release and macOS notarization | Not published / signing evidence pending |
@@ -46,7 +46,7 @@ Native-host acceptance uses fictional fixtures for snapshot comparison, schema d
 
 ## Real-world email analysis
 
-The email-analysis workflow supports correspondence-derived actor relationships and native graph visualization. End-to-end corpus processing is the current functional milestone; the [acceptance record](docs/email-analysis-acceptance.md) tracks technical evidence and GUI/vector-rendering refinements. Formal run verification remains pending.
+The November 25, 2026 development test record documents a successful end-to-end TRANS → Arch Notebook workflow using a PDF dump of the Clinton email corpus. The workflow progressed from document processing in TRANS to correspondence-derived actor relationships and native graph display in Arch Notebook. GUI layout and vector rendering remain refinement areas. The [acceptance record](docs/email-analysis-acceptance.md) distinguishes the recorded test outcome from pending exact-revision execution artifacts.
 
 ## Start here
 
