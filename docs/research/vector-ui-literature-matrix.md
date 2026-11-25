@@ -2,7 +2,9 @@
 
 Pass UI-VEC-001 | 2026-11-25 | Initial source-linked research, not implementation acceptance.
 
-Baseline: main README and Cargo.toml inspected; exact baseline commit not independently pinned. Rust 2024, egui/eframe 0.31, glow backend, X11/Wayland. Retain native rendering pending profiling. Reported TRANS PDF/email ingestion success is a separate user observation, not a rendering benchmark. No case records included.
+Initial-pass baseline: main README and Cargo.toml inspected; that pass did not independently pin a baseline commit. The subsequent roadmap source audit inspected commit `a1cca830de5324080e15aa06ec8f2dc710eba3c0` and confirmed egui/eframe 0.31.1 in Cargo.lock, with the Glow backend enabled in Cargo.toml. Retain native rendering pending profiling. Reported TRANS PDF/email ingestion success is a separate user observation, not a rendering benchmark. No case records included.
+
+Implementation queue: [ROADMAP.md](../../ROADMAP.md). Codex start instructions: [CODEX_NEXT.md](../../CODEX_NEXT.md). Measurement and native acceptance: [vector UI protocol](../vector-ui-acceptance.md). The roadmap refines the initial gates below against actual source; it does not mark the pending scholarly checks complete.
 
 ## Evidence matrix
 
@@ -23,6 +25,8 @@ Exact PDF/printed pages, correction/retraction checks and independent registry v
 
 World-to-screen transform s = o + z(p - c), z > 0, where o is viewport origin, c camera origin and p world position. Inverse p = c + (s - o)/z. Store geometry in world coordinates and use consistent inverse transform for hit testing. Render edge paths, arrowheads, icons and labels separately. Cull by intersecting conservative bounds (including edges crossing the viewport with both endpoints offscreen). Separate model identity from visual aggregation; selection and evidence must resolve stable IDs.
 
+Implementation qualification from the pinned source: existing `Entity.x/y` values are normalized chart coordinates. `App::update` first maps those values into the viewport, then applies zoom around the viewport center and screen-space pan. The abstract model above is not authority to change persisted coordinate semantics. UI-01 must preserve that storage convention and test the matching forward/inverse mapping. Entities have UUIDs, but links can have empty or source-scoped connection IDs; derived render handles require a case/topology revision and cannot assume a global link identifier.
+
 Measure node overlaps, label overlaps, edge crossings excluding shared endpoints, layout displacement of persistent nodes, p50/p95/p99 frame time, input-to-visible response, memory and task accuracy/time. Compare baseline and alternatives on identical seeded fixtures. Report hardware, build SHA, dependency lock, DPI, graph sizes and distributions. No universal graph size threshold.
 
 ## Implementation gates
@@ -39,4 +43,20 @@ Measure node overlaps, label overlaps, edge crossings excluding shared endpoints
  
 Proposed interaction budget: p95 frame time <=16.7 ms for declared interactive workload on documented reference hardware; if unmet report measured limits rather than claim success. Proposed task tests: locate actor, follow directed path, distinguish parallel relationships, open source evidence, return to prior view. Record task accuracy and completion time; no fabricated participants.
 
-Priority: G0–G2 before adding a new GPU backend or SVG library. G3 next for readability. Existing ingestion and SQL capture regression suite must remain green. No raw operational email documents, private identities or source content in public benchmark fixtures.
+Priority: G0–G2 before adding a new GPU backend or SVG library. G3 next for readability. Retain existing identity/snapshot tests and add fixture-driven ingestion and chart regressions in UI-00. No raw operational email documents, private identities or source content in public benchmark fixtures.
+
+## Source reconciliation and executable queue — 2026-11-25
+
+The source audit found four existing unit tests for connection identity and legacy snapshot reconciliation; an extensive chart/ingestion regression suite is not established. UI-00 retains those tests and adds the fixture-driven checks. The current CI workflow builds/packages but does not run `cargo test`.
+
+| Initial gate | Source-grounded follow-through |
+| --- | --- |
+| G0 | UI-00 establishes native measurements, fictional fixtures and an executed test gate. |
+| G1 | Camera controls and `painter_at(rect)` clipping already exist. UI-01 consolidates transforms and paint/pick geometry; UI-02 adds conservative CPU culling. |
+| G2 | UI-02 adds measured revision-aware caching and candidate indexing with mutation tests. Existing network-group caches are retained. |
+| G3 | UI-03 controls label detail, focus and keyboard access while keeping records/evidence reachable. |
+| G4 | Connectivity, hierarchy and grid layouts already exist. UI-04 evaluates an optional new layout after method verification. |
+| G5 | Parallel lanes and direction arrows already exist. UI-01 fixes loop/picking correctness; advanced routing and dense matrix views remain conditional. |
+| G6 | UI-05 records Linux and Foundation/Mac evidence under a defined measurement and task protocol. |
+
+V08 originally used newer documentation. Cargo.lock/source inspection closes the installed-version question, not API compatibility with the cited latest page. R1 must inspect matching 0.31.1 API documentation or crate source before adopting an API. Remaining publication, page, equation and external registry checks retain their existing pending status. No native timings or user-study results were added by this roadmap pass.

@@ -100,6 +100,9 @@ See [Build and deployment](docs/build-and-deploy.md) for installation, schedulin
 
 ## Guides
 
+- [Vector UI implementation priorities](ROADMAP.md)
+- [Codex next implementation instructions](CODEX_NEXT.md)
+- [Vector UI measurement and acceptance](docs/vector-ui-acceptance.md)
 - [SQL snapshot ingestion](docs/sql-ingestion.md)
 - [Automated SQL ingestion](docs/automation.md)
 - [Notebook workflows](docs/notebook-workflows.md)
