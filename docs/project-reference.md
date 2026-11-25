@@ -11,4 +11,4 @@ Documentation and maintenance passes follow the generalized [repository sweep de
 
 ## Application evidence
 
-See [email analysis acceptance](email-analysis-acceptance.md) for the end-to-end correspondence workflow, evidence requirements, and outstanding presentation refinements.
+See [email analysis acceptance](email-analysis-acceptance.md) for the successful reported TRANS → Arch Notebook PDF-dump correspondence workflow, evidence requirements, and outstanding presentation refinements.
