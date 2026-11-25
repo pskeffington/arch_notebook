@@ -115,4 +115,4 @@ See [RELEASING.md](../RELEASING.md) for the version, tag, and signed macOS relea
 
 ## Native application acceptance
 
-The [email analysis acceptance record](email-analysis-acceptance.md) separates corpus ingestion and relationship visualization from GUI/vector rendering quality and exact-version runtime verification. Build/package results alone do not establish these gates.
+The [email analysis acceptance record](email-analysis-acceptance.md) records the successful reported TRANS → Arch Notebook PDF-dump test and separates corpus ingestion and relationship visualization from GUI/vector rendering quality and exact-version runtime verification. Build/package results alone do not establish these gates.
