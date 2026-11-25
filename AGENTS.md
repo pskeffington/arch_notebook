@@ -18,3 +18,7 @@
 - Validate IBM i2 CSV/TSV handoff with an actual receiving installation before claiming interoperability acceptance. Native ANX remains unimplemented; obtain vendor schema and fixtures first.
 - Preserve read-only source access, immutable captures, stable IDs and atomic writes. Do not publish a release or imply notarization without explicit approval and evidence.
 - Refresh README.md and RELEASING.md when acceptance or release evidence changes.
+
+## Email analysis follow-on — 2026-11-25
+
+The Clinton email workflow has a reported successful end-to-end run linking actors through email correspondence. Prioritize the [acceptance evidence package](docs/email-analysis-acceptance.md), then GUI layout and vector rendering refinements. Preserve working ingestion and relationship semantics; use fictional fixtures for regression tests. Do not mark exact-revision runtime acceptance passed until artifacts are reviewed.
