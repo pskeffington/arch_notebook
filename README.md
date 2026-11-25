@@ -33,14 +33,20 @@ Version 0.1.0 is under active development. The [2026-11-23 implementation baseli
 | CSV/TSV, GraphML and KML interchange | Implemented |
 | Historical SQL capture export to chart-import CSV/TSV, via desktop and CLI | Implemented |
 | Native IBM i2 ANX import/export | Not implemented |
+| TRANS → Arch Notebook PDF corpus workflow | Successful test run recorded; native graph visually evidenced |
+| GUI and vector-rendering refinement | In progress |
 | Interactive host acceptance and external IBM import validation | Pending evidence |
-| Published release and macOS notarization | Pending owner approval / signing evidence |
+| Published release and macOS notarization | Not published / signing evidence pending |
 
 Recent work added index and SQL-definition inspection, schema drift reporting in SQL Review and automation, KML placemark import, and chart-import exports of selected historical captures. See [SQL ingestion and interchange](docs/sql-ingestion.md) for details. SQLite schema_version is a drift signal, not a complete schema fingerprint. CSV/TSV is the supported IBM i2 handoff; native ANX is not supported.
 
-**Linux host progress (2026-11-25):** The operator reports that automatic builds appear to be working on the Linux box. This is a preliminary host observation, separate from CI success; the host architecture, build logs, installed version and runtime/scheduler acceptance remain to be recorded.
+Native Linux host build and scheduler acceptance remain pending documented execution results. See [build and deployment](docs/build-and-deploy.md).
 
-Next acceptance pass: use the fictional fixtures to exercise baseline/current capture, schema and property drift, chart export/reimport, and scheduled capture on native hosts; record commands, host versions, output and defects. Then validate the CSV/TSV import in IBM i2 if an installation is available. Obtain the vendor ANX schema and fixtures before implementing ANX. CI success establishes build/package success, not interactive or production acceptance.
+Native-host acceptance uses fictional fixtures for snapshot comparison, schema drift, interchange and scheduled execution. External IBM i2 import fidelity and native ANX support remain outside the verified scope.
+
+## Real-world email analysis
+
+The November 25, 2026 development test record documents a successful end-to-end TRANS → Arch Notebook workflow using a PDF dump of the Clinton email corpus. The workflow progressed from document processing in TRANS to correspondence-derived actor relationships and native graph display in Arch Notebook. A screenshot dated November 25 displays 2,813 chart entities and 6,173 relationships, with directed correspondence links and source references. These are displayed record counts, not verified unique people or validated associations. GUI layout, entity normalization and vector rendering remain refinement areas. The [acceptance record](docs/email-analysis-acceptance.md) distinguishes the recorded test outcome from pending exact-revision execution artifacts.
 
 ## Start here
 
