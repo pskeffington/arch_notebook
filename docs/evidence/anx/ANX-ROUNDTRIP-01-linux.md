@@ -10,7 +10,7 @@
 
 The initial local round trip failed because two distinct records shared a connection ID and the common import validator rejected the duplicate. The exporter also quantizes positions into ANX chart coordinates; the importer then normalized those coordinates, moving entities and labels within Arch Notebook's normalized canvas. The generic import path additionally trimmed text even when its trim option was disabled.
 
-The importer now assigns deterministic record-level source scopes only to repeated ANX connection IDs, preserving each original ID while keeping the records distinct. Arch Notebook ANX attributes now preserve normalized entity and standalone-label positions and the exact relationship label. ANX import disables whitespace trimming and the generic delimited importer honors that option for endpoint names. UUID metadata is excluded from imported custom attributes.
+The importer now assigns deterministic record-level source scopes only to repeated ANX connection IDs, preserving each original ID while keeping the records distinct. Arch Notebook ANX attributes now preserve normalized entity and standalone-label positions and the exact relationship label. ANX import disables whitespace trimming and the generic delimited importer honors that option for endpoint names. UUID metadata is excluded from imported custom attributes. The negative-path acceptance removes a supported entity shape, confirms import rejects it, and verifies the preexisting case bytes remain unchanged.
 
 ## Acceptance results
 
@@ -20,9 +20,10 @@ The importer now assigns deterministic record-level source scopes only to repeat
 | ANX import preserves supported entities and positions | PASS | `anx_import`, exit 0; all 8 entity UUIDs, names, types, representations, details, attributes, aliases, external IDs, merged records, lock states, coordinates and colors match. |
 | ANX import preserves relationship records and values | PASS | 8 of 8 records retained; endpoints, nonempty connection IDs, labels, dates, confidence, direction, notes, source notes, source references, and custom attributes match. Repeated IDs receive two deterministic record scopes. Anonymous IDs receive generated nonempty IDs. |
 | Standalone label round trip | PASS | One label retains UUID, text, normalized position, font size, color, legend state, entries and truncation state. |
+| Unsupported shape rejection and atomicity | PASS | Import exits 1 with an unsupported-shape error; the preexisting case file remains byte-for-byte unchanged. |
 | Rust tests, formatter, diff check and debug build | PASS | Commands and exit codes below. |
 | IBM schema/application compatibility | NOT RUN | No IBM XSD, Analyst's Notebook, or Chart Reader was available. This test does not establish vendor interoperability. |
-| Remote CI for this candidate | PASS | [Run 45705884851](https://github.com/pskeffington/arch_notebook/actions/runs/45705884851) ran against `c95c4a66a70c37bf117a51c7d43b796c8e00c348`; Linux test/SQL/ANX acceptance, Arch packaging, Linux x86_64/ARM64 and macOS Intel/Apple Silicon all passed. |
+| Remote CI for this candidate | PASS | [Run 45707363943](https://github.com/pskeffington/arch_notebook/actions/runs/45707363943) ran against `c5af9754bbb13542199b9b028f2129e4c5717f23`; Linux test/SQL/ANX positive and negative acceptance, Arch packaging, Linux x86_64/ARM64 and macOS Intel/Apple Silicon all passed. The release-artifact attachment job was skipped because this was not a published release. |
 
 ## Commands and observed exit codes
 
@@ -42,7 +43,7 @@ CARGO_TARGET_DIR=/tmp/arch-notebook-target cargo build --locked --offline
 exit 0
 
 python3 scripts/test-anx-roundtrip-acceptance.py --binary /tmp/arch-notebook-target/debug/arch-notebook --fixture fixtures/chart/correctness.case.json
-exit 0 (8 entities, 8 relationships, 1 label)
+exit 0 (8 entities, 8 relationships, 1 label; unsupported-shape case rejected with exit 1 and case unchanged)
 ```
 
 The harness printed its JSON report to stdout; its default temporary directory was removed after success, and no run artifact is retained in the repository. The ANX bytes include a generated timestamp, so the test checks XML structure and semantic round-trip fields rather than byte-for-byte export determinism.
