@@ -8,3 +8,7 @@ IBM i2 Analyst's Notebook documentation describes charts built from typed entiti
 - [rusqlite Connection API](https://docs.rs/rusqlite/latest/rusqlite/struct.Connection.html)
 
 Documentation and maintenance passes follow the generalized [repository sweep decision-routing policy](https://github.com/pskeffington/agent_skills/blob/main/docs/REPO_SWEEP_DECISION_ROUTING.md). Build, packaging, hardware, visual, and release claims remain separately evidenced; a passing source build does not by itself establish interactive or production acceptance.
+
+## Application evidence
+
+See [email analysis acceptance](email-analysis-acceptance.md) for the end-to-end correspondence workflow, evidence requirements, and outstanding presentation refinements.
