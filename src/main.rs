@@ -11899,6 +11899,12 @@ impl App {
                 let mut groups = groups.into_iter().collect::<Vec<_>>();
                 groups.sort_by(|a, b| a.0.cmp(&b.0));
                 let group_count = groups.len();
+                let rows = groups
+                    .iter()
+                    .map(|(_, indices)| indices.len().div_ceil(3))
+                    .max()
+                    .unwrap_or(1);
+                let group_width = 0.84 / group_count.max(1) as f32;
                 for (group_index, (_, indices)) in groups.iter_mut().enumerate() {
                     indices.sort_by(|a, b| {
                         self.case.entities[*a]
@@ -11907,17 +11913,20 @@ impl App {
                             .cmp(&self.case.entities[*b].name.to_lowercase())
                             .then_with(|| self.case.entities[*a].id.cmp(&self.case.entities[*b].id))
                     });
-                    let x = if group_count == 1 {
-                        0.5
-                    } else {
-                        0.08 + group_index as f32 * 0.84 / (group_count - 1) as f32
-                    };
+                    let columns = indices.len().min(3);
                     for (rank, index) in indices.iter().enumerate() {
-                        self.case.entities[*index].x = x;
-                        self.case.entities[*index].y = if indices.len() == 1 {
+                        let local_column = rank % 3;
+                        let local_row = rank / 3;
+                        self.case.entities[*index].x = if columns == 1 {
+                            0.08 + (group_index as f32 + 0.5) * group_width
+                        } else {
+                            let within_group = (local_column as f32 + 0.5) / columns as f32;
+                            0.08 + (group_index as f32 + within_group) * group_width
+                        };
+                        self.case.entities[*index].y = if rows == 1 {
                             0.5
                         } else {
-                            0.08 + rank as f32 * 0.84 / (indices.len() - 1) as f32
+                            0.08 + local_row as f32 * 0.84 / (rows - 1) as f32
                         };
                     }
                 }
@@ -11933,7 +11942,9 @@ impl App {
                         .cmp(&self.case.entities[*b].name.to_lowercase())
                         .then_with(|| self.case.entities[*a].id.cmp(&self.case.entities[*b].id))
                 });
-                let columns = (movable_count as f32).sqrt().ceil() as usize;
+                let aspect = 1.6_f32;
+                let columns = ((movable_count as f32 * aspect).sqrt().ceil() as usize)
+                    .clamp(1, movable_count);
                 let rows = movable_count.div_ceil(columns);
                 for (rank, index) in order.into_iter().enumerate() {
                     let column = rank % columns;

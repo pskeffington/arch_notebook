@@ -127,3 +127,20 @@ The product change is committed and reproducibly builds locally. Next acceptance
 Local artifacts are held in the user's TRANSCRIBE share and excluded from Git. Email names, addresses, subjects, bodies, and row-level analysis are intentionally omitted from this repository record. The DB stored source/transcription provenance and records that Qwen was not run.
 
 Next work: improve analyst-facing vector organization for larger relationship graphs, then validate that layout on synthetic fixtures and inspect it in the running desktop application. Dataset completeness, human review, and Qwen analysis remain separate gates.
+
+## Feature-branch increment: analyst vector organization
+
+**Task / owner:** Improve chart organization for analyst use; orchestrator-owned implementation.
+**Repository / branch:** `/home/sysadmin/github/arch_notebook` / `codex/analyst-notebook-parity`.
+**Baseline:** `8a16dded739748a9ccca96ec1e5f66f58924a79`.
+**Scope:** Make entity-type layout use compact, deterministic clusters and make alphabetical-grid column count match a stable wide-chart aspect ratio. Pinned entity positions remain unchanged.
+**Changed paths:** `src/main.rs`, `docs/notebook-workflows.md`, `docs/build-acceptance.md`.
+
+| Gate | Result | Evidence and limits |
+| --- | --- | --- |
+| Formatting and diff validation | PASS | `cargo fmt --all -- --check` and `git diff --check` exited 0. |
+| Unit tests | PASS | `CARGO_TARGET_DIR=/tmp/arch-notebook-target cargo test --locked --offline` exited 0; 4 passed, 0 failed. |
+| Offline integration check and debug build | PASS | Offline `cargo check` and debug `cargo build` completed with exit 0. |
+| Interactive chart review | BLOCKED | The changed layout controls were not exercised in a running GUI; no visual acceptance is claimed. |
+
+The alphabetical grid uses a fixed 1.6 chart aspect estimate because layout runs outside the rendering scope where the live chart rectangle is available. Review the result at different window sizes and consider passing the actual canvas aspect into the layout action in a later UI-focused change.
