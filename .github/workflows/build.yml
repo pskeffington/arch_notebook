@@ -45,6 +45,11 @@ jobs:
           python3 scripts/test-sql-automation-acceptance.py \
             --binary target/debug/arch-notebook \
             --source-sql archive/research.databases/sample_connections.sql
+      - name: Verify ANX export and import round trip
+        run: |
+          python3 scripts/test-anx-roundtrip-acceptance.py \
+            --binary target/debug/arch-notebook \
+            --fixture fixtures/chart/correctness.case.json
       - name: Verify deterministic correctness fixture
         run: |
           python3 scripts/generate-chart-fixtures.py --family correctness --output /tmp/correctness-a.case.json

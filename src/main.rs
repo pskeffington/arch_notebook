@@ -4470,6 +4470,9 @@ impl App {
         let original_mapping = self.import_column_mapping.clone();
         self.import_path = temporary_path.to_string_lossy().into_owned();
         self.import_column_mapping = ImportColumnMapping::default();
+        if source_format == "ANX" {
+            self.import_column_mapping.trim_whitespace = false;
+        }
         self.import_delimited();
         self.import_path = original_path;
         self.import_column_mapping = original_mapping;
@@ -5177,9 +5180,21 @@ impl App {
                 {
                     return Err(format!("CSV record_type is unsupported: {row_type}"));
                 }
-                let source_name = row.get(source).unwrap_or("").trim();
-                let target_name = target.and_then(|index| row.get(index)).unwrap_or("").trim();
-                if source_name.is_empty() || (!entity_only && target_name.is_empty()) {
+                let source_name = row.get(source).unwrap_or("");
+                let target_name = target.and_then(|index| row.get(index)).unwrap_or("");
+                let source_name = if mapping.trim_whitespace {
+                    source_name.trim()
+                } else {
+                    source_name
+                };
+                let target_name = if mapping.trim_whitespace {
+                    target_name.trim()
+                } else {
+                    target_name
+                };
+                if source_name.trim().is_empty()
+                    || (!entity_only && target_name.trim().is_empty())
+                {
                     skipped += 1;
                     continue;
                 }
@@ -28903,6 +28918,26 @@ fn anx_color_hex(value: &str) -> Option<String> {
     ))
 }
 
+fn anx_normalized_metadata_coordinate(
+    attributes: &[(String, String)],
+    name: &str,
+    chart_item_id: &str,
+) -> Result<Option<f32>, String> {
+    anx_attribute_value(attributes, name)
+        .map(|value| {
+            let coordinate = value.parse::<f32>().map_err(|error| {
+                format!("ANX chart item {chart_item_id} has invalid {name} metadata: {error}")
+            })?;
+            if !coordinate.is_finite() || !(0.0..=1.0).contains(&coordinate) {
+                return Err(format!(
+                    "ANX chart item {chart_item_id} has out-of-range {name} metadata"
+                ));
+            }
+            Ok(coordinate)
+        })
+        .transpose()
+}
+
 fn anx_import_attribute(
     attributes: &HashMap<String, String>,
     attribute_classes: &HashMap<String, String>,
@@ -29005,6 +29040,16 @@ fn anx_item_to_graphml(
                 .and_then(|value| value.parse::<f32>().ok())
                 .filter(|value| value.is_finite() && (8.0..=48.0).contains(value))
                 .unwrap_or_else(default_chart_label_font_size);
+            let label_x = anx_normalized_metadata_coordinate(
+                &attributes,
+                "Arch Notebook Chart Label X",
+                chart_item_id,
+            )?;
+            let label_y = anx_normalized_metadata_coordinate(
+                &attributes,
+                "Arch Notebook Chart Label Y",
+                chart_item_id,
+            )?;
             labels.push(AnxPendingLabel {
                 label: ChartLabel {
                     id: label_id,
@@ -29017,14 +29062,16 @@ fn anx_item_to_graphml(
                     legend_entries,
                     legend_entries_truncated,
                 },
-                x: item
-                    .end_x
-                    .and_then(|value| value.parse::<f32>().ok())
-                    .filter(|value| value.is_finite()),
-                y: item
-                    .end_y
-                    .and_then(|value| value.parse::<f32>().ok())
-                    .filter(|value| value.is_finite()),
+                x: label_x.or_else(|| {
+                    item.end_x
+                        .and_then(|value| value.parse::<f32>().ok())
+                        .filter(|value| value.is_finite())
+                }),
+                y: label_y.or_else(|| {
+                    item.end_y
+                        .and_then(|value| value.parse::<f32>().ok())
+                        .filter(|value| value.is_finite())
+                }),
             });
             return Ok(None);
         }
@@ -29049,7 +29096,19 @@ fn anx_item_to_graphml(
             "Arch Notebook External IDs JSON",
             "Arch Notebook Merged Records JSON",
             "Arch Notebook Position Locked",
+            "Arch Notebook Normalized X",
+            "Arch Notebook Normalized Y",
         ];
+        let normalized_x = anx_normalized_metadata_coordinate(
+            &attributes,
+            "Arch Notebook Normalized X",
+            chart_item_id,
+        )?;
+        let normalized_y = anx_normalized_metadata_coordinate(
+            &attributes,
+            "Arch Notebook Normalized Y",
+            chart_item_id,
+        )?;
         let custom_attributes: Vec<_> = attributes
             .iter()
             .filter(|(name, _)| {
@@ -29102,6 +29161,12 @@ fn anx_item_to_graphml(
         if let Some(y) = item.end_y {
             data.insert("y".into(), y);
         }
+        if let Some(x) = normalized_x {
+            data.insert("x".into(), x.to_string());
+        }
+        if let Some(y) = normalized_y {
+            data.insert("y".into(), y.to_string());
+        }
         if !custom_attributes.is_empty() {
             data.insert(
                 "attributes_json".into(),
@@ -29125,6 +29190,7 @@ fn anx_item_to_graphml(
             "Arch Notebook Directed",
             "Arch Notebook Confidence",
             "Arch Notebook Date",
+            "Arch Notebook Relationship Label",
             "Arch Notebook Notes",
             "Arch Notebook Source Notes",
             "Arch Notebook Source Reference",
@@ -29143,17 +29209,21 @@ fn anx_item_to_graphml(
             format!("ANX relationship {chart_item_id} has invalid attributes: {error}")
         })?;
         let mut data = HashMap::new();
-        let relationship = item.label.trim();
-        let relationship = if !link.kind.trim().is_empty() {
-            link_types
-                .get(&link.kind)
-                .cloned()
-                .unwrap_or_else(|| link.kind.clone())
-        } else if !relationship.is_empty() {
-            relationship.to_owned()
-        } else {
-            "LINK".into()
-        };
+        let relationship =
+            anx_attribute_value(&item.attributes, "Arch Notebook Relationship Label")
+                .map(str::to_owned)
+                .unwrap_or_else(|| {
+                    if !link.kind.trim().is_empty() {
+                        link_types
+                            .get(&link.kind)
+                            .cloned()
+                            .unwrap_or_else(|| link.kind.clone())
+                    } else if !item.label.trim().is_empty() {
+                        item.label.clone()
+                    } else {
+                        "LINK".into()
+                    }
+                });
         data.insert("relationship".into(), relationship);
         if let Some(value) = anx_attribute_value(&item.attributes, "Arch Notebook Connection ID") {
             data.insert("connection_id".into(), value.to_owned());
@@ -29271,6 +29341,39 @@ fn anx_add_item(
         }
     }
     Ok(())
+}
+
+fn scope_duplicate_anx_connection_ids(edges: &mut [GraphMlRecord]) {
+    let mut totals = HashMap::<String, usize>::new();
+    for edge in edges.iter() {
+        if let Some(connection_id) = edge.data.get("connection_id") {
+            *totals.entry(connection_id.clone()).or_default() += 1;
+        }
+    }
+
+    let mut occurrences = HashMap::<String, usize>::new();
+    for edge in edges {
+        let Some(connection_id) = edge.data.get("connection_id").cloned() else {
+            continue;
+        };
+        if totals.get(&connection_id).copied().unwrap_or_default() < 2 {
+            continue;
+        }
+        let occurrence = occurrences.entry(connection_id.clone()).or_default();
+        let identity = serde_json::to_vec(&(
+            connection_id.as_str(),
+            edge.id.as_str(),
+            edge.source.as_str(),
+            edge.target.as_str(),
+            *occurrence,
+        ))
+        .expect("ANX duplicate connection identity is serializable");
+        edge.data.insert(
+            "ingest_source".into(),
+            format!("anx:duplicate-connection:{}", sha256_hex(&identity)),
+        );
+        *occurrence += 1;
+    }
 }
 
 fn anx_import_payload(path: &str) -> Result<InterchangeImportPayload, String> {
@@ -29647,6 +29750,7 @@ fn anx_import_payload(path: &str) -> Result<InterchangeImportPayload, String> {
     if document.nodes.is_empty() && document.edges.is_empty() && labels.is_empty() {
         return Err("ANX chart contains no supported items".into());
     }
+    scope_duplicate_anx_connection_ids(&mut document.edges);
     let positions = document
         .nodes
         .iter()
@@ -29947,6 +30051,9 @@ fn interchange_import_payload(
                 "external_ids_json",
                 "external_ids",
                 "merged_records_json",
+                "arch_notebook_uuid",
+                "node_uuid",
+                "uuid",
                 "attributes_json",
                 "color",
                 "x",
@@ -32429,6 +32536,8 @@ fn write_case_anx(
                     "Arch Notebook Position Locked".into(),
                     entity.position_locked.to_string(),
                 ),
+                ("Arch Notebook Normalized X".into(), entity.x.to_string()),
+                ("Arch Notebook Normalized Y".into(), entity.y.to_string()),
             ],
             &format!("entity {}", index + 1),
         )?;
@@ -32470,6 +32579,10 @@ fn write_case_anx(
                 (
                     "Arch Notebook Chart ID".into(),
                     case.active_chart_id.to_string(),
+                ),
+                (
+                    "Arch Notebook Relationship Label".into(),
+                    link.label.clone(),
                 ),
                 ("Arch Notebook Directed".into(), link.directed.to_string()),
                 (
@@ -32517,6 +32630,8 @@ fn write_case_anx(
                     "Arch Notebook Chart Label Font Size".into(),
                     label.font_size.to_string(),
                 ),
+                ("Arch Notebook Chart Label X".into(), label.x.to_string()),
+                ("Arch Notebook Chart Label Y".into(), label.y.to_string()),
                 (
                     "Arch Notebook Legend Entries JSON".into(),
                     serde_json::to_string(&label.legend_entries)
@@ -41284,6 +41399,51 @@ mod tests {
         links.remove(0);
         links.remove(0);
         assert_eq!(super::refreshed_link_index(&links, &selected), None);
+    }
+
+    #[test]
+    fn anx_duplicate_connection_ids_receive_stable_record_scopes() {
+        let edge = |id: &str, connection_id: &str| {
+            let mut edge = super::GraphMlRecord {
+                id: id.into(),
+                source: "ENTITY-A".into(),
+                target: "ENTITY-B".into(),
+                ..super::GraphMlRecord::default()
+            };
+            edge.data
+                .insert("connection_id".into(), connection_id.into());
+            edge
+        };
+        let mut edges = vec![
+            edge("ITEM-1", "shared"),
+            edge("ITEM-2", "shared"),
+            edge("ITEM-3", "unique"),
+        ];
+        super::scope_duplicate_anx_connection_ids(&mut edges);
+        assert_eq!(edges[0].data["connection_id"], "shared");
+        assert_eq!(edges[1].data["connection_id"], "shared");
+        assert_ne!(
+            edges[0].data["ingest_source"],
+            edges[1].data["ingest_source"]
+        );
+        assert!(edges[0].data["ingest_source"].starts_with("anx:duplicate-connection:"));
+        assert!(edges[1].data["ingest_source"].starts_with("anx:duplicate-connection:"));
+        assert!(!edges[2].data.contains_key("ingest_source"));
+
+        let mut repeated = vec![
+            edge("ITEM-1", "shared"),
+            edge("ITEM-2", "shared"),
+            edge("ITEM-3", "unique"),
+        ];
+        super::scope_duplicate_anx_connection_ids(&mut repeated);
+        assert_eq!(
+            edges[0].data["ingest_source"],
+            repeated[0].data["ingest_source"]
+        );
+        assert_eq!(
+            edges[1].data["ingest_source"],
+            repeated[1].data["ingest_source"]
+        );
     }
 
     #[test]
