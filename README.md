@@ -1,6 +1,10 @@
 # Arch Notebook
 
-[![Build](https://github.com/pskeffington/arch_notebook/actions/workflows/build.yml/badge.svg?branch=main)](https://github.com/pskeffington/arch_notebook/actions/workflows/build.yml)
+[![Main CI build](https://github.com/pskeffington/arch_notebook/actions/workflows/build.yml/badge.svg?branch=main)](https://github.com/pskeffington/arch_notebook/actions/workflows/build.yml)
+
+[![Linux local build: passing](https://img.shields.io/badge/Linux%20local%20build-passing-brightgreen)](docs/build-acceptance.md)
+
+Local Linux debug and release builds passed at source commit [`ada3a01`](https://github.com/pskeffington/arch_notebook/commit/ada3a012b813ed75fd0f119b2976e53c5c3d3810). The badge reflects recorded compilation evidence, not live feature-branch CI or runtime acceptance.
 
 A local desktop notebook for mapping relationships, comparing read-only SQLite snapshots, and automating recurring captures. Case files and run history stay on your machine.
 
@@ -36,6 +40,7 @@ Arch Linux x86_64, generic Linux x86_64/ARM64, and macOS on Apple Silicon or Int
 - [Analyst's Notebook compatibility map](docs/analyst-notebook-parity.md)
 - [Bounded document evidence handoff](docs/evidence-handoff.md)
 - [Build and deployment](docs/build-and-deploy.md)
+- [Local build acceptance record](docs/build-acceptance.md)
 - [Project maintenance](docs/project-reference.md)
 - [Release process](RELEASING.md)
 - [Archived research fixtures](archive/research.databases/README.md)

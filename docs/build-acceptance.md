@@ -1,5 +1,9 @@
 # Local build acceptance record
 
+[![Linux local build: passing](https://img.shields.io/badge/Linux%20local%20build-passing-brightgreen)](#feature-branch-increment-reusable-chart-templates)
+
+Badge scope: recorded Linux compilation at `ada3a01`; runtime, package installation and release acceptance remain separate.
+
 **Task:** `01a2016c-06c1-7b02-bb7d-a0ac3edcdd3c` — continue the Rust Arch Notebook parity build, including SQL automation and deployed application graphics.
 **Repository:** `/home/sysadmin/github/arch_notebook`
 **Branch / source base:** `main` / `7677248ebbc8732a38aa8c8187f2fe61c1799c7a`
@@ -85,7 +89,7 @@ These modified and untracked paths were present during acceptance. The worktree 
 
 | Gate | Result | Evidence and limits |
 | --- | --- | --- |
-| Feature source recorded on non-main branch | PASS | Source commit above is on `codex/analyst-notebook-parity`; local only, not pushed. |
+| Feature source recorded on non-main branch | PASS | Source commit above is on `codex/analyst-notebook-parity`; subsequently pushed to GitHub; originally local at time of verification. |
 | Formatting and diff validation | PASS | `cargo fmt --all -- --check` and `git diff --check` exited 0 against the feature source. |
 | Offline integration check | PASS | `CARGO_TARGET_DIR=/tmp/arch-notebook-target cargo check --locked --offline` exited 0. |
 | Debug build | PASS | `CARGO_TARGET_DIR=/tmp/arch-notebook-target cargo build --locked --offline` exited 0. |
