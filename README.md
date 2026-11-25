@@ -4,6 +4,26 @@
 
 A local desktop notebook for mapping relationships, comparing read-only SQLite snapshots, and automating recurring captures. Case files and run history stay on your machine.
 
+## Development status — 2026-11-25
+
+Version 0.1.0 is under active development. The [2026-11-23 implementation baseline](https://github.com/pskeffington/arch_notebook/commit/2dadb09570e2a871489b2146f9ad1e1410b70929) passed [all five platform CI build/package jobs](https://github.com/pskeffington/arch_notebook/actions/runs/45269810987): Arch Linux x86_64, generic Linux x86_64 and ARM64, and macOS Intel and Apple Silicon. No GitHub Release is published.
+
+| Capability | State |
+| --- | --- |
+| Local entity/link chart, timelines, paths and case persistence | Implemented |
+| Read-only SQLite discovery, immutable captures and longitudinal comparisons | Implemented |
+| Endpoint and relationship property changes, stable identities and schema drift signal | Implemented |
+| Scheduled captures, preflight and bounded run history | Implemented |
+| CSV/TSV, GraphML and KML interchange | Implemented |
+| Historical SQL capture export to chart-import CSV/TSV, via desktop and CLI | Implemented |
+| Native IBM i2 ANX import/export | Not implemented |
+| Interactive host acceptance and external IBM import validation | Pending evidence |
+| Published release and macOS notarization | Pending owner approval / signing evidence |
+
+Recent work added index and SQL-definition inspection, schema drift reporting in SQL Review and automation, KML placemark import, and chart-import exports of selected historical captures. See [SQL ingestion and interchange](docs/sql-ingestion.md) for details. SQLite schema_version is a drift signal, not a complete schema fingerprint. CSV/TSV is the supported IBM i2 handoff; native ANX is not supported.
+
+Next acceptance pass: use the fictional fixtures to exercise baseline/current capture, schema and property drift, chart export/reimport, and scheduled capture on native hosts; record commands, host versions, output and defects. Then validate the CSV/TSV import in IBM i2 if an installation is available. Obtain the vendor ANX schema and fixtures before implementing ANX. CI success establishes build/package success, not interactive or production acceptance.
+
 ## Start here
 
 1. [Install Arch Notebook](docs/build-and-deploy.md).

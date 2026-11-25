@@ -10,3 +10,11 @@
 - Basic checks: `cargo fmt --all -- --check`, `CARGO_TARGET_DIR=/tmp/arch-notebook-target cargo check --locked --offline`, `CARGO_TARGET_DIR=/tmp/arch-notebook-target cargo build --locked --offline`, and `CARGO_TARGET_DIR=/tmp/arch-notebook-target cargo build --release --locked --offline`.
 - Keep `.github/workflows/build.yml`, `packaging/arch/PKGBUILD`, `packaging/arch/arch-notebook.desktop`, and `scripts/package-macos.sh` aligned with supported Linux/macOS targets and package dependencies.
 - Keep `README.md` and `RELEASING.md` consistent with the release workflow. Do not publish a GitHub Release without explicit owner approval.
+
+## Current engineering handoff (2026-11-25)
+
+- Read the development status in README.md before selecting work; baseline 2dadb09 passed all five platform build/package jobs (Actions run 45269810987).
+- Next pass: native host acceptance using fictional fixtures. Record platform, commit, commands, expected and observed results for capture/comparison, schema drift, chart CSV/TSV round-trip and scheduled execution. Keep build evidence separate from interactive acceptance.
+- Validate IBM i2 CSV/TSV handoff with an actual receiving installation before claiming interoperability acceptance. Native ANX remains unimplemented; obtain vendor schema and fixtures first.
+- Preserve read-only source access, immutable captures, stable IDs and atomic writes. Do not publish a release or imply notarization without explicit approval and evidence.
+- Refresh README.md and RELEASING.md when acceptance or release evidence changes.

@@ -2,6 +2,13 @@
 
 The build workflow creates Linux x86_64 and ARM64 archives, an Arch Linux x86_64 package, and macOS Apple Silicon and Intel packages. It does not create a public release from a branch push.
 
+## Release readiness — 2026-11-25
+
+- Current Cargo version: 0.1.0.
+- Implementation baseline [2dadb09](https://github.com/pskeffington/arch_notebook/commit/2dadb09570e2a871489b2146f9ad1e1410b70929) passed [CI run 45269810987](https://github.com/pskeffington/arch_notebook/actions/runs/45269810987) on all five platform jobs. Release attachment was skipped as expected on a branch build.
+- No published GitHub Release was listed at review time. Native installation, interactive acceptance, scheduler execution and external IBM i2 import still require recorded evidence; macOS notarization is not established.
+- Keep the release unpublished until owner approval. Verify the actual release candidate's CI and checksums rather than relying on the historical baseline.
+
 ## Publish a version
 
 1. Set the new semantic version in `Cargo.toml` and update user-facing release notes.
@@ -17,7 +24,7 @@ The build workflow creates Linux x86_64 and ARM64 archives, an Arch Linux x86_64
 5. Wait for the tag build to pass. Create a draft GitHub Release for that tag and review the generated notes. Publishing the draft triggers a fresh build that attaches both Linux archives, the Arch package, macOS zips, and `SHA256SUMS` to the release.
 6. Check the release page and verify its asset names, checksums, and workflow run before sharing it.
 
-The macOS bundles produced by CI are explicitly labeled `unsigned`. For direct distribution, sign and notarize a bundle on a Mac with the required Apple credentials, as described in `README.md`, then attach the additional archive and its checksum to the release:
+The macOS bundles produced by CI are explicitly labeled `unsigned`. For direct distribution, sign and notarize a bundle on a Mac with the required Apple credentials, as described in [Build and deploy](docs/build-and-deploy.md), then attach the additional archive and its checksum to the release:
 
 ```sh
 gh release upload v0.1.1 \
