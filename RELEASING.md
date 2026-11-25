@@ -11,7 +11,7 @@ The build workflow creates Linux x86_64 and ARM64 archives, an Arch Linux x86_64
 
 ## End-to-end application acceptance
 
-See [email analysis acceptance](docs/email-analysis-acceptance.md). The November 25 TRANS → Arch Notebook PDF-dump test run was recorded as successful, including email-derived actor linking and native graph display; exact-version runtime evidence, GUI/vector quality and release acceptance remain separate gates.
+See [email analysis acceptance](docs/email-analysis-acceptance.md). The November 25 TRANS → Arch Notebook PDF-dump test run was recorded as successful, including email-derived actor linking and native graph display; visual runtime evidence shows 2,813 chart entities and 6,173 relationships. Exact-version runtime evidence, source-mapping accuracy, GUI/vector quality and release acceptance remain separate gates.
 
 ## Publish a version
 
