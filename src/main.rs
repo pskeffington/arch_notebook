@@ -2274,6 +2274,8 @@ struct App {
     disk_case_json: Option<String>,
     pending_case_action: Option<PendingCaseAction>,
     pending_chart_delete: Option<Uuid>,
+    command_palette_open: bool,
+    command_palette_query: String,
     data_mode: DataMode,
     merge_candidate: Option<(Uuid, Uuid)>,
     duplicate_candidates: Vec<(Uuid, Uuid)>,
@@ -2653,6 +2655,26 @@ enum DataMode {
     Automation,
 }
 
+#[derive(Clone, Copy)]
+enum QuickCommand {
+    Chart,
+    Timeline,
+    Connections,
+    SqlReview,
+    Automation,
+    Entities,
+    Sources,
+    SearchChart,
+    NewChart,
+}
+
+fn quick_command_matches(query: &str, label: &str, keywords: &str) -> bool {
+    let filter = query.trim().to_ascii_lowercase();
+    filter.is_empty()
+        || label.to_ascii_lowercase().contains(&filter)
+        || keywords.to_ascii_lowercase().contains(&filter)
+}
+
 #[derive(PartialEq, Clone, Copy)]
 enum EntitySort {
     Name,
@@ -2899,6 +2921,8 @@ impl Default for App {
             disk_case_json,
             pending_case_action: None,
             pending_chart_delete: None,
+            command_palette_open: false,
+            command_palette_query: String::new(),
             data_mode: DataMode::Relationships,
             merge_candidate: None,
             duplicate_candidates: Vec::new(),
@@ -3906,6 +3930,8 @@ impl App {
             disk_case_json: None,
             pending_case_action: None,
             pending_chart_delete: None,
+            command_palette_open: false,
+            command_palette_query: String::new(),
             data_mode: DataMode::Relationships,
             merge_candidate: None,
             duplicate_candidates: Vec::new(),
@@ -17293,6 +17319,7 @@ impl eframe::App for App {
             delete,
             escape,
             chart_search_shortcut,
+            quick_open_shortcut,
             workspace_shortcut,
             entities_shortcut,
             sources_shortcut,
@@ -17310,6 +17337,7 @@ impl eframe::App for App {
                 input.key_pressed(egui::Key::Delete),
                 input.key_pressed(egui::Key::Escape),
                 input.modifiers.command && input.key_pressed(egui::Key::F),
+                input.modifiers.command && input.key_pressed(egui::Key::K),
                 if input.modifiers.command && input.key_pressed(egui::Key::Num1) {
                     Some((WorkspacePage::Chart, false))
                 } else if input.modifiers.command && input.key_pressed(egui::Key::Num2) {
@@ -17362,6 +17390,13 @@ impl eframe::App for App {
             self.save_as();
         } else if save {
             self.save();
+        }
+        if quick_open_shortcut {
+            self.command_palette_open = true;
+            self.command_palette_query.clear();
+            ctx.memory_mut(|memory| {
+                memory.request_focus(egui::Id::new("command_palette_search"));
+            });
         }
         if chart_search_shortcut {
             self.page = WorkspacePage::Chart;
@@ -17418,7 +17453,9 @@ impl eframe::App for App {
             self.delete_selected();
         }
         if escape {
-            if self.pending_case_action.is_some() {
+            if self.command_palette_open {
+                self.command_palette_open = false;
+            } else if self.pending_case_action.is_some() {
                 self.pending_case_action = None;
             } else if !ctx.wants_keyboard_input() {
                 if self.chart_label_creation_armed {
@@ -17515,6 +17552,14 @@ impl eframe::App for App {
                         self.page=WorkspacePage::Data;self.show_timeline=false;self.data_mode=DataMode::Automation;
                     }
                     ui.separator();
+                    if ui
+                        .button("⌕ Quick open")
+                        .on_hover_text("Search workspaces and common actions · Ctrl/Command+K")
+                        .clicked()
+                    {
+                        self.command_palette_open = true;
+                        self.command_palette_query.clear();
+                    }
                     if ui
                         .selectable_label(self.chart_label_creation_armed, "＋ Label")
                         .on_hover_text("Place a standalone annotation on the chart. Click the canvas, then edit its text in the Analysis pane.")
@@ -26476,6 +26521,139 @@ impl eframe::App for App {
                     });
             } else {
                 self.pending_chart_delete = None;
+            }
+        }
+        if self.command_palette_open {
+            let commands = [
+                ("Chart", "canvas network", QuickCommand::Chart),
+                ("Timeline", "events date range", QuickCommand::Timeline),
+                (
+                    "Connections",
+                    "relationships records links",
+                    QuickCommand::Connections,
+                ),
+                (
+                    "SQL Review",
+                    "database query snapshots compare",
+                    QuickCommand::SqlReview,
+                ),
+                (
+                    "Automation",
+                    "sql jobs scheduled captures runs",
+                    QuickCommand::Automation,
+                ),
+                (
+                    "Entities",
+                    "people organizations inspect",
+                    QuickCommand::Entities,
+                ),
+                (
+                    "Sources",
+                    "provenance imports records",
+                    QuickCommand::Sources,
+                ),
+                (
+                    "Search chart",
+                    "find entity relationship across charts",
+                    QuickCommand::SearchChart,
+                ),
+                ("New chart", "create tab workspace", QuickCommand::NewChart),
+            ];
+            let matches: Vec<_> = commands
+                .iter()
+                .filter(|(label, keywords, _)| {
+                    quick_command_matches(&self.command_palette_query, label, keywords)
+                })
+                .collect();
+            let mut selected_command = None;
+            let mut close_palette = false;
+            egui::Window::new("Quick open")
+                .id(egui::Id::new("command_palette_window"))
+                .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, 72.0))
+                .collapsible(false)
+                .resizable(false)
+                .default_width(460.0)
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("GO TO");
+                        let search = ui.add(
+                            egui::TextEdit::singleline(&mut self.command_palette_query)
+                                .id(egui::Id::new("command_palette_search"))
+                                .hint_text("Search workspaces and actions")
+                                .desired_width(350.0),
+                        );
+                        if self.command_palette_query.is_empty() {
+                            search.request_focus();
+                        }
+                    });
+                    ui.add_space(6.0);
+                    if matches.is_empty() {
+                        ui.label("No matching destinations or actions.");
+                    } else {
+                        for (index, (label, keywords, command)) in matches.iter().enumerate() {
+                            let response = ui
+                                .selectable_label(false, *label)
+                                .on_hover_text(format!("Search terms: {keywords}"));
+                            if response.clicked() {
+                                selected_command = Some(*command);
+                                close_palette = true;
+                            }
+                            if index == 0 && ui.input(|input| input.key_pressed(egui::Key::Enter)) {
+                                selected_command = Some(*command);
+                                close_palette = true;
+                            }
+                        }
+                    }
+                    ui.separator();
+                    ui.label("Ctrl/Command+K · type to filter · Enter to open · Esc to close");
+                });
+            if close_palette {
+                self.command_palette_open = false;
+                if let Some(command) = selected_command {
+                    match command {
+                        QuickCommand::Chart => {
+                            self.page = WorkspacePage::Chart;
+                            self.show_timeline = false;
+                        }
+                        QuickCommand::Timeline => {
+                            self.page = WorkspacePage::Chart;
+                            self.show_timeline = true;
+                        }
+                        QuickCommand::Connections => {
+                            self.page = WorkspacePage::Data;
+                            self.show_timeline = false;
+                            self.data_mode = DataMode::Relationships;
+                        }
+                        QuickCommand::SqlReview => {
+                            self.page = WorkspacePage::Data;
+                            self.show_timeline = false;
+                            self.data_mode = DataMode::SqlRegressions;
+                        }
+                        QuickCommand::Automation => {
+                            self.page = WorkspacePage::Data;
+                            self.show_timeline = false;
+                            self.data_mode = DataMode::Automation;
+                        }
+                        QuickCommand::Entities => {
+                            self.page = WorkspacePage::Data;
+                            self.show_timeline = false;
+                            self.data_mode = DataMode::Entities;
+                        }
+                        QuickCommand::Sources => {
+                            self.page = WorkspacePage::Data;
+                            self.show_timeline = false;
+                            self.data_mode = DataMode::Sources;
+                        }
+                        QuickCommand::SearchChart => {
+                            self.page = WorkspacePage::Chart;
+                            self.show_timeline = false;
+                            ctx.memory_mut(|memory| {
+                                memory.request_focus(egui::Id::new("chart_search_input"));
+                            });
+                        }
+                        QuickCommand::NewChart => self.create_chart(false),
+                    }
+                }
             }
         }
     }
@@ -41251,6 +41429,26 @@ mod tests {
             position_locked,
             color: [55, 128, 162],
         }
+    }
+
+    #[test]
+    fn quick_command_search_matches_labels_and_keywords_case_insensitively() {
+        assert!(super::quick_command_matches(
+            "  sql ",
+            "SQL Review",
+            "database query"
+        ));
+        assert!(super::quick_command_matches(
+            "CAPTURE",
+            "Automation",
+            "SQL jobs scheduled captures"
+        ));
+        assert!(super::quick_command_matches("", "Chart", "canvas"));
+        assert!(!super::quick_command_matches(
+            "nonexistent",
+            "Automation",
+            "sql jobs scheduled captures"
+        ));
     }
 
     #[test]
