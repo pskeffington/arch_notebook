@@ -1,5 +1,19 @@
 # Local build acceptance record
 
+## Current-user desktop and launcher installation — 2026-11-26
+
+**Task / owner:** Install the proximity-analysis candidate on this machine and synchronize its executable, application-menu entry, desktop shortcut, and icon art; implementation session.
+**Product source commit:** `6b59e32524c1ee487394ca1235cef4716d8937ae`.
+**Installed release binary SHA-256:** `bd80d18f428655b095484d2f84ddd29ce5c4d369b6169e77d6040766b11d6309`.
+
+| Gate | Result | Evidence and limits |
+| --- | --- | --- |
+| Per-user executable, installer helper, menu entry, MIME association | PASS | Installed under `/home/sysadmin/.local`; binary hash matches the release artifact; registered case MIME handler is `arch-notebook.desktop`. |
+| Desktop shortcut and launcher icon synchronization | PASS | `/home/sysadmin/Desktop/Arch Notebook.desktop` matches the menu entry byte-for-byte; SVG and high-resolution PNG match repository icon hashes. |
+| Native application window | BLOCKED | Winit returned `NoCompositor`; X11 was unavailable. Installation checks do not establish a rendered or interactive window. |
+
+Detailed paths, checks, and hashes: [LOCAL-INSTALL-02 evidence](evidence/deployment/LOCAL-INSTALL-02-proximity-linux.md).
+
 ## Origin-centered contact groups and proxy ranking — 2026-11-26
 
 **Task / owner:** Combine selected-origin hop layers with contact groups, group-to-group record summaries, and direct cross-group proxy ranking; implementation session.
