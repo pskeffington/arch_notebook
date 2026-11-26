@@ -116,13 +116,14 @@ These modified and untracked paths were present during acceptance. The worktree 
 
 ## Current continuation: UI-00 and local install
 
-### UI-01 self-loop geometry follow-up
+### UI-01 geometry and coincident-route follow-up
 
 | Check | Result | Evidence |
 | --- | --- | --- |
 | Loop geometry, label separation, arrowhead placement, and selection regression | PASS | [UI-01 self-loop evidence](evidence/vector-ui/UI-01-self-loop-linux.md); focused and full offline Rust suites pass. |
-| Current Linux release rendering | PASS, render-only | Screenshot inspected at 1440×900; input was unavailable. |
-| UI-00 native interaction baseline | BLOCKED | No pointer or keyboard event reached the app; repeated interaction and performance sampling remain open. |
+| Distinct routes and exact picking for links sharing endpoint positions | PASS, source test | [UI-01 coincident-route evidence](evidence/vector-ui/UI-01-coincident-routes-linux-fae574d.md); all nine fixture routes differ and each route sample selects its exact record. |
+| Earlier self-loop candidate Linux render | PASS, render-only | Screenshot inspected at 1440×900; input was unavailable. It does not visually verify the coincident-route follow-up candidate. |
+| Current-candidate native interaction and UI-00 baseline | BLOCKED | Current release launch stayed alive for the bounded smoke interval, but display capture and pointer/keyboard input are unavailable; repeated interaction and performance sampling remain open. |
 | IBM application/schema interoperability | NOT TESTED | Requires validation in the IBM application/schema environment. |
 
 The source change repairs visible self-link routes and label placement. It does not close UI-00 or establish IBM visual parity. Continue with an input-capable native session and the established UI-00 sequence before treating UI-01 as natively accepted.
