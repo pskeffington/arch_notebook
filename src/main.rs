@@ -868,6 +868,21 @@ struct Link {
     attributes: Vec<(String, String)>,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct NetworkAnalysisMethodCard {
+    entity_count: usize,
+    isolate_count: usize,
+    relationship_record_count: usize,
+    directed_record_count: usize,
+    undirected_record_count: usize,
+    unique_endpoint_pair_count: usize,
+    repeated_endpoint_pair_record_count: usize,
+    missing_endpoint_record_count: usize,
+    timeline_recognized_date_count: usize,
+    blank_date_count: usize,
+    unrecognized_date_count: usize,
+}
+
 struct ConnectionGroup {
     first: Uuid,
     second: Uuid,
@@ -2209,6 +2224,7 @@ struct App {
     network_groups: Option<std::sync::Arc<Vec<Vec<Uuid>>>>,
     network_bridges: Option<std::sync::Arc<Vec<(Uuid, usize)>>>,
     network_geodesic_layers: Option<(Uuid, Vec<Vec<Uuid>>)>,
+    analysis_method_card: Option<(Uuid, NetworkAnalysisMethodCard)>,
     chart_navigator_dragging: bool,
     new_link_from: Option<Uuid>,
     new_link_to: Option<Uuid>,
@@ -2850,6 +2866,7 @@ impl Default for App {
             network_groups: None,
             network_bridges: None,
             network_geodesic_layers: None,
+            analysis_method_card: None,
             chart_navigator_dragging: false,
             new_link_from: None,
             new_link_to: None,
@@ -3834,6 +3851,7 @@ impl App {
         self.network_groups = None;
         self.network_bridges = None;
         self.network_geodesic_layers = None;
+        self.analysis_method_card = None;
         self.chart_focus_group = None;
         self.clear_path_result();
     }
@@ -3873,6 +3891,7 @@ impl App {
             network_groups: None,
             network_bridges: None,
             network_geodesic_layers: None,
+            analysis_method_card: None,
             chart_navigator_dragging: false,
             new_link_from: None,
             new_link_to: None,
@@ -4350,6 +4369,7 @@ impl App {
                 self.reset_case_transient_analysis();
                 self.network_groups = None;
                 self.network_geodesic_layers = None;
+                self.analysis_method_card = None;
                 self.case_path = requested_path.clone();
                 self.case_path_input = requested_path;
                 self.disk_case_json = Some(disk_case_json);
@@ -12281,6 +12301,7 @@ impl App {
         self.reset_case_transient_analysis();
         self.network_groups = None;
         self.network_geodesic_layers = None;
+        self.analysis_method_card = None;
         self.chart_focus_group = None;
         self.sql_snapshot_source = None;
         self.sql_snapshot_index = None;
@@ -13879,6 +13900,112 @@ fn network_geodesic_layers(case: &CaseFile, origin: Uuid) -> Vec<Vec<Uuid>> {
         });
     }
     layers
+}
+
+fn network_analysis_method_card(case: &CaseFile) -> NetworkAnalysisMethodCard {
+    let entity_ids: HashSet<Uuid> = case.entities.iter().map(|entity| entity.id).collect();
+    let mut linked_entities = HashSet::new();
+    let mut unique_endpoint_pairs = HashSet::new();
+    let mut directed_record_count = 0;
+    let mut undirected_record_count = 0;
+    let mut missing_endpoint_record_count = 0;
+    let mut timeline_recognized_date_count = 0;
+    let mut blank_date_count = 0;
+    let mut unrecognized_date_count = 0;
+    let mut complete_endpoint_record_count = 0usize;
+
+    for link in &case.links {
+        if link.directed {
+            directed_record_count += 1;
+        } else {
+            undirected_record_count += 1;
+        }
+        if link.date.trim().is_empty() {
+            blank_date_count += 1;
+        } else if parse_iso_date_ordinal(&link.date).is_some() {
+            timeline_recognized_date_count += 1;
+        } else {
+            unrecognized_date_count += 1;
+        }
+
+        if !entity_ids.contains(&link.from) || !entity_ids.contains(&link.to) {
+            missing_endpoint_record_count += 1;
+            continue;
+        }
+        complete_endpoint_record_count += 1;
+        let pair = if link.from <= link.to {
+            (link.from, link.to)
+        } else {
+            (link.to, link.from)
+        };
+        unique_endpoint_pairs.insert(pair);
+        if link.from != link.to {
+            linked_entities.insert(link.from);
+            linked_entities.insert(link.to);
+        }
+    }
+
+    let unique_endpoint_pair_count = unique_endpoint_pairs.len();
+    NetworkAnalysisMethodCard {
+        entity_count: case.entities.len(),
+        isolate_count: case.entities.len().saturating_sub(linked_entities.len()),
+        relationship_record_count: case.links.len(),
+        directed_record_count,
+        undirected_record_count,
+        unique_endpoint_pair_count,
+        repeated_endpoint_pair_record_count: complete_endpoint_record_count
+            .saturating_sub(unique_endpoint_pair_count),
+        missing_endpoint_record_count,
+        timeline_recognized_date_count,
+        blank_date_count,
+        unrecognized_date_count,
+    }
+}
+
+fn network_analysis_method_card_text(
+    card: &NetworkAnalysisMethodCard,
+    follow_path_directions: bool,
+    path_time_flow: PathTimeFlow,
+    timeline_range_applied: bool,
+) -> String {
+    let time_flow = match path_time_flow {
+        PathTimeFlow::Any => "any date order",
+        PathTimeFlow::Forward => "forward date order",
+        PathTimeFlow::Backward => "backward date order",
+    };
+    format!(
+        "ARCH NOTEBOOK · ANALYSIS METHOD CARD\n\
+         Scope: active chart only; includes all chart entities and every relationship record.\n\
+         Entities: {} ({} isolates under the non-self, known-endpoint connectivity rule).\n\
+         Relationship records: {} total; {} directed; {} undirected.\n\
+         Endpoint pairs: {} unique unordered pairs with both endpoints present (direction ignored; self-pairs included); {} additional complete-endpoint records on repeated pairs; {} records have at least one endpoint missing from the chart.\n\
+         Dates: {} recognized by the chart timeline parser; {} blank; {} not recognized.\n\
+         Components and articulation points: direction, relationship type, date, and confidence are ignored; self-links and records with missing endpoints are ignored; parallel records collapse to one neighboring entity for topology. Component analysis includes singleton entities, though the sidebar lists only groups with more than one entity.\n\
+         Geodesic layers: direction, relationship type, date, and confidence are ignored; each traversable neighboring pair is one unweighted hop; self-links, missing endpoints, and parallel records do not add distance.\n\
+         Shortest path: direction is {}; date order is {}; active timeline range is {}; relationship type and confidence are ignored; every eligible relationship record costs one hop. When date order or a timeline range is applied, records without a timeline-recognized date are excluded.",
+        card.entity_count,
+        card.isolate_count,
+        card.relationship_record_count,
+        card.directed_record_count,
+        card.undirected_record_count,
+        card.unique_endpoint_pair_count,
+        card.repeated_endpoint_pair_record_count,
+        card.missing_endpoint_record_count,
+        card.timeline_recognized_date_count,
+        card.blank_date_count,
+        card.unrecognized_date_count,
+        if follow_path_directions {
+            "respected for directed records"
+        } else {
+            "ignored; directed records traversable either way"
+        },
+        time_flow,
+        if timeline_range_applied {
+            "applied"
+        } else {
+            "not applied"
+        },
+    )
 }
 
 fn linked_entities_within_depth(
@@ -17597,6 +17724,7 @@ impl eframe::App for App {
         let connected_counts = connected_entity_counts(&self.case);
         let network_groups = self.network_groups.clone();
         let network_bridges = self.network_bridges.clone();
+        let analysis_method_card = self.analysis_method_card.clone();
         let bg = egui::Color32::from_rgb(12, 19, 27);
         let panel = egui::Color32::from_rgb(18, 28, 39);
         let muted = egui::Color32::from_rgb(125, 148, 166);
@@ -24296,6 +24424,83 @@ impl eframe::App for App {
                         }) {
                             self.most_connected_relationship = None;
                         }
+                        egui::CollapsingHeader::new("ANALYSIS METHOD CARD")
+                            .id_salt("analysis_method_card")
+                            .default_open(false)
+                            .show(ui, |ui| {
+                                ui.label(egui::RichText::new(
+                                    "Read-only structural summary for the active chart. Includes isolates and every relationship record.",
+                                ).small().color(muted));
+                                let active_card = analysis_method_card
+                                    .as_ref()
+                                    .filter(|(chart_id, _)| *chart_id == self.case.active_chart_id);
+                                let button_label = if active_card.is_some() {
+                                    "Refresh method card"
+                                } else {
+                                    "Build method card"
+                                };
+                                if ui.button(button_label).clicked() {
+                                    self.analysis_method_card = Some((
+                                        self.case.active_chart_id,
+                                        network_analysis_method_card(&self.case),
+                                    ));
+                                }
+                                if let Some((_, card)) = active_card {
+                                    ui.label(format!("Entities · {} · {} isolates", card.entity_count, card.isolate_count));
+                                    ui.label(format!(
+                                        "Relationship records · {} · {} directed · {} undirected",
+                                        card.relationship_record_count,
+                                        card.directed_record_count,
+                                        card.undirected_record_count,
+                                    ));
+                                    ui.label(format!(
+                                        "Endpoint pairs · {} unordered with known endpoints · {} additional complete-endpoint records on repeated pairs · {} missing-endpoint records",
+                                        card.unique_endpoint_pair_count,
+                                        card.repeated_endpoint_pair_record_count,
+                                        card.missing_endpoint_record_count,
+                                    ));
+                                    ui.label(format!(
+                                        "Timeline dates · {} recognized · {} blank · {} unrecognized",
+                                        card.timeline_recognized_date_count,
+                                        card.blank_date_count,
+                                        card.unrecognized_date_count,
+                                    ));
+                                    ui.label(egui::RichText::new(
+                                        "Components / bridges: direction, type, date, and confidence ignored; self-links and missing endpoints ignored; parallel records collapse for topology. Isolates are included in component analysis.",
+                                    ).small().color(muted));
+                                    ui.label(egui::RichText::new(
+                                        "Geodesic layers: undirected, unweighted hops; type, date, and confidence ignored; self-links, missing endpoints, and parallel records do not add distance.",
+                                    ).small().color(muted));
+                                    ui.label(egui::RichText::new(format!(
+                                        "Shortest path: direction {} · {} · timeline range {} · relationship type and confidence ignored · one hop per eligible record.",
+                                        if self.path_follow_directions { "respected" } else { "ignored" },
+                                        match self.path_time_flow {
+                                            PathTimeFlow::Any => "any date order",
+                                            PathTimeFlow::Forward => "forward date order",
+                                            PathTimeFlow::Backward => "backward date order",
+                                        },
+                                        if active_path_timeline_range.is_some() { "applied" } else { "not applied" },
+                                    )).small().color(muted));
+                                    ui.label(egui::RichText::new(
+                                        "When date order or a timeline range is applied, records without a timeline-recognized date are excluded from path search.",
+                                    ).small().color(muted));
+                                    if ui.button("Copy method summary · aggregate metadata only").clicked() {
+                                        let text = network_analysis_method_card_text(
+                                            card,
+                                            self.path_follow_directions,
+                                            self.path_time_flow,
+                                            active_path_timeline_range.is_some(),
+                                        );
+                                        ui.ctx().copy_text(text);
+                                        self.status = "ANALYSIS METHOD SUMMARY COPIED · AGGREGATES ONLY".into();
+                                    }
+                                } else if self.analysis_method_card.is_some() {
+                                    ui.label(egui::RichText::new(
+                                        "The active chart changed. Build a fresh card to update the counts.",
+                                    ).small().color(muted));
+                                }
+                            });
+                        ui.add_space(12.0);
                         ui.label(egui::RichText::new("MOST CONNECTED").size(9.0).strong().color(cyan));
                         ui.horizontal_wrapped(|ui| {
                             ui.label("Rank by");
@@ -24476,7 +24681,7 @@ impl eframe::App for App {
                         ui.add_space(16.0);
                         ui.label(egui::RichText::new("GEODESIC LAYERS").size(9.0).strong().color(cyan));
                         ui.label(egui::RichText::new(
-                            "Shortest-path hop distance from a selected entity. Directions and link weights are ignored.",
+                            "Shortest-path hop distance from a selected entity. Directions, dates, relationship types, and confidence are ignored.",
                         ).small().color(muted));
                         let geodesic_origin = self.selected;
                         if let Some(origin) = geodesic_origin {
@@ -25792,6 +25997,7 @@ impl eframe::App for App {
                         }
                         if path_criteria_changed {
                             self.clear_path_result();
+                            self.analysis_method_card = None;
                         }
                         if let Some(counterpart_id) = focus_linked_entity {
                             self.select_chart_entity(counterpart_id, false);
@@ -41650,6 +41856,88 @@ mod tests {
     }
 
     #[test]
+    fn analysis_method_card_counts_records_pairs_isolates_and_date_quality() {
+        let mut case = super::demo_case();
+        case.title = "PRIVATE CASE TITLE".into();
+        case.entities = vec![
+            layout_entity("PRIVATE ALPHA", "Actor", false),
+            layout_entity("PRIVATE BRAVO", "Actor", false),
+            layout_entity("PRIVATE CHARLIE", "Actor", false),
+            layout_entity("PRIVATE ISOLATE", "Actor", false),
+        ];
+        case.links.clear();
+        let alpha = case.entities[0].id;
+        let bravo = case.entities[1].id;
+        let charlie = case.entities[2].id;
+        let absent = Uuid::new_v4();
+        let link = |from, to, directed, date: &str| super::Link {
+            from,
+            to,
+            connection_id: "PRIVATE CONNECTION ID".into(),
+            label: "PRIVATE RELATIONSHIP LABEL".into(),
+            date: date.into(),
+            confidence: 3,
+            directed,
+            notes: "PRIVATE ANALYST NOTE".into(),
+            source_notes: "PRIVATE SOURCE NOTE".into(),
+            source_reference: "PRIVATE EVIDENCE REFERENCE".into(),
+            ingest_source: Some("PRIVATE SOURCE KEY".into()),
+            attributes: Vec::new(),
+        };
+        case.links = vec![
+            link(alpha, bravo, true, "2024-02-29"),
+            link(bravo, alpha, true, ""),
+            link(alpha, bravo, false, "2024-02-30"),
+            link(bravo, bravo, true, "2025-01-01"),
+            link(charlie, absent, true, "not-a-date"),
+        ];
+
+        let case_before_copy = serde_json::to_value(&case).expect("serialize fictional chart");
+        let card = super::network_analysis_method_card(&case);
+        assert_eq!(card.entity_count, 4);
+        assert_eq!(card.isolate_count, 2);
+        assert_eq!(card.relationship_record_count, 5);
+        assert_eq!(card.directed_record_count, 4);
+        assert_eq!(card.undirected_record_count, 1);
+        assert_eq!(card.unique_endpoint_pair_count, 2);
+        assert_eq!(card.repeated_endpoint_pair_record_count, 2);
+        assert_eq!(card.missing_endpoint_record_count, 1);
+        assert_eq!(card.timeline_recognized_date_count, 2);
+        assert_eq!(card.blank_date_count, 1);
+        assert_eq!(card.unrecognized_date_count, 2);
+
+        let copied = super::network_analysis_method_card_text(
+            &card,
+            true,
+            super::PathTimeFlow::Forward,
+            true,
+        );
+        assert!(copied.contains("direction is respected for directed records"));
+        assert!(copied.contains("date order is forward date order"));
+        assert!(copied.contains("active timeline range is applied"));
+        assert!(
+            copied.contains("2 recognized by the chart timeline parser; 1 blank; 2 not recognized")
+        );
+        for private_value in [
+            "PRIVATE CASE TITLE",
+            "PRIVATE ALPHA",
+            "PRIVATE CONNECTION ID",
+            "PRIVATE RELATIONSHIP LABEL",
+            "PRIVATE ANALYST NOTE",
+            "PRIVATE SOURCE NOTE",
+            "PRIVATE EVIDENCE REFERENCE",
+            "PRIVATE SOURCE KEY",
+        ] {
+            assert!(!copied.contains(private_value));
+        }
+        assert_eq!(
+            serde_json::to_value(&case).expect("serialize unchanged fictional chart"),
+            case_before_copy,
+            "building and formatting the card must not mutate case data"
+        );
+    }
+
+    #[test]
     fn quick_command_search_matches_labels_and_keywords_case_insensitively() {
         assert!(super::quick_command_matches(
             "  sql ",
@@ -41973,6 +42261,22 @@ mod tests {
         let layers = super::network_geodesic_layers(&case, entities[0].id);
         assert_eq!(layers, vec![vec![entities[1].id], vec![entities[2].id]]);
         assert!(super::network_geodesic_layers(&case, Uuid::new_v4()).is_empty());
+    }
+
+    #[test]
+    fn network_analysis_invalidation_discards_a_cached_method_card() {
+        let mut app = super::App::default();
+        app.analysis_method_card = Some((
+            app.case.active_chart_id,
+            super::NetworkAnalysisMethodCard {
+                entity_count: 1,
+                ..Default::default()
+            },
+        ));
+
+        app.invalidate_network_groups();
+
+        assert!(app.analysis_method_card.is_none());
     }
 
     #[test]
