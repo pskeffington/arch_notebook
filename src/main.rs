@@ -41372,7 +41372,7 @@ mod tests {
                 .expect("checked-in chart correctness fixture is a valid case");
         let lanes = super::link_lane_offsets(&case);
         let first_link = &case.links[0];
-        let parallel_lanes: Vec<_> = case
+        let parallel_indices: Vec<_> = case
             .links
             .iter()
             .enumerate()
@@ -41380,18 +41380,23 @@ mod tests {
                 (link.from == first_link.from && link.to == first_link.to)
                     || (link.from == first_link.to && link.to == first_link.from)
             })
-            .map(|(index, _)| lanes[index])
+            .map(|(index, _)| index)
             .collect();
         assert!(
-            parallel_lanes.len() >= 4,
+            parallel_indices.len() >= 4,
             "fixture keeps parallel and reversed records"
         );
-        for (index, lane) in parallel_lanes.iter().enumerate() {
-            assert!(
-                parallel_lanes[..index]
-                    .iter()
-                    .all(|previous| (previous - lane).abs() > f32::EPSILON)
-            );
+        for right in 0..parallel_indices.len() {
+            for left in 0..right {
+                let left_lane = lanes[parallel_indices[left]];
+                let right_lane = lanes[parallel_indices[right]];
+                assert!(
+                    (left_lane - right_lane).abs() > f32::EPSILON,
+                    "fixture link indices {} and {} share lane {left_lane}",
+                    parallel_indices[left],
+                    parallel_indices[right]
+                );
+            }
         }
     }
 
