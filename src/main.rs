@@ -41335,6 +41335,67 @@ mod tests {
     }
 
     #[test]
+    fn correctness_fixture_routes_a_visible_self_loop() {
+        let case: CaseFile =
+            serde_json::from_str(include_str!("../fixtures/chart/correctness.case.json"))
+                .expect("checked-in chart correctness fixture is a valid case");
+        let lanes = super::link_lane_offsets(&case);
+
+        let loop_index = case
+            .links
+            .iter()
+            .position(|link| link.from == link.to)
+            .expect("fixture contains a self-loop");
+        let loop_lane = lanes[loop_index];
+        assert!(loop_lane.is_finite() && loop_lane > 0.0);
+        let loop_start = egui::pos2(100.0, 120.0);
+        let loop_points = super::connection_curve_points(loop_start, loop_start, loop_lane);
+        assert_eq!(loop_points.first(), Some(&loop_start));
+        assert_eq!(loop_points.last(), Some(&loop_start));
+        assert!(
+            loop_points
+                .iter()
+                .all(|point| point.x.is_finite() && point.y.is_finite())
+        );
+        assert!(
+            loop_points
+                .iter()
+                .any(|point| point.distance(loop_start) > 1.0)
+        );
+    }
+
+    #[test]
+    #[ignore = "UI-01: lane uniqueness is currently violated by reversed parallel records"]
+    fn correctness_fixture_assigns_distinct_lanes_to_parallel_records() {
+        let case: CaseFile =
+            serde_json::from_str(include_str!("../fixtures/chart/correctness.case.json"))
+                .expect("checked-in chart correctness fixture is a valid case");
+        let lanes = super::link_lane_offsets(&case);
+        let first_link = &case.links[0];
+        let parallel_lanes: Vec<_> = case
+            .links
+            .iter()
+            .enumerate()
+            .filter(|(_, link)| {
+                (link.from == first_link.from && link.to == first_link.to)
+                    || (link.from == first_link.to && link.to == first_link.from)
+            })
+            .map(|(index, _)| lanes[index])
+            .collect();
+        assert!(
+            parallel_lanes.len() >= 4,
+            "fixture keeps parallel and reversed records"
+        );
+        for (index, lane) in parallel_lanes.iter().enumerate() {
+            assert!(
+                parallel_lanes[..index]
+                    .iter()
+                    .all(|previous| (previous - lane).abs() > f32::EPSILON)
+            );
+        }
+    }
+
+    #[test]
     fn chart_fit_ignores_missing_ids_and_returns_none_for_empty_selection() {
         let mut entities = vec![layout_entity("A", "PERSON", false)];
         entities[0].id = Uuid::from_u128(1);
