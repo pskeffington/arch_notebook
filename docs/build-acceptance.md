@@ -116,6 +116,17 @@ These modified and untracked paths were present during acceptance. The worktree 
 
 ## Current continuation: UI-00 and local install
 
+### UI-01 self-loop geometry follow-up
+
+| Check | Result | Evidence |
+| --- | --- | --- |
+| Loop geometry, label separation, arrowhead placement, and selection regression | PASS | [UI-01 self-loop evidence](evidence/vector-ui/UI-01-self-loop-linux.md); focused and full offline Rust suites pass. |
+| Current Linux release rendering | PASS, render-only | Screenshot inspected at 1440×900; input was unavailable. |
+| UI-00 native interaction baseline | BLOCKED | No pointer or keyboard event reached the app; repeated interaction and performance sampling remain open. |
+| IBM application/schema interoperability | NOT TESTED | Requires validation in the IBM application/schema environment. |
+
+The source change repairs visible self-link routes and label placement. It does not close UI-00 or establish IBM visual parity. Continue with an input-capable native session and the established UI-00 sequence before treating UI-01 as natively accepted.
+
 **Task / owner:** Continue the Rust Arch Notebook parity build; implementation session.
 **Repository / branch:** `/home/sysadmin/github/arch_notebook` / `codex/ui-00-chart-baseline`.
 **Baseline/source:** `abffef37101bd298defd1e243c257a26e370323f` (matches `origin/codex/ui-00-chart-baseline` at this record).

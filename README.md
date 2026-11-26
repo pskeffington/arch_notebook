@@ -55,6 +55,8 @@ The Chart analysis sidebar now includes an on-demand, read-only **Analysis Metho
 
 The chart's known parallel-link overlap is repaired: lane assignment accounts for canonical endpoint direction, and the fixture verifies that a pointer on each reversed/parallel route resolves to its exact relationship record. Native interaction and visual review remain pending; see [UI-01 lane and selection acceptance](docs/evidence/vector-ui/UI-01-parallel-lanes-linux.md).
 
+**UI-01 self-loop repair (2026-11-26):** self-links now render as visible cubic loops, coincident-position entities have a separate route, and labels and directed arrowheads follow those curves. The expanded geometry and picking regression suite passes, and a Linux release render shows the loop and label placement. Native pointer input remains blocked, so selection in the running window and IBM visual parity are unverified; see [self-loop evidence](docs/evidence/vector-ui/UI-01-self-loop-linux.md).
+
 The Linux scheduler harness now invokes a generated service `ExecStart` against its own fresh synthetic SQLite case and verifies the scheduled-trigger run, saved snapshot, and chart CSV. The host systemd user bus denies access, so actual timer dispatch remains unverified; see the [scheduler invocation follow-up](docs/evidence/sql-automation/SQL-SCHED-01-linux.md).
 
 The scheduler harness also checks a rolling previous-UTC-month SQL query through that generated service command, including the inclusive start and exclusive end boundary. Scheduled parameter values remain fixed; SQLite date functions provide rolling time windows. See [SQL-SCHED-03 evidence](docs/evidence/sql-automation/SQL-SCHED-03-dynamic-window-linux.md).
