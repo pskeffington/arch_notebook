@@ -63,6 +63,8 @@ Desktop SQL automation now has worker-level cancellation regression coverage: af
 
 The current source also has a release build and limited Wayland runs of the fictional chart fixture. An active-window screenshot shows the rendered chart, but its title bar said “Not Responding”; inconsistent compositor access prevented a controlled repeat or interaction trace. The UI-00 native baseline remains open pending responsiveness, input, and visual review; see the [latest Linux recheck](docs/evidence/vector-ui/UI-00-linux-recheck-e44d485.md).
 
+Entity-type chart layout now distributes type clusters across an aspect-aware grid and centers sparse clusters within their cells. The Rust regression and offline release build pass, and the installed Linux launcher matches the release binary; native chart interaction remains unverified because this session cannot access the Wayland compositor.
+
 ## Start here
 
 1. [Install Arch Notebook](docs/build-and-deploy.md) or build from source.

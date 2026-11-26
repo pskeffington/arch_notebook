@@ -12015,7 +12015,8 @@ impl App {
                 };
             }
             LayoutMode::EntityType => {
-                let positions = entity_type_layout_positions(&self.case.entities);
+                let positions =
+                    entity_type_layout_positions(&self.case.entities, self.chart_canvas_aspect);
                 for entity in &mut self.case.entities {
                     if let Some((x, y)) = positions.get(&entity.id) {
                         entity.x = *x;
@@ -13252,7 +13253,10 @@ fn connected_entity_counts(case: &CaseFile) -> HashMap<Uuid, usize> {
     connected_entity_counts_for_relationship(case, None)
 }
 
-fn entity_type_layout_positions(entities: &[Entity]) -> HashMap<Uuid, (f32, f32)> {
+fn entity_type_layout_positions(
+    entities: &[Entity],
+    chart_aspect: f32,
+) -> HashMap<Uuid, (f32, f32)> {
     let mut groups: HashMap<String, Vec<&Entity>> = HashMap::new();
     for entity in entities.iter().filter(|entity| !entity.position_locked) {
         let kind = if entity.kind.trim().is_empty() {
@@ -13264,13 +13268,9 @@ fn entity_type_layout_positions(entities: &[Entity]) -> HashMap<Uuid, (f32, f32)
     }
     let mut groups = groups.into_iter().collect::<Vec<_>>();
     groups.sort_by(|first, second| first.0.cmp(&second.0));
-    let group_count = groups.len();
-    let rows = groups
-        .iter()
-        .map(|(_, entities)| entities.len().div_ceil(3))
-        .max()
-        .unwrap_or(1);
-    let group_width = 0.84 / group_count.max(1) as f32;
+    let (group_columns, group_rows) = grid_layout_dimensions(groups.len(), chart_aspect);
+    let group_width = 0.84 / group_columns.max(1) as f32;
+    let group_height = 0.84 / group_rows.max(1) as f32;
     let mut positions = HashMap::new();
     for (group_index, (_, entities)) in groups.iter_mut().enumerate() {
         entities.sort_by(|first, second| {
@@ -13281,20 +13281,20 @@ fn entity_type_layout_positions(entities: &[Entity]) -> HashMap<Uuid, (f32, f32)
                 .then_with(|| first.id.cmp(&second.id))
         });
         let columns = entities.len().min(3);
+        let rows = entities.len().div_ceil(columns.max(1));
+        let group_column = group_index % group_columns.max(1);
+        let group_row = group_index / group_columns.max(1);
+        let group_left = 0.08 + group_column as f32 * group_width;
+        let group_top = 0.08 + group_row as f32 * group_height;
         for (rank, entity) in entities.iter().enumerate() {
-            let local_column = rank % 3;
-            let local_row = rank / 3;
-            let x = if columns == 1 {
-                0.08 + (group_index as f32 + 0.5) * group_width
-            } else {
-                let within_group = (local_column as f32 + 0.5) / columns as f32;
-                0.08 + (group_index as f32 + within_group) * group_width
-            };
-            let y = if rows == 1 {
-                0.5
-            } else {
-                0.08 + local_row as f32 * 0.84 / (rows - 1) as f32
-            };
+            let local_column = rank % columns;
+            let local_row = rank / columns;
+            let row_start = local_row * columns;
+            let columns_in_row = (entities.len() - row_start).min(columns);
+            let column_gap = group_width / columns as f32;
+            let row_width = columns_in_row.saturating_sub(1) as f32 * column_gap;
+            let x = group_left + (group_width - row_width) / 2.0 + local_column as f32 * column_gap;
+            let y = group_top + (local_row as f32 + 0.5) * group_height / rows as f32;
             positions.insert(entity.id, (x, y));
         }
     }
@@ -41679,7 +41679,7 @@ mod tests {
             layout_entity("Pinned", "PERSON", true),
             layout_entity("Harbor", "LOCATION", false),
         ];
-        let positions = entity_type_layout_positions(&entities);
+        let positions = entity_type_layout_positions(&entities, 1.6);
         assert_eq!(positions.len(), 3);
         assert!(!positions.contains_key(&entities[2].id));
         let alpha = positions[&entities[1].id];
@@ -41688,6 +41688,37 @@ mod tests {
         assert!(alpha.0 > harbor.0);
         assert!(alpha.0 < zulu.0);
         assert_eq!(alpha.1, zulu.1);
+    }
+
+    #[test]
+    fn entity_type_layout_adapts_cluster_grid_to_canvas_aspect() {
+        let entities = (0..6)
+            .map(|index| layout_entity(&format!("Entity {index}"), &format!("TYPE-{index}"), false))
+            .collect::<Vec<_>>();
+        let narrow = entity_type_layout_positions(&entities, 0.75);
+        let wide = entity_type_layout_positions(&entities, 2.5);
+        let distinct_columns = |positions: &std::collections::HashMap<Uuid, (f32, f32)>| {
+            let mut columns = positions
+                .values()
+                .map(|(x, _)| (x * 10_000.0).round() as i32)
+                .collect::<Vec<_>>();
+            columns.sort_unstable();
+            columns.dedup();
+            columns.len()
+        };
+        assert_eq!(distinct_columns(&narrow), 3);
+        assert_eq!(distinct_columns(&wide), 4);
+        assert!(wide[&entities[0].id].1 < wide[&entities[4].id].1);
+    }
+
+    #[test]
+    fn entity_type_layout_centers_a_partial_cluster_row() {
+        let entities = (0..4)
+            .map(|index| layout_entity(&format!("Entity {index}"), "PERSON", false))
+            .collect::<Vec<_>>();
+        let positions = entity_type_layout_positions(&entities, 1.6);
+        let first_row_center = (positions[&entities[0].id].0 + positions[&entities[2].id].0) / 2.0;
+        assert!((positions[&entities[3].id].0 - first_row_center).abs() < f32::EPSILON);
     }
 
     #[test]
