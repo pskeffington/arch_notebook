@@ -1,5 +1,23 @@
 # Local build acceptance record
 
+## UI-01 chart entity-card picking — 2026-11-26
+
+**Task / owner:** Align entity picking and viewport transforms with the visible chart cards; implementation session.
+**Repository / branch:** `/home/sysadmin/github/arch_notebook` / `codex/ui-00-chart-baseline`.
+**Baseline:** `0c5cf7bd59b1a66713e165943962354a1c7f6ae0`.
+**Product source commit:** `e7b64653d798faeb858d5fb34c61bfd96a2db336`.
+**Changed paths:** `src/main.rs`, `docs/notebook-workflows.md`, `docs/evidence/vector-ui/UI-01-card-hit-geometry-linux.md`.
+
+| Gate | Result | Evidence and limits |
+| --- | --- | --- |
+| Formatting, diff validation, and unit tests | PASS | Formatting and diff checks exited 0; 48 offline Rust tests passed, including new transform round-trip, zoom-anchor, degenerate viewport, card-edge, and overlap-order tests. |
+| Offline compile check | PASS | `cargo check --locked --offline` exited 0. |
+| Strict Clippy | FAIL | Existing warning-as-error findings prevent a clean repository-wide Clippy run; no unrelated lint cleanup was included. See the detailed evidence record. |
+| Current-candidate native chart interaction | BLOCKED | Desktop pointer/capture access is unavailable in this session; no visual acceptance is claimed. |
+| IBM Analyst's Notebook compatibility | NOT TESTED | No IBM application or XSD was used. |
+
+Full commands, results, and scope limits: [UI-01 card hit geometry evidence](evidence/vector-ui/UI-01-card-hit-geometry-linux.md).
+
 ## Synchronized-branch SQL automation recheck — 2026-11-26
 
 **Task / owner:** Continue the Rust notebook build with emphasis on SQL automation, acceptance evidence, and synchronized progress; implementation session.
