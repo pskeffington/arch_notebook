@@ -68,6 +68,8 @@ To create a relationship spatially, choose **＋ Link**, select its relationship
 
 Double-click an entity or relationship on the chart to open its matching record view in **Entities** or **Connections**, where its editable properties and provenance are shown.
 
+Click or right-click within an entity card to select that entity before picking an overlapping relationship beneath it. Card selection follows the visible card bounds at the current zoom; clicking outside cards continues to pick visible relationships, including cycling through overlapping routes.
+
 Right-click an entity or relationship to open its chart context menu. The menu opens the corresponding properties view, selects the entity’s directly connected neighbors or a relationship’s endpoint entities, or deletes the selected item; deleting an entity also removes its relationships. Use the selection actions to move or copy a small network together, or to inspect connected records in the chart’s selection tools.
 
 All bundled case examples are fictional. Arch Notebook does not connect to a service or transmit case data.

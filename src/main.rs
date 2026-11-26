@@ -13702,16 +13702,14 @@ fn chart_fit_transform(
     entity_ids: &[Uuid],
     rect: egui::Rect,
 ) -> Option<(f32, egui::Vec2)> {
+    let transform = ChartTransform::new(rect, 1.0, egui::Vec2::ZERO);
     let entity_positions: HashMap<Uuid, egui::Pos2> = case
         .entities
         .iter()
         .map(|entity| {
             (
                 entity.id,
-                egui::pos2(
-                    rect.left() + entity.x * rect.width(),
-                    rect.top() + entity.y * rect.height(),
-                ),
+                transform.normalized_to_screen(entity.x, entity.y),
             )
         })
         .collect();
@@ -13732,6 +13730,85 @@ fn chart_fit_transform(
         .clamp(0.25, 3.0);
     let pan = -(min.lerp(max, 0.5) - rect.center()) * zoom;
     Some((zoom, pan))
+}
+
+#[derive(Clone, Copy)]
+struct ChartTransform {
+    rect: egui::Rect,
+    zoom: f32,
+    pan: egui::Vec2,
+}
+
+impl ChartTransform {
+    fn new(rect: egui::Rect, zoom: f32, pan: egui::Vec2) -> Self {
+        Self {
+            rect,
+            zoom: clamp_chart_zoom(zoom),
+            pan,
+        }
+    }
+
+    fn viewport_to_screen(self, point: egui::Pos2) -> egui::Pos2 {
+        self.rect.center() + (point - self.rect.center()) * self.zoom + self.pan
+    }
+
+    fn screen_to_viewport(self, point: egui::Pos2) -> egui::Pos2 {
+        self.rect.center() + (point - self.rect.center() - self.pan) / self.zoom
+    }
+
+    fn normalized_to_screen(self, x: f32, y: f32) -> egui::Pos2 {
+        self.viewport_to_screen(egui::pos2(
+            self.rect.left() + x * self.rect.width(),
+            self.rect.top() + y * self.rect.height(),
+        ))
+    }
+
+    fn screen_to_normalized(self, point: egui::Pos2) -> Option<egui::Pos2> {
+        let width = self.rect.width();
+        let height = self.rect.height();
+        if !width.is_finite()
+            || !height.is_finite()
+            || width <= 0.0
+            || height <= 0.0
+            || !self.zoom.is_finite()
+            || self.zoom <= 0.0
+            || !point.x.is_finite()
+            || !point.y.is_finite()
+        {
+            return None;
+        }
+        let viewport_point = self.screen_to_viewport(point);
+        let normalized = egui::pos2(
+            (viewport_point.x - self.rect.left()) / width,
+            (viewport_point.y - self.rect.top()) / height,
+        );
+        (normalized.x.is_finite() && normalized.y.is_finite()).then_some(normalized)
+    }
+
+    fn zoomed_at(self, point: egui::Pos2, zoom: f32) -> Self {
+        let zoom = clamp_chart_zoom(zoom);
+        let viewport_anchor = self.screen_to_viewport(point);
+        let pan = point - self.rect.center() - (viewport_anchor - self.rect.center()) * zoom;
+        Self { zoom, pan, ..self }
+    }
+}
+
+fn chart_entity_card_bounds(center: egui::Pos2, zoom: f32) -> egui::Rect {
+    egui::Rect::from_center_size(center, egui::vec2(142.0, 56.0) * clamp_chart_zoom(zoom))
+}
+
+fn chart_entity_at_position(
+    entities: &[Entity],
+    positions: &HashMap<Uuid, egui::Pos2>,
+    pointer: egui::Pos2,
+    zoom: f32,
+) -> Option<Uuid> {
+    entities.iter().rev().find_map(|entity| {
+        positions
+            .get(&entity.id)
+            .filter(|center| chart_entity_card_bounds(**center, zoom).contains(pointer))
+            .map(|_| entity.id)
+    })
 }
 
 fn chart_neighbor_in_direction(
@@ -23177,11 +23254,10 @@ impl eframe::App for App {
                             let scroll=ctx.input(|input|input.smooth_scroll_delta.y);
                             if scroll!=0.0 {
                                 let pointer=response.hover_pos().unwrap_or_else(||rect.center());
-                                let from_center=pointer-rect.center();
-                                let old_zoom=self.chart_zoom;
-                                let new_zoom=(old_zoom*(1.0+scroll*0.001)).clamp(0.25,3.0);
-                                self.chart_pan=from_center-(from_center-self.chart_pan)*(new_zoom/old_zoom);
-                                self.chart_zoom=new_zoom;
+                                let transform=ChartTransform::new(rect,self.chart_zoom,self.chart_pan)
+                                    .zoomed_at(pointer,self.chart_zoom*(1.0+scroll*0.001));
+                                self.chart_pan=transform.pan;
+                                self.chart_zoom=transform.zoom;
                             }
                         }
                         if let Some(entity_ids) = self
@@ -23198,15 +23274,16 @@ impl eframe::App for App {
                             self.chart_focus_link=None;
                         } else if let Some(id)=self.chart_focus.take(){
                             if let Some(entity)=self.case.entities.iter().find(|e|e.id==id){
-                                let base=egui::pos2(rect.left()+entity.x*rect.width(),rect.top()+entity.y*rect.height());
+                                let base=ChartTransform::new(rect,1.0,egui::Vec2::ZERO).normalized_to_screen(entity.x,entity.y);
                                 self.chart_pan=-(base-rect.center())*self.chart_zoom;
                             }
                             self.chart_focus_link=None;
                         } else if let Some(index)=self.chart_focus_link.take(){
                             if let Some(link)=self.case.links.get(index){
                                 if let (Some(from),Some(to))=(self.case.entities.iter().find(|entity|entity.id==link.from),self.case.entities.iter().find(|entity|entity.id==link.to)){
-                                    let base_from=egui::pos2(rect.left()+from.x*rect.width(),rect.top()+from.y*rect.height());
-                                    let base_to=egui::pos2(rect.left()+to.x*rect.width(),rect.top()+to.y*rect.height());
+                                    let base_transform=ChartTransform::new(rect,1.0,egui::Vec2::ZERO);
+                                    let base_from=base_transform.normalized_to_screen(from.x,from.y);
+                                    let base_to=base_transform.normalized_to_screen(to.x,to.y);
                                     self.chart_pan=-(base_from.lerp(base_to,0.5)-rect.center())*self.chart_zoom;
                                 }
                             }
@@ -23238,7 +23315,8 @@ impl eframe::App for App {
                         }
                         let chart_zoom = self.chart_zoom;
                         let chart_pan = self.chart_pan;
-                        let center=|e:&Entity|{let base=egui::pos2(rect.left()+e.x*rect.width(),rect.top()+e.y*rect.height());rect.center()+(base-rect.center())*chart_zoom+chart_pan};
+                        let chart_transform=ChartTransform::new(rect,chart_zoom,chart_pan);
+                        let center=|e:&Entity|chart_transform.normalized_to_screen(e.x,e.y);
                         let chart_prepare_started = Instant::now();
                         let ChartVectorGeometry {
                             link_lanes: _,
@@ -23932,32 +24010,30 @@ impl eframe::App for App {
                                 self.clear_chart_entity_selection();
                             } else {
                                 let positions = &entity_positions;
-                                let cycle_candidates = chart_link_cycle_candidates(
-                                    &self.case,
-                                    positions,
-                                    &entity_indices,
-                                    &route_lanes,
+                                let entity = chart_entity_at_position(
+                                    &self.case.entities,
+                                    &entity_positions,
                                     pos,
                                     self.chart_zoom,
                                 );
-                                let entity = self
-                                    .case
-                                    .entities
-                                    .iter()
-                                    .find(|entity| center(entity).distance(pos) < 75.0 * self.chart_zoom)
-                                    .map(|entity| entity.id);
-                                let chart_label = self.case.labels.iter().rev().find(|label| {
-                                    let base = egui::pos2(
-                                        rect.left() + label.x * rect.width(),
-                                        rect.top() + label.y * rect.height(),
-                                    );
-                                    let label_center = rect.center()
-                                        + (base - rect.center()) * self.chart_zoom
-                                        + self.chart_pan;
+                                let chart_label = entity.is_none().then(|| self.case.labels.iter().rev().find(|label| {
+                                    let label_center = chart_transform.normalized_to_screen(label.x,label.y);
                                     chart_canvas_item_bounds(label, label_center, self.chart_zoom)
                                         .expand(2.0)
                                         .contains(pos)
-                                }).map(|label| label.id);
+                                }).map(|label| label.id)).flatten();
+                                let cycle_candidates = if entity.is_none() && chart_label.is_none() {
+                                    chart_link_cycle_candidates(
+                                        &self.case,
+                                        positions,
+                                        &entity_indices,
+                                        &route_lanes,
+                                        pos,
+                                        self.chart_zoom,
+                                    )
+                                } else {
+                                    Vec::new()
+                                };
                                 if self.chart_label_creation_armed {
                                     let canvas_position = rect.center()
                                         + (pos - rect.center() - self.chart_pan) / self.chart_zoom;
@@ -24094,27 +24170,23 @@ impl eframe::App for App {
                         }
                         if response.secondary_clicked() && !self.link_creation_armed {
                             if let Some(pos) = response.interact_pointer_pos() {
-                                if let Some(label_id) = self.case.labels.iter().rev().find(|label| {
-                                    let base = egui::pos2(
-                                        rect.left() + label.x * rect.width(),
-                                        rect.top() + label.y * rect.height(),
-                                    );
-                                    let label_center = rect.center()
-                                        + (base - rect.center()) * self.chart_zoom
-                                        + self.chart_pan;
-                                    chart_canvas_item_bounds(label, label_center, self.chart_zoom)
-                                        .expand(2.0)
-                                        .contains(pos)
+                                if let Some(entity_id) = chart_entity_at_position(
+                                    &self.case.entities,
+                                    &entity_positions,
+                                    pos,
+                                    self.chart_zoom,
+                                ) {
+                                    self.select_chart_entity(entity_id, false);
+                                } else if let Some(label_id) = self.case.labels.iter().rev().find(|label| {
+                                    chart_canvas_item_bounds(
+                                        label,
+                                        chart_transform.normalized_to_screen(label.x, label.y),
+                                        self.chart_zoom,
+                                    )
+                                    .expand(2.0)
+                                    .contains(pos)
                                 }).map(|label| label.id) {
                                     self.select_chart_label(label_id);
-                                } else if let Some(entity_id) = self
-                                    .case
-                                    .entities
-                                    .iter()
-                                    .find(|entity| center(entity).distance(pos) < 75.0 * self.chart_zoom)
-                                    .map(|entity| entity.id)
-                                {
-                                    self.select_chart_entity(entity_id, false);
                                 } else {
                                     if let Some(index) = nearest_link_index_at_position(
                                         &self.case.links,
@@ -24160,30 +24232,42 @@ impl eframe::App for App {
                                         self.selected_link = None;
                                     }
                                 } else if !self.link_creation_armed && !self.chart_navigator_dragging {
-                                    let label_id = self.case.labels.iter().rev().find(|label| {
-                                        let base = egui::pos2(
-                                            rect.left() + label.x * rect.width(),
-                                            rect.top() + label.y * rect.height(),
-                                        );
-                                        let label_center = rect.center()
-                                            + (base - rect.center()) * self.chart_zoom
-                                            + self.chart_pan;
-                                        chart_canvas_item_bounds(label, label_center, self.chart_zoom)
-                                        .expand(2.0)
-                                        .contains(pos)
-                                    }).map(|label| label.id);
+                                    let entity_hit = chart_entity_at_position(
+                                        &self.case.entities,
+                                        &entity_positions,
+                                        pos,
+                                        self.chart_zoom,
+                                    );
+                                    let label_id = entity_hit
+                                        .is_none()
+                                        .then(|| {
+                                            self.case.labels.iter().rev().find(|label| {
+                                                let label_center = chart_transform
+                                                    .normalized_to_screen(label.x, label.y);
+                                                chart_canvas_item_bounds(
+                                                    label,
+                                                    label_center,
+                                                    self.chart_zoom,
+                                                )
+                                                .expand(2.0)
+                                                .contains(pos)
+                                            })
+                                            .map(|label| label.id)
+                                        })
+                                        .flatten();
                                     if let Some(label_id) = label_id {
                                         self.select_chart_label(label_id);
                                         if let Some(label) = self.case.labels.iter().find(|label| label.id == label_id) {
                                             self.chart_label_drag_origin = Some((label.id, label.x, label.y));
                                         }
-                                    } else if let Some((entity_id, position_locked)) = self
-                                        .case
-                                        .entities
-                                        .iter()
-                                        .find(|entity| center(entity).distance(pos) < 75.0 * self.chart_zoom)
-                                        .map(|entity| (entity.id, entity.position_locked))
-                                    {
+                                    } else if let Some((entity_id, position_locked)) = entity_hit
+                                        .and_then(|id| {
+                                            self.case
+                                                .entities
+                                                .iter()
+                                                .find(|entity| entity.id == id)
+                                                .map(|entity| (entity.id, entity.position_locked))
+                                        }) {
                                         if !self.selected_entities.contains(&entity_id) {
                                             self.select_chart_entity(entity_id, false);
                                         } else {
@@ -24260,13 +24344,13 @@ impl eframe::App for App {
                                     && let Some((anchor_x, anchor_y)) =
                                         self.drag_entity_origins.get(&id).copied()
                                 {
-                                    let base_position = rect.center()
-                                        + (pos - rect.center() - self.chart_pan)
-                                            / self.chart_zoom;
+                                    let normalized_position = chart_transform
+                                        .screen_to_normalized(pos)
+                                        .unwrap_or_else(|| egui::pos2(anchor_x, anchor_y));
                                     let target_x =
-                                        ((base_position.x - rect.left()) / rect.width()).clamp(0.05, 0.95);
+                                        normalized_position.x.clamp(0.05, 0.95);
                                     let target_y =
-                                        ((base_position.y - rect.top()) / rect.height()).clamp(0.08, 0.92);
+                                        normalized_position.y.clamp(0.08, 0.92);
                                     let (min_dx, max_dx, min_dy, max_dy) = self
                                         .drag_entity_origins
                                         .values()
@@ -27931,13 +28015,8 @@ fn chart_vector_geometry(
     zoom: f32,
     pan: egui::Vec2,
 ) -> ChartVectorGeometry {
-    let center = |entity: &Entity| {
-        let base = egui::pos2(
-            rect.left() + entity.x * rect.width(),
-            rect.top() + entity.y * rect.height(),
-        );
-        rect.center() + (base - rect.center()) * zoom + pan
-    };
+    let transform = ChartTransform::new(rect, zoom, pan);
+    let center = |entity: &Entity| transform.normalized_to_screen(entity.x, entity.y);
     let link_lanes = link_lane_offsets(case);
     let entity_positions: HashMap<Uuid, egui::Pos2> = case
         .entities
@@ -45028,6 +45107,79 @@ mod tests {
                 .expect("one selected entity exists");
         assert!(result.0.is_finite() && (0.25..=3.0).contains(&result.0));
         assert!(result.1.x.is_finite() && result.1.y.is_finite());
+    }
+
+    #[test]
+    fn chart_transform_round_trips_and_keeps_the_zoom_anchor_stationary() {
+        let rect = egui::Rect::from_min_size(egui::pos2(37.0, 51.0), egui::vec2(1200.0, 750.0));
+        let transform = super::ChartTransform::new(rect, 1.7, egui::vec2(-41.0, 23.0));
+        for (x, y) in [(0.0, 0.0), (0.05, 0.92), (0.5, 0.5), (1.0, 1.0)] {
+            let screen = transform.normalized_to_screen(x, y);
+            let recovered = transform
+                .screen_to_normalized(screen)
+                .expect("valid viewport maps back to normalized chart coordinates");
+            let reconstructed = transform.normalized_to_screen(recovered.x, recovered.y);
+            assert!(reconstructed.distance(screen) <= 0.1);
+        }
+
+        let pointer = egui::pos2(713.0, 389.0);
+        let before = transform
+            .screen_to_normalized(pointer)
+            .expect("pointer is inside a non-degenerate chart viewport");
+        let zoomed = transform.zoomed_at(pointer, 2.6);
+        let after = zoomed
+            .screen_to_normalized(pointer)
+            .expect("zoom retains a valid chart viewport");
+        assert!((before.x - after.x).abs() < 0.00001);
+        assert!((before.y - after.y).abs() < 0.00001);
+
+        let degenerate = egui::Rect::from_min_max(egui::pos2(5.0, 5.0), egui::pos2(5.0, 25.0));
+        assert!(
+            super::ChartTransform::new(degenerate, 1.0, egui::Vec2::ZERO)
+                .screen_to_normalized(egui::pos2(5.0, 10.0))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn chart_entity_hit_uses_visible_card_bounds_and_topmost_paint_order() {
+        let mut first = layout_entity("FIRST", "PERSON", false);
+        let mut second = layout_entity("SECOND", "PERSON", false);
+        let first_id = first.id;
+        let second_id = second.id;
+        first.x = 0.5;
+        first.y = 0.5;
+        second.x = 0.5;
+        second.y = 0.5;
+        let entities = vec![first, second];
+        let center = egui::pos2(400.0, 300.0);
+        let positions = std::collections::HashMap::from([(first_id, center), (second_id, center)]);
+
+        assert_eq!(
+            super::chart_entity_at_position(&entities, &positions, center, 1.0),
+            Some(second_id),
+            "the last painted overlapping card receives the hit"
+        );
+        assert_eq!(
+            super::chart_entity_at_position(
+                &entities,
+                &positions,
+                center + egui::vec2(70.0, 27.0),
+                1.0,
+            ),
+            Some(second_id),
+            "the actual card edge remains selectable"
+        );
+        assert_eq!(
+            super::chart_entity_at_position(
+                &entities,
+                &positions,
+                center + egui::vec2(0.0, 29.0),
+                1.0,
+            ),
+            None,
+            "points outside the visible card do not use a larger radial hit target"
+        );
     }
 
     #[test]
