@@ -42268,6 +42268,37 @@ mod tests {
     }
 
     #[test]
+    fn anx_import_worker_returns_a_validated_chart_payload() {
+        let case = super::demo_case();
+        let work_dir =
+            std::env::temp_dir().join(format!("arch-notebook-anx-worker-{}", Uuid::new_v4()));
+        std::fs::create_dir(&work_dir).expect("create isolated ANX worker directory");
+        let case_path = work_dir.join("source.case.json");
+        let anx_path = work_dir.join("source.anx");
+        super::write_case_anx(
+            &case,
+            &case_path.to_string_lossy(),
+            &anx_path.to_string_lossy(),
+        )
+        .expect("write fictional ANX worker input");
+        let target_chart_id = case.active_chart_id;
+        let receiver = super::spawn_anx_import_worker(
+            anx_path.to_string_lossy().into_owned(),
+            target_chart_id,
+        )
+        .expect("background ANX worker starts");
+        let (received_chart_id, result) = receiver
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("background worker returns a result");
+        let payload = result.expect("valid ANX XML parses successfully");
+        assert_eq!(received_chart_id, target_chart_id);
+        assert!(payload.has_chart_items);
+        assert!(!payload.csv_bytes.is_empty());
+        assert!(String::from_utf8_lossy(&payload.csv_bytes).contains("Avery Rowan"));
+        std::fs::remove_dir_all(&work_dir).expect("remove isolated ANX worker directory");
+    }
+
+    #[test]
     fn source_scoped_connection_ids_remain_distinct() {
         let make_link = |source: &str| super::Link {
             from: Uuid::from_u128(20),
