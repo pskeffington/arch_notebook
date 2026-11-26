@@ -17,6 +17,23 @@
 
 Exact commands, exit status, report hashes, and fixture caveats are recorded in [SQL-AUTO-02](evidence/sql-automation/SQL-AUTO-02-current-release-linux.md). No tests or builds were run for this documentation update. The pre-existing `src/main.rs` worktree diff was left unstaged and is outside this evidence change.
 
+## Linux analyst packet acceptance — 2026-11-26
+
+**Task / owner:** `SNG-DELIVERY-004`, local analyst finding-packet export; implementation session.
+**Repository / branch:** `/home/sysadmin/github/arch_notebook` / `codex/ui-00-chart-baseline`.
+**Candidate source:** `bb5443ef27b4be03f35de58a9d07e000627e5ccb` (feature commit `84ddfd3`, followed by staging-cleanup hardening).
+**Release artifact:** `/tmp/arch-notebook-target/release/arch-notebook`, SHA-256 `d02aca2aa4f59a229f7f12c533ca8bcb9abd7782d2d94ec7d4ff43eca5fc99c4`.
+
+| Gate | Result | Evidence and limits |
+| --- | --- | --- |
+| Format, Rust tests, offline check, debug/release builds | PASS | Formatting, `git diff --check`, 27 tests, locked offline check, debug build, and optimized release build all exited 0. |
+| CLI acceptance on fictional data | PASS | Default redaction, explicit disclosures, 1-entity alternate-chart selection, source immutability, valid SVG, parallel/directed/self-loop semantics, no-overwrite, duplicate JSON rejection, and 0700/0600 output permissions passed. |
+| Rendered SVG | PASS, implementation-owner inspection | `rsvg-convert` rendered a 1200×800 SVG with bounded labels, parallel lanes, direction cues, self-loop, and legend. This is a compact overview, not the interactive chart. |
+| Independent code/security review | BLOCKED | No independent review handoff is present; implementation-owner review is recorded separately. |
+| IBM application and macOS support | BLOCKED / not tested | IBM ANX XSD/application validation was not performed. Atomic packet-directory publication is Linux-only; macOS was not cross-compiled or run. |
+
+Exact commands, report and artifact digests, and scope limits are in [PACKET-01](evidence/analyst-packet/PACKET-01-linux.md). This CLI handoff is separate from SQL automation acceptance above and does not establish IBM interoperability or native UI acceptance.
+
 > **Historical record:** The original local build below is retained as written for provenance. Its dirty `main` worktree and “no tests” findings describe the 2026-11-25 candidate only; they do not describe the current feature branch. Current branch evidence is summarized in [Current continuation: UI-00 and local install](#current-continuation-ui-00-and-local-install).
 
 [![Linux local build: passing](https://img.shields.io/badge/Linux%20local%20build-passing-brightgreen)](#feature-branch-increment-reusable-chart-templates)

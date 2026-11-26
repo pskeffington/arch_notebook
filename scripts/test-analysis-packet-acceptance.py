@@ -110,9 +110,23 @@ def main() -> int:
                 assert value not in default_report and value not in default_svg
     assert "<metadata" not in default_svg
     svg_namespace = "{http://www.w3.org/2000/svg}"
-    assert len(default_xml.findall(f".//{svg_namespace}g[@data-record]")) == len(original["links"])
-    assert default_xml.find(f".//{svg_namespace}marker") is not None
-    assert default_xml.find(f".//{svg_namespace}path") is not None
+    record_groups = default_xml.findall(f".//{svg_namespace}g[@data-record]")
+    assert len(record_groups) == len(original["links"])
+    directed_count = sum(bool(link.get("directed")) for link in original["links"])
+    self_loop_count = sum(link["from"] == link["to"] for link in original["links"])
+    directed_rendered = sum(
+        element.get("marker-end") == "url(#arrow)"
+        for group in record_groups
+        for element in group
+    )
+    loop_paths = len(default_xml.findall(f".//{svg_namespace}g[@data-record]/{svg_namespace}path"))
+    assert directed_rendered == directed_count
+    assert loop_paths == self_loop_count
+    assert len(default_xml.findall(f".//{svg_namespace}g[@data-record]/{svg_namespace}line")) == len(original["links"]) - self_loop_count
+    legend = " ".join(node.text or "" for node in default_xml.findall(f".//{svg_namespace}text"))
+    assert "Undirected relationship record" in legend
+    assert "Directed relationship record" in legend
+    assert "Entity" in legend
     assert all(
         not edge.findall(f"{svg_namespace}text")
         for edge in default_xml.findall(f".//{svg_namespace}g[@data-record]")
@@ -213,7 +227,13 @@ def main() -> int:
         "duplicate_json_created_no_output": not duplicate_json_path.exists(),
         "svg_xml_parse": "PASS",
         "svg_relationship_records": len(default_xml.findall(f".//{svg_namespace}g[@data-record]")),
-        "svg_direction_and_self_loop_markers": "PASS",
+        "svg_direction_and_self_loop_markers": {
+            "directed_expected": directed_count,
+            "directed_rendered": directed_rendered,
+            "self_loops_expected": self_loop_count,
+            "self_loops_rendered": loop_paths,
+            "legend": "PASS",
+        },
         "unix_private_permissions": "PASS" if sys.platform.startswith("linux") else "NOT APPLICABLE",
         "default_privacy": "Names, relationship labels, IDs, source references, and chart title omitted.",
         "platform_scope": "Linux CLI only; non-Linux atomic publication currently reports unsupported.",
