@@ -148,6 +148,21 @@ No build or test command was run for this documentation-only reconciliation. Nex
 
 Exact commands, exit codes, paths, and report digests are in [SQL-AUTO-03](evidence/sql-automation/SQL-AUTO-03-current-branch-linux.md). These automated synthetic results do not establish interactive, live-scheduler, production-schema, IBM-compatibility, or release acceptance.
 
+## UI-00 acceptance: current fixture reproduction
+
+**Task / owner:** Verify UI-00 fixture determinism and bounded workload generation; implementation session.
+**Repository / branch:** `/home/sysadmin/github/arch_notebook` / `codex/ui-00-chart-baseline`.
+**Source commit:** `4fda60ad5d98caa198364ab1c4c40da8af8d1101`.
+
+| Gate | Result | Evidence and limits |
+| --- | --- | --- |
+| Correctness fixture | PASS | Two generated copies matched each other and `fixtures/chart/correctness.case.json`; JSON parsing passed. 8 entities, 8 relationship records, fixture SHA matches the manifest. |
+| Workload families | PASS | Sparse/hub/disconnected/dense at 1,000 nodes each reproduced byte-for-byte with 3,000/3,000/2,000/10,000 links. Dense 10,000-node output reproduced twice at the 100,000-link cap. |
+| Native baseline and measurements | BLOCKED | Display access is denied. No interaction or rendering metric is claimed. |
+| CI for current candidate | PENDING | Workflow source runs `cargo test` and generator checks, but no implementation PR run is associated with this candidate. Local reproduction does not substitute for CI. |
+
+See [UI-00 fixture reproduction evidence](evidence/vector-ui/UI-00-fixture-reproduction-linux.md) for exact commands, hashes, and the corrected local summary assertion.
+
 ## Feature-branch increment: aspect-aware entity type layout
 
 **Task / owner:** Improve analyst-facing vector organization; implementation session.
