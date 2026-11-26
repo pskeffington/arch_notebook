@@ -17,8 +17,9 @@
 | Formatting | **PASS** | `cargo fmt --all -- --check`, exit 0. |
 | Compile check | **PASS** | `CARGO_TARGET_DIR=/tmp/arch-notebook-target cargo check --locked --offline`, exit 0. |
 | Optimized release build | **PASS** | `CARGO_TARGET_DIR=/tmp/arch-notebook-target cargo build --release --locked --offline`, exit 0. Binary digest above. |
+| Independent code review | **PASS** | [Review handoff](UI-01-coincident-routes-review-linux.md) records review of route allocation, render/hit-test sharing, and regression coverage. Security review was not performed. |
 | Whitespace check | **PASS** | `git diff --check`, exit 0. |
-| CI for candidate | **PENDING** | No CI result was available for candidate `fae574d` when this report was prepared. Local tests do not substitute for the candidate workflow run. |
+| CI for candidate | **PENDING** | After push, `GET /repos/pskeffington/arch_notebook/actions/runs?head_sha=fae574dc74af78ae19a950641ba2b14e652901c2` returned `total_count: 0` on 2026-11-26. Local tests do not substitute for a candidate workflow run. |
 
 The renderer now derives route offsets from endpoint positions for links that otherwise share the same geometric path. Direction is normalized for distinct coincident endpoints; self-links at a shared position receive separate loop routes. The chart's nearest-link picking uses the same computed offsets as drawing. This preserves separate relationship records and their identities.
 

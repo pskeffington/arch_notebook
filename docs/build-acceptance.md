@@ -122,11 +122,12 @@ These modified and untracked paths were present during acceptance. The worktree 
 | --- | --- | --- |
 | Loop geometry, label separation, arrowhead placement, and selection regression | PASS | [UI-01 self-loop evidence](evidence/vector-ui/UI-01-self-loop-linux.md); focused and full offline Rust suites pass. |
 | Distinct routes and exact picking for links sharing endpoint positions | PASS, source test | [UI-01 coincident-route evidence](evidence/vector-ui/UI-01-coincident-routes-linux-fae574d.md); all nine fixture routes differ and each route sample selects its exact record. |
+| Independent code review | PASS | [UI-01 review handoff](evidence/vector-ui/UI-01-coincident-routes-review-linux.md); source route/picking review and disclosure wording recheck passed. This does not include security review. |
 | Earlier self-loop candidate Linux render | PASS, render-only | Screenshot inspected at 1440×900; input was unavailable. It does not visually verify the coincident-route follow-up candidate. |
 | Current-candidate native interaction and UI-00 baseline | BLOCKED | Current release launch stayed alive for the bounded smoke interval, but display capture and pointer/keyboard input are unavailable; repeated interaction and performance sampling remain open. |
 | IBM application/schema interoperability | NOT TESTED | Requires validation in the IBM application/schema environment. |
 
-The source change repairs visible self-link routes and label placement. It does not close UI-00 or establish IBM visual parity. Continue with an input-capable native session and the established UI-00 sequence before treating UI-01 as natively accepted.
+The source changes repair self-link and coincident-position routes while preserving record-level picking. They do not close UI-00 or establish IBM visual parity. Continue with an input-capable native session and the established UI-00 sequence before treating UI-01 as natively accepted.
 
 **Task / owner:** Continue the Rust Arch Notebook parity build; implementation session.
 **Repository / branch:** `/home/sysadmin/github/arch_notebook` / `codex/ui-00-chart-baseline`.
