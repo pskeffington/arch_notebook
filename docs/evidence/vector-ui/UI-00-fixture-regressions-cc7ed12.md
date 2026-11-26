@@ -29,3 +29,10 @@
 The existing lane grouping sorts records by direction, then assigns centered offsets and negates offsets for reverse records. With multiple forward records and a reversed record, those operations can produce duplicate signed offsets. The checked-in fixture reproduces the defect at indices 2 and 5 with lane `-36`; the ignored assertion provides a runnable acceptance check for its repair.
 
 **Next action:** after UI-00 native interaction and visual acceptance, repair deterministic lane allocation and exact record picking under UI-01. Remove the ignore only when the same targeted command passes; retain all records, stable identity and direction. Do not claim chart usability or IBM parity from this unit-level result.
+
+## Repair follow-up — 2026-11-26
+
+The lane collision was repaired after this historical failure report. `link_lane_offsets` now assigns each parallel record a lane in canonical endpoint order, then converts that lane to the record's local direction. The fixture assertion compares routes after direction normalization, so reversing a relationship cannot make it overlap a forward record. The check is active in the default test suite.
+
+- **Changed source:** `src/main.rs` (`link_lane_offsets`); detailed current acceptance is recorded in [`UI-01-parallel-lanes-linux.md`](UI-01-parallel-lanes-linux.md).
+- **Follow-up result:** targeted collision regression and full offline Rust suite PASS; native interaction and visual inspection remain BLOCKED.

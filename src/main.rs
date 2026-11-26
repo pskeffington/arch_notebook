@@ -27469,15 +27469,18 @@ fn link_lane_offsets(case: &CaseFile) -> Vec<f32> {
                 .then_with(|| left.attributes.cmp(&right.attributes))
         });
         for (lane, index) in indices.iter().enumerate() {
-            let lane_offset = if first == second {
+            let canonical_lane_offset = if first == second {
                 (lane as f32 + 1.0) * 18.0
             } else {
                 (lane as f32 - (indices.len() - 1) as f32 / 2.0) * 18.0
             };
+            // The lane belongs to the canonical endpoint order. Convert it
+            // back to each record's local direction so reversing a link does
+            // not collapse it onto a lane already used by a forward link.
             offsets[*index] = if links[*index].from == first {
-                lane_offset
+                canonical_lane_offset
             } else {
-                -lane_offset
+                -canonical_lane_offset
             };
         }
     }
