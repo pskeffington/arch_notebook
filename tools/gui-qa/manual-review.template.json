@@ -1,0 +1,14 @@
+{
+  "schema": "arch-notebook-gui-qa-manual-review/v1",
+  "checks": {
+    "window_responsive": "PENDING",
+    "chart_entities_and_relationships_visible": "PENDING",
+    "self_loop_and_parallel_routes_visible": "PENDING",
+    "exact_relationship_selection": "PENDING",
+    "method_card_refresh": "PENDING",
+    "copy_scope": "PENDING",
+    "quick_open_fit_chart": "PENDING",
+    "resize_zoom_pan_fit_all": "PENDING",
+    "crash_or_unexpected_write": "PENDING"
+  }
+}
