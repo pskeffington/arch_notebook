@@ -25526,6 +25526,218 @@ impl eframe::App for App {
                             ui.label(egui::RichText::new(
                                 "Entities at the same hop are grouped when they contact within that layer. Group links retain record counts and direction; parallel records remain individually inspectable.",
                             ).small().color(muted));
+                            ui.label(egui::RichText::new(
+                                "GROUP CONTACT MAP · each node is a hop-layer group; thicker lines represent more relationship records. Direction counts remain available in the interaction list.",
+                            ).small().color(muted));
+                            let max_hop = analysis
+                                .groups
+                                .iter()
+                                .map(|group| group.hop_distance)
+                                .max()
+                                .unwrap_or_default();
+                            let mut groups_by_hop = vec![Vec::new(); max_hop + 1];
+                            for (group_index, group) in analysis.groups.iter().enumerate() {
+                                groups_by_hop[group.hop_distance].push(group_index);
+                            }
+                            const MAX_MAP_GROUPS: usize = 120;
+                            const MAX_MAP_HOPS: usize = 40;
+                            let hop_count = groups_by_hop.len();
+                            let displayed_hops: Vec<usize> = if hop_count <= MAX_MAP_HOPS {
+                                (0..hop_count).collect()
+                            } else {
+                                (0..MAX_MAP_HOPS)
+                                    .map(|column| {
+                                        column * (hop_count - 1) / (MAX_MAP_HOPS - 1)
+                                    })
+                                    .collect()
+                            };
+                            let mut map_groups_by_column = vec![Vec::new(); displayed_hops.len()];
+                            for (column, hop) in displayed_hops.iter().copied().enumerate() {
+                                map_groups_by_column[column].clone_from(&groups_by_hop[hop]);
+                            }
+                            let mut visible_groups_by_column =
+                                vec![Vec::new(); displayed_hops.len()];
+                            let mut group_cursors = vec![0; displayed_hops.len()];
+                            let mut visible_group_count = 0;
+                            loop {
+                                let mut found_group = false;
+                                for column in 0..map_groups_by_column.len() {
+                                    if visible_group_count >= MAX_MAP_GROUPS {
+                                        break;
+                                    }
+                                    if let Some(group_index) = map_groups_by_column[column]
+                                        .get(group_cursors[column])
+                                        .copied()
+                                    {
+                                        visible_groups_by_column[column].push(group_index);
+                                        group_cursors[column] += 1;
+                                        visible_group_count += 1;
+                                        found_group = true;
+                                    }
+                                }
+                                if !found_group || visible_group_count >= MAX_MAP_GROUPS {
+                                    break;
+                                }
+                            }
+                            let visible_group_indices: Vec<usize> = visible_groups_by_column
+                                .iter()
+                                .flatten()
+                                .copied()
+                                .collect();
+                            let visible_group_set: std::collections::HashSet<usize> =
+                                visible_group_indices.iter().copied().collect();
+                            let map_width = 160.0 + displayed_hops.len().saturating_sub(1) as f32 * 160.0;
+                            let max_layer_groups = visible_groups_by_column
+                                .iter()
+                                .map(Vec::len)
+                                .max()
+                                .unwrap_or_default();
+                            let map_height = 64.0 + max_layer_groups as f32 * 44.0;
+                            egui::ScrollArea::both()
+                                .id_salt("proximity_group_map_scroll")
+                                .max_height(205.0)
+                                .show(ui, |ui| {
+                                    let (map_rect, _) = ui.allocate_exact_size(
+                                        egui::vec2(map_width, map_height),
+                                        egui::Sense::hover(),
+                                    );
+                                    let painter = ui.painter_at(map_rect);
+                                    let mut group_positions = vec![egui::Pos2::ZERO; analysis.groups.len()];
+                                    for (column, group_indices) in
+                                        visible_groups_by_column.iter().enumerate()
+                                    {
+                                        let hop = displayed_hops[column];
+                                        let x = map_rect.left() + 80.0 + column as f32 * 160.0;
+                                        painter.text(
+                                            egui::pos2(x, map_rect.top() + 8.0),
+                                            egui::Align2::CENTER_CENTER,
+                                            format!("HOP {hop}"),
+                                            egui::FontId::proportional(9.0),
+                                            muted,
+                                        );
+                                        for (row, group_index) in group_indices.iter().copied().enumerate() {
+                                            group_positions[group_index] = egui::pos2(
+                                                x,
+                                                map_rect.top() + 42.0 + row as f32 * 44.0,
+                                            );
+                                        }
+                                    }
+                                    for interaction in &analysis.interactions {
+                                        if !visible_group_set.contains(&interaction.first_group)
+                                            || !visible_group_set.contains(&interaction.second_group)
+                                        {
+                                            continue;
+                                        }
+                                        let Some(&from) = group_positions.get(interaction.first_group) else { continue };
+                                        let Some(&to) = group_positions.get(interaction.second_group) else { continue };
+                                        let width = (1.0
+                                            + (interaction.relationship_record_count as f32).log2())
+                                            .clamp(1.0, 5.0);
+                                        painter.line_segment(
+                                            [from, to],
+                                            egui::Stroke::new(width, egui::Color32::from_rgb(66, 111, 129)),
+                                        );
+                                    }
+                                    let proxy_entities: std::collections::HashSet<Uuid> = analysis
+                                        .proxies
+                                        .iter()
+                                        .map(|proxy| proxy.entity_id)
+                                        .collect();
+                                    for group_index in visible_group_indices.iter().copied() {
+                                        let group = &analysis.groups[group_index];
+                                        let center = group_positions[group_index];
+                                        let radius = (8.0 + (group.members.len() as f32).sqrt())
+                                            .clamp(9.0, 15.0);
+                                        let is_origin = group.hop_distance == 0;
+                                        let contains_proxy = group
+                                            .members
+                                            .iter()
+                                            .any(|member| proxy_entities.contains(member));
+                                        let fill = if is_origin {
+                                            egui::Color32::from_rgb(183, 137, 63)
+                                        } else {
+                                            egui::Color32::from_rgb(58, 111, 130)
+                                        };
+                                        painter.circle_filled(center, radius, fill);
+                                        if contains_proxy {
+                                            painter.circle_stroke(
+                                                center,
+                                                radius + 3.0,
+                                                egui::Stroke::new(1.5_f32, egui::Color32::from_rgb(235, 190, 94)),
+                                            );
+                                        }
+                                        painter.text(
+                                            center,
+                                            egui::Align2::CENTER_CENTER,
+                                            format!("G{}", group_index + 1),
+                                            egui::FontId::proportional(8.0),
+                                            egui::Color32::WHITE,
+                                        );
+                                        painter.text(
+                                            center + egui::vec2(0.0, radius + 5.0),
+                                            egui::Align2::CENTER_TOP,
+                                            format!(
+                                                "{} entities · {} records",
+                                                group.members.len(),
+                                                group.internal_record_count,
+                                            ),
+                                            egui::FontId::proportional(8.0),
+                                            muted,
+                                        );
+                                        let hit_rect = egui::Rect::from_center_size(
+                                            center,
+                                            egui::vec2(radius * 2.0 + 8.0, radius * 2.0 + 8.0),
+                                        );
+                                        let response = ui.interact(
+                                            hit_rect,
+                                            ui.make_persistent_id(("proximity_group_map_node", group_index)),
+                                            egui::Sense::click(),
+                                        );
+                                        let member_names = group
+                                            .members
+                                            .iter()
+                                            .filter_map(|id| self.case.entities.iter().find(|entity| entity.id == *id))
+                                            .take(8)
+                                            .map(|entity| entity.name.as_str())
+                                            .collect::<Vec<_>>()
+                                            .join(" · ");
+                                        response.clone().on_hover_text(format!(
+                                            "Group {} · hop {} · {} entities{}\n{}\nClick to show this group on the chart.",
+                                            group_index + 1,
+                                            group.hop_distance,
+                                            group.members.len(),
+                                            if contains_proxy { " · contains a cross-group proxy" } else { "" },
+                                            member_names,
+                                        ));
+                                        if response.clicked() {
+                                            self.chart_fit_entities = Some(group.members.clone());
+                                            self.chart_fit_path = None;
+                                            self.chart_focus_group = Some(group.members.iter().copied().collect());
+                                            self.chart_focus = None;
+                                            self.chart_focus_link = None;
+                                            self.clear_path_result();
+                                            self.sql_source_focus = None;
+                                            self.selected = group.members.first().copied();
+                                            self.selected_link = None;
+                                            self.page = WorkspacePage::Chart;
+                                            self.show_timeline = false;
+                                        }
+                                    }
+                                });
+                            if visible_group_count < analysis.groups.len()
+                                || displayed_hops.len() < hop_count
+                            {
+                                ui.label(egui::RichText::new(format!(
+                                    "Map shows {visible_group_count} of {} groups across {} of {hop_count} hop layers; all groups and interaction records remain listed below.",
+                                    analysis.groups.len(),
+                                    displayed_hops.len(),
+                                )).small().color(muted));
+                            }
+                            ui.horizontal(|ui| {
+                                ui.label(egui::RichText::new("● origin").small().color(egui::Color32::from_rgb(183, 137, 63)));
+                                ui.label(egui::RichText::new("○ proxy group").small().color(egui::Color32::from_rgb(235, 190, 94)));
+                                ui.label(egui::RichText::new("Click a group to show it on the chart.").small().color(muted));
+                            });
                             egui::ScrollArea::vertical()
                                 .id_salt("proximity_contact_groups")
                                 .max_height(150.0)
