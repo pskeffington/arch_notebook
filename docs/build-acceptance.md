@@ -1,5 +1,7 @@
 # Local build acceptance record
 
+> **Historical record:** The original local build below is retained as written for provenance. Its dirty `main` worktree and “no tests” findings describe the 2026-11-25 candidate only; they do not describe the current feature branch. Current branch evidence is summarized in [Current continuation: UI-00 and local install](#current-continuation-ui-00-and-local-install).
+
 [![Linux local build: passing](https://img.shields.io/badge/Linux%20local%20build-passing-brightgreen)](#feature-branch-increment-reusable-chart-templates)
 
 Badge scope: recorded Linux compilation at `ada3a01`; runtime, package installation and release acceptance remain separate.
@@ -77,6 +79,24 @@ These modified and untracked paths were present during acceptance. The worktree 
 3. Exercise SQL scheduling, cancellation, resume, and failure review with a disposable case on supported platforms.
 4. Validate ANX fixtures with IBM's XSD and application, then update the parity map with the results.
 5. Repeat the checks against a clean, immutable source commit before any release decision.
+
+## Current continuation: UI-00 and local install
+
+**Task / owner:** Continue the Rust Arch Notebook parity build; implementation session.
+**Repository / branch:** `/home/sysadmin/github/arch_notebook` / `codex/ui-00-chart-baseline`.
+**Baseline/source:** `abffef37101bd298defd1e243c257a26e370323f` (matches `origin/codex/ui-00-chart-baseline` at this record).
+**Scope:** Reconcile current branch acceptance status across SQL automation, native chart interaction, IBM interoperability, and the installed Linux launcher.
+
+| Gate | Result | Evidence and limits |
+| --- | --- | --- |
+| Branch/worktree provenance | PASS | `HEAD` and `origin/codex/ui-00-chart-baseline` resolve to `abffef37101bd298defd1e243c257a26e370323f`; worktree was clean before this documentation update. |
+| SQL automation | PASS, scoped | Rolling previous-UTC-month selection is exercised through the Linux generated-service harness and the macOS runner harness. Evidence: [SQL-SCHED-03](evidence/sql-automation/SQL-SCHED-03-dynamic-window-linux.md) and [SQL-SCHED-04](evidence/sql-automation/SQL-SCHED-04-macos-window-linux-harness.md). Actual systemd timer dispatch and native macOS `launchd` dispatch remain unverified. |
+| Local Linux installation and launcher/icon sync | PASS, scoped | Release binary, desktop/menu entries, case-file association, automation installer, and icons match and validate as recorded in [LOCAL-INSTALL-01](evidence/deployment/LOCAL-INSTALL-01-linux.md). GUI relaunch/interaction was not verified. |
+| UI-00 native chart acceptance | BLOCKED | The latest runtime record describes a screenshot marked “Not Responding” and unavailable stable compositor access; responsive interaction, repeated workload sampling, and visual inspection remain open. Evidence: [UI-00 recheck](evidence/vector-ui/UI-00-linux-recheck-e44d485.md). Do not advance to UI-01 until this gate passes. |
+| IBM interoperability | BLOCKED | Internal supported-subset ANX round-trip passes, but IBM XSD and Analyst's Notebook application validation have not run. Evidence: [ANX-ROUNDTRIP-01](evidence/anx/ANX-ROUNDTRIP-01-linux.md). |
+| Remote workflow result for this source | BLOCKED | GitHub Actions API was unreachable during this continuation; no workflow conclusion is asserted for `abffef3`. Earlier CI evidence applies only to the source SHAs named in those records. |
+
+No build or test command was run for this documentation-only reconciliation. Next action is to repeat the UI-00 sequence in a stable native desktop session; retain the IBM validation and live scheduler dispatch gates separately.
 
 ## Feature-branch increment: reusable chart templates
 
