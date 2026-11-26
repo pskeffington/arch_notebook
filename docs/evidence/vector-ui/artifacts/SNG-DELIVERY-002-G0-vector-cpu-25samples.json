@@ -1,0 +1,951 @@
+{
+  "schema_version": 1,
+  "benchmark_suite": "arch_notebook_chart_vector_cpu_geometry",
+  "host": {
+    "platform": "Linux-7.3.5-zen1-1-zen-x86_64-with-glibc2.44",
+    "machine": "x86_64"
+  },
+  "binary": "/tmp/arch-notebook-target/release/arch-notebook",
+  "results": [
+    {
+      "application_version": "0.1.0",
+      "benchmark": "chart_vector_cpu_geometry",
+      "build_profile": "release",
+      "canvas_pixels": {
+        "height": 900,
+        "width": 1440
+      },
+      "entities": 100,
+      "fixture_path": "/tmp/arch-notebook-vector-bench-hvfiz3fk/sparse-100.json",
+      "fixture_sha256": "2882d43cb5c261ad1551f5bdbb9b6eeabdb9ebec6c51e1859e662fca005c5bf4",
+      "geometry_outputs": {
+        "entity_positions": 100,
+        "geometric_lanes": 300,
+        "nearest_record_at_canvas_center": {
+          "candidate_count": 7,
+          "first_indices": [
+            41,
+            287,
+            282,
+            253,
+            121,
+            112,
+            295
+          ],
+          "truncated": false
+        },
+        "ordinary_lanes": 300
+      },
+      "iterations": 25,
+      "labels": 0,
+      "pan": [
+        0.0,
+        0.0
+      ],
+      "relationship_records": 300,
+      "schema_version": 1,
+      "scope": "CPU chart vector preparation and the same sorted pointer cycle-candidate scan used by the UI. The previous pointer-path value is a proxy that repeats frame preparation plus the former duplicate vector preparation before that same scan. No chart painting, text shaping, GPU, compositor, presentation, input-to-paint latency, or FPS.",
+      "timings": {
+        "current_frame_prepare_plus_pointer_pick": {
+          "max_ns": 902993,
+          "mean_ns": 668153,
+          "median_ns": 566670,
+          "min_ns": 544632,
+          "p95_ns": 901989,
+          "samples": 25
+        },
+        "pointer_cycle_candidate_scan_with_reused_geometry": {
+          "max_ns": 356671,
+          "mean_ns": 235312,
+          "median_ns": 203430,
+          "min_ns": 193872,
+          "p95_ns": 326635,
+          "samples": 25
+        },
+        "previous_pointer_path_proxy_frame_prepare_plus_duplicate_vector_prepare_and_same_pointer_pick": {
+          "max_ns": 1479899,
+          "mean_ns": 1113673,
+          "median_ns": 1000020,
+          "min_ns": 894003,
+          "p95_ns": 1476663,
+          "samples": 25
+        },
+        "vector_geometry_prepare": {
+          "max_ns": 614800,
+          "mean_ns": 425174,
+          "median_ns": 359351,
+          "min_ns": 344601,
+          "p95_ns": 614794,
+          "samples": 25
+        }
+      },
+      "warmup_runs": 3,
+      "zoom": 1.0,
+      "fixture_family": "sparse"
+    },
+    {
+      "application_version": "0.1.0",
+      "benchmark": "chart_vector_cpu_geometry",
+      "build_profile": "release",
+      "canvas_pixels": {
+        "height": 900,
+        "width": 1440
+      },
+      "entities": 1000,
+      "fixture_path": "/tmp/arch-notebook-vector-bench-hvfiz3fk/sparse-1000.json",
+      "fixture_sha256": "41567e73d4ae2bee466ea2a07e1c6bc0d067ccf43efb8bc533141275c50ec1ab",
+      "geometry_outputs": {
+        "entity_positions": 1000,
+        "geometric_lanes": 3000,
+        "nearest_record_at_canvas_center": {
+          "candidate_count": 61,
+          "first_indices": [
+            1690,
+            1778,
+            262,
+            41,
+            641,
+            462,
+            1220,
+            1229,
+            1995,
+            2728
+          ],
+          "truncated": true
+        },
+        "ordinary_lanes": 3000
+      },
+      "iterations": 25,
+      "labels": 0,
+      "pan": [
+        0.0,
+        0.0
+      ],
+      "relationship_records": 3000,
+      "schema_version": 1,
+      "scope": "CPU chart vector preparation and the same sorted pointer cycle-candidate scan used by the UI. The previous pointer-path value is a proxy that repeats frame preparation plus the former duplicate vector preparation before that same scan. No chart painting, text shaping, GPU, compositor, presentation, input-to-paint latency, or FPS.",
+      "timings": {
+        "current_frame_prepare_plus_pointer_pick": {
+          "max_ns": 4397334,
+          "mean_ns": 3504197,
+          "median_ns": 3589983,
+          "min_ns": 2061051,
+          "p95_ns": 4266828,
+          "samples": 25
+        },
+        "pointer_cycle_candidate_scan_with_reused_geometry": {
+          "max_ns": 1631179,
+          "mean_ns": 1162551,
+          "median_ns": 1143682,
+          "min_ns": 730063,
+          "p95_ns": 1566439,
+          "samples": 25
+        },
+        "previous_pointer_path_proxy_frame_prepare_plus_duplicate_vector_prepare_and_same_pointer_pick": {
+          "max_ns": 7018398,
+          "mean_ns": 5899299,
+          "median_ns": 6199429,
+          "min_ns": 3966341,
+          "p95_ns": 6967929,
+          "samples": 25
+        },
+        "vector_geometry_prepare": {
+          "max_ns": 3090106,
+          "mean_ns": 2308730,
+          "median_ns": 2354014,
+          "min_ns": 1251464,
+          "p95_ns": 2876220,
+          "samples": 25
+        }
+      },
+      "warmup_runs": 3,
+      "zoom": 1.0,
+      "fixture_family": "sparse"
+    },
+    {
+      "application_version": "0.1.0",
+      "benchmark": "chart_vector_cpu_geometry",
+      "build_profile": "release",
+      "canvas_pixels": {
+        "height": 900,
+        "width": 1440
+      },
+      "entities": 10000,
+      "fixture_path": "/tmp/arch-notebook-vector-bench-hvfiz3fk/sparse-10000.json",
+      "fixture_sha256": "be06fe7d72b1df3704e26a9b3cf0e792aa3de39e5b36066c7175b66f49fbebbe",
+      "geometry_outputs": {
+        "entity_positions": 10000,
+        "geometric_lanes": 30000,
+        "nearest_record_at_canvas_center": {
+          "candidate_count": 568,
+          "first_indices": [
+            19945,
+            13688,
+            28717,
+            2701,
+            10712,
+            13917,
+            10591,
+            19012,
+            22926,
+            12901
+          ],
+          "truncated": true
+        },
+        "ordinary_lanes": 30000
+      },
+      "iterations": 25,
+      "labels": 0,
+      "pan": [
+        0.0,
+        0.0
+      ],
+      "relationship_records": 30000,
+      "schema_version": 1,
+      "scope": "CPU chart vector preparation and the same sorted pointer cycle-candidate scan used by the UI. The previous pointer-path value is a proxy that repeats frame preparation plus the former duplicate vector preparation before that same scan. No chart painting, text shaping, GPU, compositor, presentation, input-to-paint latency, or FPS.",
+      "timings": {
+        "current_frame_prepare_plus_pointer_pick": {
+          "max_ns": 80686906,
+          "mean_ns": 29877151,
+          "median_ns": 27459182,
+          "min_ns": 26588214,
+          "p95_ns": 30567452,
+          "samples": 25
+        },
+        "pointer_cycle_candidate_scan_with_reused_geometry": {
+          "max_ns": 26651498,
+          "mean_ns": 9214163,
+          "median_ns": 8273235,
+          "min_ns": 8107941,
+          "p95_ns": 9438066,
+          "samples": 25
+        },
+        "previous_pointer_path_proxy_frame_prepare_plus_duplicate_vector_prepare_and_same_pointer_pick": {
+          "max_ns": 60626044,
+          "mean_ns": 48713451,
+          "median_ns": 48366047,
+          "min_ns": 44557710,
+          "p95_ns": 52110459,
+          "samples": 25
+        },
+        "vector_geometry_prepare": {
+          "max_ns": 53063844,
+          "mean_ns": 20183534,
+          "median_ns": 18521191,
+          "min_ns": 17941227,
+          "p95_ns": 21205999,
+          "samples": 25
+        }
+      },
+      "warmup_runs": 3,
+      "zoom": 1.0,
+      "fixture_family": "sparse"
+    },
+    {
+      "application_version": "0.1.0",
+      "benchmark": "chart_vector_cpu_geometry",
+      "build_profile": "release",
+      "canvas_pixels": {
+        "height": 900,
+        "width": 1440
+      },
+      "entities": 100,
+      "fixture_path": "/tmp/arch-notebook-vector-bench-hvfiz3fk/hub-100.json",
+      "fixture_sha256": "1d48281591313ac384a77b5a699f2baf8239b7db0cdada8bcbc285a348887c6c",
+      "geometry_outputs": {
+        "entity_positions": 100,
+        "geometric_lanes": 300,
+        "nearest_record_at_canvas_center": {
+          "candidate_count": 6,
+          "first_indices": [
+            9,
+            35,
+            190,
+            25,
+            289,
+            203
+          ],
+          "truncated": false
+        },
+        "ordinary_lanes": 300
+      },
+      "iterations": 25,
+      "labels": 0,
+      "pan": [
+        0.0,
+        0.0
+      ],
+      "relationship_records": 300,
+      "schema_version": 1,
+      "scope": "CPU chart vector preparation and the same sorted pointer cycle-candidate scan used by the UI. The previous pointer-path value is a proxy that repeats frame preparation plus the former duplicate vector preparation before that same scan. No chart painting, text shaping, GPU, compositor, presentation, input-to-paint latency, or FPS.",
+      "timings": {
+        "current_frame_prepare_plus_pointer_pick": {
+          "max_ns": 1633278,
+          "mean_ns": 755706,
+          "median_ns": 662482,
+          "min_ns": 450720,
+          "p95_ns": 1117338,
+          "samples": 25
+        },
+        "pointer_cycle_candidate_scan_with_reused_geometry": {
+          "max_ns": 512809,
+          "mean_ns": 277854,
+          "median_ns": 247836,
+          "min_ns": 165163,
+          "p95_ns": 408922,
+          "samples": 25
+        },
+        "previous_pointer_path_proxy_frame_prepare_plus_duplicate_vector_prepare_and_same_pointer_pick": {
+          "max_ns": 1874373,
+          "mean_ns": 1200914,
+          "median_ns": 1082300,
+          "min_ns": 713219,
+          "p95_ns": 1758467,
+          "samples": 25
+        },
+        "vector_geometry_prepare": {
+          "max_ns": 1100641,
+          "mean_ns": 469042,
+          "median_ns": 403785,
+          "min_ns": 269569,
+          "p95_ns": 696963,
+          "samples": 25
+        }
+      },
+      "warmup_runs": 3,
+      "zoom": 1.0,
+      "fixture_family": "hub"
+    },
+    {
+      "application_version": "0.1.0",
+      "benchmark": "chart_vector_cpu_geometry",
+      "build_profile": "release",
+      "canvas_pixels": {
+        "height": 900,
+        "width": 1440
+      },
+      "entities": 1000,
+      "fixture_path": "/tmp/arch-notebook-vector-bench-hvfiz3fk/hub-1000.json",
+      "fixture_sha256": "7236a9611fbfd851aa191baaaba3b48a902f097b404b58947c051597038a2d58",
+      "geometry_outputs": {
+        "entity_positions": 1000,
+        "geometric_lanes": 3000,
+        "nearest_record_at_canvas_center": {
+          "candidate_count": 59,
+          "first_indices": [
+            269,
+            1398,
+            825,
+            1424,
+            1836,
+            1133,
+            508,
+            2140,
+            799,
+            1107
+          ],
+          "truncated": true
+        },
+        "ordinary_lanes": 3000
+      },
+      "iterations": 25,
+      "labels": 0,
+      "pan": [
+        0.0,
+        0.0
+      ],
+      "relationship_records": 3000,
+      "schema_version": 1,
+      "scope": "CPU chart vector preparation and the same sorted pointer cycle-candidate scan used by the UI. The previous pointer-path value is a proxy that repeats frame preparation plus the former duplicate vector preparation before that same scan. No chart painting, text shaping, GPU, compositor, presentation, input-to-paint latency, or FPS.",
+      "timings": {
+        "current_frame_prepare_plus_pointer_pick": {
+          "max_ns": 2870869,
+          "mean_ns": 2285410,
+          "median_ns": 2179970,
+          "min_ns": 2118816,
+          "p95_ns": 2750753,
+          "samples": 25
+        },
+        "pointer_cycle_candidate_scan_with_reused_geometry": {
+          "max_ns": 880855,
+          "mean_ns": 752823,
+          "median_ns": 736385,
+          "min_ns": 717484,
+          "p95_ns": 877638,
+          "samples": 25
+        },
+        "previous_pointer_path_proxy_frame_prepare_plus_duplicate_vector_prepare_and_same_pointer_pick": {
+          "max_ns": 4706576,
+          "mean_ns": 4191915,
+          "median_ns": 4261647,
+          "min_ns": 3620014,
+          "p95_ns": 4681554,
+          "samples": 25
+        },
+        "vector_geometry_prepare": {
+          "max_ns": 2119839,
+          "mean_ns": 1510190,
+          "median_ns": 1418153,
+          "min_ns": 1360849,
+          "p95_ns": 1995944,
+          "samples": 25
+        }
+      },
+      "warmup_runs": 3,
+      "zoom": 1.0,
+      "fixture_family": "hub"
+    },
+    {
+      "application_version": "0.1.0",
+      "benchmark": "chart_vector_cpu_geometry",
+      "build_profile": "release",
+      "canvas_pixels": {
+        "height": 900,
+        "width": 1440
+      },
+      "entities": 10000,
+      "fixture_path": "/tmp/arch-notebook-vector-bench-hvfiz3fk/hub-10000.json",
+      "fixture_sha256": "5b0e0d0e24030265b3ec56f795dc2ee939bf60904926fb7910fd820edf71f37b",
+      "geometry_outputs": {
+        "entity_positions": 10000,
+        "geometric_lanes": 30000,
+        "nearest_record_at_canvas_center": {
+          "candidate_count": 644,
+          "first_indices": [
+            25685,
+            4005,
+            9991,
+            9025,
+            18558,
+            825,
+            1833,
+            18516,
+            3231,
+            2758
+          ],
+          "truncated": true
+        },
+        "ordinary_lanes": 30000
+      },
+      "iterations": 25,
+      "labels": 0,
+      "pan": [
+        0.0,
+        0.0
+      ],
+      "relationship_records": 30000,
+      "schema_version": 1,
+      "scope": "CPU chart vector preparation and the same sorted pointer cycle-candidate scan used by the UI. The previous pointer-path value is a proxy that repeats frame preparation plus the former duplicate vector preparation before that same scan. No chart painting, text shaping, GPU, compositor, presentation, input-to-paint latency, or FPS.",
+      "timings": {
+        "current_frame_prepare_plus_pointer_pick": {
+          "max_ns": 61039964,
+          "mean_ns": 31807622,
+          "median_ns": 29951468,
+          "min_ns": 28348122,
+          "p95_ns": 40580527,
+          "samples": 25
+        },
+        "pointer_cycle_candidate_scan_with_reused_geometry": {
+          "max_ns": 20388679,
+          "mean_ns": 8961928,
+          "median_ns": 8274291,
+          "min_ns": 8130762,
+          "p95_ns": 10768429,
+          "samples": 25
+        },
+        "previous_pointer_path_proxy_frame_prepare_plus_duplicate_vector_prepare_and_same_pointer_pick": {
+          "max_ns": 80653989,
+          "mean_ns": 53976546,
+          "median_ns": 51915967,
+          "min_ns": 48886503,
+          "p95_ns": 64109866,
+          "samples": 25
+        },
+        "vector_geometry_prepare": {
+          "max_ns": 39984535,
+          "mean_ns": 22369003,
+          "median_ns": 21217097,
+          "min_ns": 19673580,
+          "p95_ns": 29202286,
+          "samples": 25
+        }
+      },
+      "warmup_runs": 3,
+      "zoom": 1.0,
+      "fixture_family": "hub"
+    },
+    {
+      "application_version": "0.1.0",
+      "benchmark": "chart_vector_cpu_geometry",
+      "build_profile": "release",
+      "canvas_pixels": {
+        "height": 900,
+        "width": 1440
+      },
+      "entities": 100,
+      "fixture_path": "/tmp/arch-notebook-vector-bench-hvfiz3fk/disconnected-100.json",
+      "fixture_sha256": "39b721ec2fa44e4eb832aaa7103a788921205cc5b62dc6bffcaa0c2033e92eff",
+      "geometry_outputs": {
+        "entity_positions": 100,
+        "geometric_lanes": 200,
+        "nearest_record_at_canvas_center": {
+          "candidate_count": 3,
+          "first_indices": [
+            19,
+            167,
+            182
+          ],
+          "truncated": false
+        },
+        "ordinary_lanes": 200
+      },
+      "iterations": 25,
+      "labels": 0,
+      "pan": [
+        0.0,
+        0.0
+      ],
+      "relationship_records": 200,
+      "schema_version": 1,
+      "scope": "CPU chart vector preparation and the same sorted pointer cycle-candidate scan used by the UI. The previous pointer-path value is a proxy that repeats frame preparation plus the former duplicate vector preparation before that same scan. No chart painting, text shaping, GPU, compositor, presentation, input-to-paint latency, or FPS.",
+      "timings": {
+        "current_frame_prepare_plus_pointer_pick": {
+          "max_ns": 312817,
+          "mean_ns": 206723,
+          "median_ns": 193985,
+          "min_ns": 191201,
+          "p95_ns": 312137,
+          "samples": 25
+        },
+        "pointer_cycle_candidate_scan_with_reused_geometry": {
+          "max_ns": 92144,
+          "mean_ns": 69577,
+          "median_ns": 66261,
+          "min_ns": 65819,
+          "p95_ns": 91925,
+          "samples": 25
+        },
+        "previous_pointer_path_proxy_frame_prepare_plus_duplicate_vector_prepare_and_same_pointer_pick": {
+          "max_ns": 545702,
+          "mean_ns": 347837,
+          "median_ns": 322108,
+          "min_ns": 314837,
+          "p95_ns": 526405,
+          "samples": 25
+        },
+        "vector_geometry_prepare": {
+          "max_ns": 216913,
+          "mean_ns": 133853,
+          "median_ns": 124597,
+          "min_ns": 122319,
+          "p95_ns": 216097,
+          "samples": 25
+        }
+      },
+      "warmup_runs": 3,
+      "zoom": 1.0,
+      "fixture_family": "disconnected"
+    },
+    {
+      "application_version": "0.1.0",
+      "benchmark": "chart_vector_cpu_geometry",
+      "build_profile": "release",
+      "canvas_pixels": {
+        "height": 900,
+        "width": 1440
+      },
+      "entities": 1000,
+      "fixture_path": "/tmp/arch-notebook-vector-bench-hvfiz3fk/disconnected-1000.json",
+      "fixture_sha256": "f7339ed385394f39b7525c42d4490a939c2a56d1a4d5a3b136921616be548729",
+      "geometry_outputs": {
+        "entity_positions": 1000,
+        "geometric_lanes": 2000,
+        "nearest_record_at_canvas_center": {
+          "candidate_count": 51,
+          "first_indices": [
+            98,
+            328,
+            133,
+            699,
+            1691,
+            1297,
+            1499,
+            1701,
+            1054,
+            1879
+          ],
+          "truncated": true
+        },
+        "ordinary_lanes": 2000
+      },
+      "iterations": 25,
+      "labels": 0,
+      "pan": [
+        0.0,
+        0.0
+      ],
+      "relationship_records": 2000,
+      "schema_version": 1,
+      "scope": "CPU chart vector preparation and the same sorted pointer cycle-candidate scan used by the UI. The previous pointer-path value is a proxy that repeats frame preparation plus the former duplicate vector preparation before that same scan. No chart painting, text shaping, GPU, compositor, presentation, input-to-paint latency, or FPS.",
+      "timings": {
+        "current_frame_prepare_plus_pointer_pick": {
+          "max_ns": 7405179,
+          "mean_ns": 4452858,
+          "median_ns": 4105623,
+          "min_ns": 1663433,
+          "p95_ns": 7046393,
+          "samples": 25
+        },
+        "pointer_cycle_candidate_scan_with_reused_geometry": {
+          "max_ns": 2287164,
+          "mean_ns": 1342269,
+          "median_ns": 1162687,
+          "min_ns": 521235,
+          "p95_ns": 2202427,
+          "samples": 25
+        },
+        "previous_pointer_path_proxy_frame_prepare_plus_duplicate_vector_prepare_and_same_pointer_pick": {
+          "max_ns": 11815355,
+          "mean_ns": 7783320,
+          "median_ns": 7423178,
+          "min_ns": 3287861,
+          "p95_ns": 11749393,
+          "samples": 25
+        },
+        "vector_geometry_prepare": {
+          "max_ns": 5428875,
+          "mean_ns": 3054045,
+          "median_ns": 2901589,
+          "min_ns": 1121370,
+          "p95_ns": 4817214,
+          "samples": 25
+        }
+      },
+      "warmup_runs": 3,
+      "zoom": 1.0,
+      "fixture_family": "disconnected"
+    },
+    {
+      "application_version": "0.1.0",
+      "benchmark": "chart_vector_cpu_geometry",
+      "build_profile": "release",
+      "canvas_pixels": {
+        "height": 900,
+        "width": 1440
+      },
+      "entities": 10000,
+      "fixture_path": "/tmp/arch-notebook-vector-bench-hvfiz3fk/disconnected-10000.json",
+      "fixture_sha256": "c992763516c22eef34cfbf069c6b612aba7a491f2824dccf667503eb98c3f565",
+      "geometry_outputs": {
+        "entity_positions": 10000,
+        "geometric_lanes": 20000,
+        "nearest_record_at_canvas_center": {
+          "candidate_count": 516,
+          "first_indices": [
+            12521,
+            1610,
+            11610,
+            17917,
+            15717,
+            11581,
+            1589,
+            11589,
+            10118,
+            3646
+          ],
+          "truncated": true
+        },
+        "ordinary_lanes": 20000
+      },
+      "iterations": 25,
+      "labels": 0,
+      "pan": [
+        0.0,
+        0.0
+      ],
+      "relationship_records": 20000,
+      "schema_version": 1,
+      "scope": "CPU chart vector preparation and the same sorted pointer cycle-candidate scan used by the UI. The previous pointer-path value is a proxy that repeats frame preparation plus the former duplicate vector preparation before that same scan. No chart painting, text shaping, GPU, compositor, presentation, input-to-paint latency, or FPS.",
+      "timings": {
+        "current_frame_prepare_plus_pointer_pick": {
+          "max_ns": 26068609,
+          "mean_ns": 23013785,
+          "median_ns": 22753858,
+          "min_ns": 20971464,
+          "p95_ns": 24787769,
+          "samples": 25
+        },
+        "pointer_cycle_candidate_scan_with_reused_geometry": {
+          "max_ns": 7312293,
+          "mean_ns": 6502702,
+          "median_ns": 6497488,
+          "min_ns": 5978559,
+          "p95_ns": 6953052,
+          "samples": 25
+        },
+        "previous_pointer_path_proxy_frame_prepare_plus_duplicate_vector_prepare_and_same_pointer_pick": {
+          "max_ns": 42149591,
+          "mean_ns": 39390216,
+          "median_ns": 39333255,
+          "min_ns": 37085326,
+          "p95_ns": 41224114,
+          "samples": 25
+        },
+        "vector_geometry_prepare": {
+          "max_ns": 19282611,
+          "mean_ns": 16045499,
+          "median_ns": 15907064,
+          "min_ns": 14131735,
+          "p95_ns": 17754994,
+          "samples": 25
+        }
+      },
+      "warmup_runs": 3,
+      "zoom": 1.0,
+      "fixture_family": "disconnected"
+    },
+    {
+      "application_version": "0.1.0",
+      "benchmark": "chart_vector_cpu_geometry",
+      "build_profile": "release",
+      "canvas_pixels": {
+        "height": 900,
+        "width": 1440
+      },
+      "entities": 100,
+      "fixture_path": "/tmp/arch-notebook-vector-bench-hvfiz3fk/dense-100.json",
+      "fixture_sha256": "92be2fae6dc2814eb852b0d1c23a727725a0326c986fe8dbac329a9f46bc8989",
+      "geometry_outputs": {
+        "entity_positions": 100,
+        "geometric_lanes": 1000,
+        "nearest_record_at_canvas_center": {
+          "candidate_count": 25,
+          "first_indices": [
+            671,
+            221,
+            366,
+            120,
+            514,
+            16,
+            980,
+            639,
+            48,
+            46
+          ],
+          "truncated": true
+        },
+        "ordinary_lanes": 1000
+      },
+      "iterations": 25,
+      "labels": 0,
+      "pan": [
+        0.0,
+        0.0
+      ],
+      "relationship_records": 1000,
+      "schema_version": 1,
+      "scope": "CPU chart vector preparation and the same sorted pointer cycle-candidate scan used by the UI. The previous pointer-path value is a proxy that repeats frame preparation plus the former duplicate vector preparation before that same scan. No chart painting, text shaping, GPU, compositor, presentation, input-to-paint latency, or FPS.",
+      "timings": {
+        "current_frame_prepare_plus_pointer_pick": {
+          "max_ns": 5095029,
+          "mean_ns": 3815782,
+          "median_ns": 3877792,
+          "min_ns": 2250660,
+          "p95_ns": 4861053,
+          "samples": 25
+        },
+        "pointer_cycle_candidate_scan_with_reused_geometry": {
+          "max_ns": 2029357,
+          "mean_ns": 1503960,
+          "median_ns": 1607248,
+          "min_ns": 665493,
+          "p95_ns": 1984922,
+          "samples": 25
+        },
+        "previous_pointer_path_proxy_frame_prepare_plus_duplicate_vector_prepare_and_same_pointer_pick": {
+          "max_ns": 7901962,
+          "mean_ns": 5909395,
+          "median_ns": 6098365,
+          "min_ns": 2513835,
+          "p95_ns": 7899859,
+          "samples": 25
+        },
+        "vector_geometry_prepare": {
+          "max_ns": 3084873,
+          "mean_ns": 2295366,
+          "median_ns": 2275737,
+          "min_ns": 1460841,
+          "p95_ns": 3044508,
+          "samples": 25
+        }
+      },
+      "warmup_runs": 3,
+      "zoom": 1.0,
+      "fixture_family": "dense"
+    },
+    {
+      "application_version": "0.1.0",
+      "benchmark": "chart_vector_cpu_geometry",
+      "build_profile": "release",
+      "canvas_pixels": {
+        "height": 900,
+        "width": 1440
+      },
+      "entities": 1000,
+      "fixture_path": "/tmp/arch-notebook-vector-bench-hvfiz3fk/dense-1000.json",
+      "fixture_sha256": "73fc78d25707f556311399b50acf7b0f29c61ce9adaf2b99c72ce336a24b1b14",
+      "geometry_outputs": {
+        "entity_positions": 1000,
+        "geometric_lanes": 10000,
+        "nearest_record_at_canvas_center": {
+          "candidate_count": 287,
+          "first_indices": [
+            2301,
+            6778,
+            5407,
+            1146,
+            5578,
+            862,
+            9276,
+            8964,
+            5141,
+            5071
+          ],
+          "truncated": true
+        },
+        "ordinary_lanes": 10000
+      },
+      "iterations": 25,
+      "labels": 0,
+      "pan": [
+        0.0,
+        0.0
+      ],
+      "relationship_records": 10000,
+      "schema_version": 1,
+      "scope": "CPU chart vector preparation and the same sorted pointer cycle-candidate scan used by the UI. The previous pointer-path value is a proxy that repeats frame preparation plus the former duplicate vector preparation before that same scan. No chart painting, text shaping, GPU, compositor, presentation, input-to-paint latency, or FPS.",
+      "timings": {
+        "current_frame_prepare_plus_pointer_pick": {
+          "max_ns": 12683757,
+          "mean_ns": 8440464,
+          "median_ns": 8166767,
+          "min_ns": 7417034,
+          "p95_ns": 9748903,
+          "samples": 25
+        },
+        "pointer_cycle_candidate_scan_with_reused_geometry": {
+          "max_ns": 3483625,
+          "mean_ns": 2629932,
+          "median_ns": 2545727,
+          "min_ns": 2461075,
+          "p95_ns": 2947416,
+          "samples": 25
+        },
+        "previous_pointer_path_proxy_frame_prepare_plus_duplicate_vector_prepare_and_same_pointer_pick": {
+          "max_ns": 15619064,
+          "mean_ns": 13947708,
+          "median_ns": 13864726,
+          "min_ns": 12752698,
+          "p95_ns": 15321086,
+          "samples": 25
+        },
+        "vector_geometry_prepare": {
+          "max_ns": 9151668,
+          "mean_ns": 5776976,
+          "median_ns": 5564985,
+          "min_ns": 4870285,
+          "p95_ns": 7150999,
+          "samples": 25
+        }
+      },
+      "warmup_runs": 3,
+      "zoom": 1.0,
+      "fixture_family": "dense"
+    },
+    {
+      "application_version": "0.1.0",
+      "benchmark": "chart_vector_cpu_geometry",
+      "build_profile": "release",
+      "canvas_pixels": {
+        "height": 900,
+        "width": 1440
+      },
+      "entities": 10000,
+      "fixture_path": "/tmp/arch-notebook-vector-bench-hvfiz3fk/dense-10000.json",
+      "fixture_sha256": "8f7127eee91ab5ea912e0865755202f3b05b35d0347012774c056ddd948318a8",
+      "geometry_outputs": {
+        "entity_positions": 10000,
+        "geometric_lanes": 100000,
+        "nearest_record_at_canvas_center": {
+          "candidate_count": 2492,
+          "first_indices": [
+            68926,
+            40301,
+            89778,
+            14925,
+            31539,
+            81854,
+            92952,
+            87522,
+            56028,
+            3329
+          ],
+          "truncated": true
+        },
+        "ordinary_lanes": 100000
+      },
+      "iterations": 25,
+      "labels": 0,
+      "pan": [
+        0.0,
+        0.0
+      ],
+      "relationship_records": 100000,
+      "schema_version": 1,
+      "scope": "CPU chart vector preparation and the same sorted pointer cycle-candidate scan used by the UI. The previous pointer-path value is a proxy that repeats frame preparation plus the former duplicate vector preparation before that same scan. No chart painting, text shaping, GPU, compositor, presentation, input-to-paint latency, or FPS.",
+      "timings": {
+        "current_frame_prepare_plus_pointer_pick": {
+          "max_ns": 137790969,
+          "mean_ns": 103243908,
+          "median_ns": 101963262,
+          "min_ns": 96698832,
+          "p95_ns": 114555662,
+          "samples": 25
+        },
+        "pointer_cycle_candidate_scan_with_reused_geometry": {
+          "max_ns": 59296200,
+          "mean_ns": 30880986,
+          "median_ns": 29130324,
+          "min_ns": 27591385,
+          "p95_ns": 39079309,
+          "samples": 25
+        },
+        "previous_pointer_path_proxy_frame_prepare_plus_duplicate_vector_prepare_and_same_pointer_pick": {
+          "max_ns": 235567463,
+          "mean_ns": 176193957,
+          "median_ns": 174152165,
+          "min_ns": 166495151,
+          "p95_ns": 186176814,
+          "samples": 25
+        },
+        "vector_geometry_prepare": {
+          "max_ns": 77920199,
+          "mean_ns": 71901074,
+          "median_ns": 72184768,
+          "min_ns": 68466298,
+          "p95_ns": 74978956,
+          "samples": 25
+        }
+      },
+      "warmup_runs": 3,
+      "zoom": 1.0,
+      "fixture_family": "dense"
+    }
+  ],
+  "limitations": [
+    "Synthetic fictional graph fixtures only.",
+    "Measures CPU geometry preparation and nearest-link hit testing only.",
+    "Does not measure painting, text shaping, GPU work, compositor or presentation latency, or FPS.",
+    "Timing values are host-specific and are not universal performance targets."
+  ]
+}

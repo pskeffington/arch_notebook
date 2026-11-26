@@ -903,6 +903,12 @@ struct CommunityInteraction {
     link_indices: Vec<usize>,
 }
 
+struct ChartVectorGeometry {
+    link_lanes: Vec<f32>,
+    entity_positions: HashMap<Uuid, egui::Pos2>,
+    route_lanes: Vec<f32>,
+}
+
 struct ConnectionGroup {
     first: Uuid,
     second: Uuid,
@@ -22981,25 +22987,12 @@ impl eframe::App for App {
                         let chart_pan = self.chart_pan;
                         let center=|e:&Entity|{let base=egui::pos2(rect.left()+e.x*rect.width(),rect.top()+e.y*rect.height());rect.center()+(base-rect.center())*chart_zoom+chart_pan};
                         let chart_prepare_started = Instant::now();
-                        let link_lanes = link_lane_offsets(&self.case);
-                        let entity_positions: HashMap<Uuid, egui::Pos2> = self
-                            .case
-                            .entities
-                            .iter()
-                            .map(|entity| (entity.id, center(entity)))
-                            .collect();
-                        let route_lanes = geometric_link_lane_offsets(
-                            &self.case,
-                            &entity_positions,
-                            &link_lanes,
-                        );
-                        let entity_indices: HashMap<Uuid, usize> = self
-                            .case
-                            .entities
-                            .iter()
-                            .enumerate()
-                            .map(|(index, entity)| (entity.id, index))
-                            .collect();
+                        let ChartVectorGeometry {
+                            link_lanes: _,
+                            entity_positions,
+                            route_lanes,
+                        } = chart_vector_geometry(&self.case, rect, chart_zoom, chart_pan);
+                        let entity_indices = chart_entity_indices(&self.case);
                         let path_link_indices: HashSet<usize> = if self.path_result.is_empty() {
                             HashSet::new()
                         } else {
@@ -23685,59 +23678,14 @@ impl eframe::App for App {
                                 }
                                 self.clear_chart_entity_selection();
                             } else {
-                                let lanes = link_lane_offsets(&self.case);
-                                let positions: HashMap<Uuid, egui::Pos2> = self
-                                    .case
-                                    .entities
-                                    .iter()
-                                    .map(|entity| (entity.id, center(entity)))
-                                    .collect();
-                                let route_lanes = geometric_link_lane_offsets(
+                                let positions = &entity_positions;
+                                let cycle_candidates = chart_link_cycle_candidates(
                                     &self.case,
-                                    &positions,
-                                    &lanes,
-                                );
-                                let mut nearby_links: Vec<(usize, f32)> = self
-                                    .case
-                                    .links
-                                    .iter()
-                                    .enumerate()
-                                    .filter_map(|(index, link)| {
-                                        let from = self
-                                            .case
-                                            .entities
-                                            .get(*entity_indices.get(&link.from)?)?;
-                                        let to = self
-                                            .case
-                                            .entities
-                                            .get(*entity_indices.get(&link.to)?)?;
-                                        let from_pos = positions[&from.id];
-                                        let to_pos = positions[&to.id];
-                                        let points = connection_curve_points(
-                                            from_pos,
-                                            to_pos,
-                                            route_lanes[index] * self.chart_zoom,
-                                            link.from == link.to,
-                                        );
-                                        Some((index, polyline_distance(pos, &points)))
-                                    })
-                                    .filter(|(_, distance)| *distance < 22.0 * self.chart_zoom)
-                                    .collect();
-                                nearby_links.sort_by(|left, right| {
-                                    left.1.total_cmp(&right.1).then_with(|| left.0.cmp(&right.0))
-                                });
-                                let cycle_candidates = nearby_links.first().map_or_else(
-                                    Vec::new,
-                                    |(_, nearest_distance)| {
-                                        nearby_links
-                                            .iter()
-                                            .take_while(|(_, distance)| {
-                                                *distance - nearest_distance
-                                                    <= 10.0 * self.chart_zoom
-                                            })
-                                            .map(|(index, _)| *index)
-                                            .collect()
-                                    },
+                                    positions,
+                                    &entity_indices,
+                                    &route_lanes,
+                                    pos,
+                                    self.chart_zoom,
                                 );
                                 let entity = self
                                     .case
@@ -23915,12 +23863,6 @@ impl eframe::App for App {
                                 {
                                     self.select_chart_entity(entity_id, false);
                                 } else {
-                                    let entity_positions: HashMap<Uuid, egui::Pos2> = self
-                                        .case
-                                        .entities
-                                        .iter()
-                                        .map(|entity| (entity.id, center(entity)))
-                                        .collect();
                                     if let Some(index) = nearest_link_index_at_position(
                                         &self.case.links,
                                         &entity_positions,
@@ -27728,6 +27670,206 @@ impl eframe::App for App {
             }
         }
     }
+}
+
+fn chart_vector_geometry(
+    case: &CaseFile,
+    rect: egui::Rect,
+    zoom: f32,
+    pan: egui::Vec2,
+) -> ChartVectorGeometry {
+    let center = |entity: &Entity| {
+        let base = egui::pos2(
+            rect.left() + entity.x * rect.width(),
+            rect.top() + entity.y * rect.height(),
+        );
+        rect.center() + (base - rect.center()) * zoom + pan
+    };
+    let link_lanes = link_lane_offsets(case);
+    let entity_positions: HashMap<Uuid, egui::Pos2> = case
+        .entities
+        .iter()
+        .map(|entity| (entity.id, center(entity)))
+        .collect();
+    let route_lanes = geometric_link_lane_offsets(case, &entity_positions, &link_lanes);
+    ChartVectorGeometry {
+        link_lanes,
+        entity_positions,
+        route_lanes,
+    }
+}
+
+fn chart_entity_indices(case: &CaseFile) -> HashMap<Uuid, usize> {
+    case.entities
+        .iter()
+        .enumerate()
+        .map(|(index, entity)| (entity.id, index))
+        .collect()
+}
+
+fn chart_link_cycle_candidates(
+    case: &CaseFile,
+    positions: &HashMap<Uuid, egui::Pos2>,
+    entity_indices: &HashMap<Uuid, usize>,
+    route_lanes: &[f32],
+    pointer: egui::Pos2,
+    zoom: f32,
+) -> Vec<usize> {
+    let mut nearby_links: Vec<(usize, f32)> = case
+        .links
+        .iter()
+        .enumerate()
+        .filter_map(|(index, link)| {
+            let from = case.entities.get(*entity_indices.get(&link.from)?)?;
+            let to = case.entities.get(*entity_indices.get(&link.to)?)?;
+            let from_pos = positions[&from.id];
+            let to_pos = positions[&to.id];
+            let points = connection_curve_points(
+                from_pos,
+                to_pos,
+                route_lanes[index] * zoom,
+                link.from == link.to,
+            );
+            Some((index, polyline_distance(pointer, &points)))
+        })
+        .filter(|(_, distance)| *distance < 22.0 * zoom)
+        .collect();
+    nearby_links.sort_by(|left, right| {
+        left.1
+            .total_cmp(&right.1)
+            .then_with(|| left.0.cmp(&right.0))
+    });
+    nearby_links
+        .first()
+        .map_or_else(Vec::new, |(_, nearest_distance)| {
+            nearby_links
+                .iter()
+                .take_while(|(_, distance)| *distance - nearest_distance <= 10.0 * zoom)
+                .map(|(index, _)| *index)
+                .collect()
+        })
+}
+
+fn duration_summary(samples_ns: &[u128]) -> serde_json::Value {
+    let mut sorted = samples_ns.to_vec();
+    sorted.sort_unstable();
+    let percentile = |percent: usize| {
+        let index = sorted
+            .len()
+            .saturating_mul(percent)
+            .div_ceil(100)
+            .saturating_sub(1);
+        sorted[index.min(sorted.len() - 1)]
+    };
+    let total: u128 = sorted.iter().copied().sum();
+    serde_json::json!({
+        "samples": sorted.len(),
+        "min_ns": sorted[0],
+        "median_ns": percentile(50),
+        "p95_ns": percentile(95),
+        "max_ns": sorted[sorted.len() - 1],
+        "mean_ns": total / sorted.len() as u128,
+    })
+}
+
+fn benchmark_chart_vectors(
+    case_path: &str,
+    iterations: usize,
+) -> Result<serde_json::Value, String> {
+    if !(5..=1000).contains(&iterations) {
+        return Err("iterations must be between 5 and 1000".into());
+    }
+    let contents = fs::read_to_string(case_path)
+        .map_err(|error| format!("cannot read chart fixture: {error}"))?;
+    let case = serde_json::from_str::<CaseFile>(&contents)
+        .map_err(|error| format!("cannot parse chart fixture: {error}"))?;
+    let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1440.0, 900.0));
+    let zoom = clamp_chart_zoom(case.active_chart_zoom);
+    let pan = chart_pan_from_saved(case.active_chart_pan);
+    const WARMUP_RUNS: usize = 3;
+
+    for _ in 0..WARMUP_RUNS {
+        std::hint::black_box(chart_vector_geometry(&case, rect, zoom, pan));
+    }
+
+    let mut preparation_samples = Vec::with_capacity(iterations);
+    let mut current_pointer_pick_samples = Vec::with_capacity(iterations);
+    let mut candidate_frame_and_hit_samples = Vec::with_capacity(iterations);
+    let mut previous_path_proxy_samples = Vec::with_capacity(iterations);
+    let mut final_match = serde_json::Value::Null;
+    for _ in 0..iterations {
+        let candidate_started = Instant::now();
+        let preparation_started = Instant::now();
+        let geometry = chart_vector_geometry(&case, rect, zoom, pan);
+        preparation_samples.push(preparation_started.elapsed().as_nanos());
+
+        let entity_indices = chart_entity_indices(&case);
+        let current_pick_started = Instant::now();
+        let current_match = chart_link_cycle_candidates(
+            &case,
+            &geometry.entity_positions,
+            &entity_indices,
+            &geometry.route_lanes,
+            rect.center(),
+            zoom,
+        );
+        current_pointer_pick_samples.push(current_pick_started.elapsed().as_nanos());
+        candidate_frame_and_hit_samples.push(candidate_started.elapsed().as_nanos());
+
+        let previous_path_started = Instant::now();
+        let frame_geometry = chart_vector_geometry(&case, rect, zoom, pan);
+        let frame_entity_indices = chart_entity_indices(&case);
+        std::hint::black_box(&frame_geometry);
+        let repeated_geometry = chart_vector_geometry(&case, rect, zoom, pan);
+        let repeated_match = chart_link_cycle_candidates(
+            &case,
+            &repeated_geometry.entity_positions,
+            &frame_entity_indices,
+            &repeated_geometry.route_lanes,
+            rect.center(),
+            zoom,
+        );
+        previous_path_proxy_samples.push(previous_path_started.elapsed().as_nanos());
+        if current_match != repeated_match {
+            return Err("recomputed geometry changed the pointer candidate list".into());
+        }
+        final_match = serde_json::json!({
+            "candidate_count": current_match.len(),
+            "first_indices": current_match.iter().take(10).collect::<Vec<_>>(),
+            "truncated": current_match.len() > 10,
+        });
+        std::hint::black_box((geometry.link_lanes.len(), geometry.route_lanes.len()));
+    }
+
+    Ok(serde_json::json!({
+        "schema_version": 1,
+        "benchmark": "chart_vector_cpu_geometry",
+        "application_version": env!("CARGO_PKG_VERSION"),
+        "build_profile": if cfg!(debug_assertions) { "debug" } else { "release" },
+        "fixture_path": case_path,
+        "fixture_sha256": sha256_hex(contents.as_bytes()),
+        "canvas_pixels": { "width": 1440, "height": 900 },
+        "zoom": zoom,
+        "pan": [pan.x, pan.y],
+        "entities": case.entities.len(),
+        "relationship_records": case.links.len(),
+        "labels": case.labels.len(),
+        "warmup_runs": WARMUP_RUNS,
+        "iterations": iterations,
+        "geometry_outputs": {
+            "entity_positions": case.entities.len(),
+            "ordinary_lanes": case.links.len(),
+            "geometric_lanes": case.links.len(),
+            "nearest_record_at_canvas_center": final_match,
+        },
+        "timings": {
+            "vector_geometry_prepare": duration_summary(&preparation_samples),
+            "pointer_cycle_candidate_scan_with_reused_geometry": duration_summary(&current_pointer_pick_samples),
+            "current_frame_prepare_plus_pointer_pick": duration_summary(&candidate_frame_and_hit_samples),
+            "previous_pointer_path_proxy_frame_prepare_plus_duplicate_vector_prepare_and_same_pointer_pick": duration_summary(&previous_path_proxy_samples),
+        },
+        "scope": "CPU chart vector preparation and the same sorted pointer cycle-candidate scan used by the UI. The previous pointer-path value is a proxy that repeats frame preparation plus the former duplicate vector preparation before that same scan. No chart painting, text shaping, GPU, compositor, presentation, input-to-paint latency, or FPS.",
+    }))
 }
 
 fn link_lane_offsets(case: &CaseFile) -> Vec<f32> {
@@ -41200,10 +41342,38 @@ fn main() -> eframe::Result<()> {
     }
     if args
         .first()
+        .is_some_and(|arg| arg == "--benchmark-chart-vectors")
+    {
+        let usage =
+            "usage: arch-notebook --benchmark-chart-vectors <case.json> [--iterations <count>]";
+        let Some(case_path) = args.get(1).filter(|value| !value.starts_with("--")) else {
+            report_cli_usage_error(usage, false);
+        };
+        let mut iterations = 25_usize;
+        let mut index = 2;
+        while index < args.len() {
+            if args[index] == "--iterations" {
+                let Some(value) = args.get(index + 1) else {
+                    report_cli_usage_error(usage, false);
+                };
+                iterations = value.parse().unwrap_or(0);
+                index += 2;
+            } else {
+                report_cli_usage_error(usage, false);
+            }
+        }
+        match benchmark_chart_vectors(case_path, iterations) {
+            Ok(report) => println!("{}", serde_json::to_string_pretty(&report).unwrap()),
+            Err(error) => report_cli_error("chart vector benchmark failed", error, true),
+        }
+        return Ok(());
+    }
+    if args
+        .first()
         .is_some_and(|arg| arg == "--help" || arg == "-h")
     {
         println!(
-            "Arch Notebook\n\nUsage:\n  arch-notebook\n  arch-notebook --version [--json]\n  arch-notebook --inspect-sqlite <database.sqlite> [--json]\n  arch-notebook --import-graphml <case.json> <input.graphml> [--json]\n  arch-notebook --import-kml <case.json> <input.kml> [--json]\n  arch-notebook --import-document-packets <case.json> <packets.jsonl> [--json]\n  arch-notebook --import-delimited <case.json> <input.csv|tsv> [--design <name-or-id>] [--chart <title-or-uuid> | --new-chart] [--source <provenance-key>] [--json]\n  arch-notebook --export-graphml <case.json> <output.graphml> [--chart <title-or-uuid>] [--include-source-catalog | --omit-source-catalog] [--json]\n  arch-notebook --export-anx <case.json> <output.anx> [--chart <title-or-uuid>] [--json]\n  arch-notebook --export-kml <case.json> <output.kml> [--json]\n  arch-notebook --export-sql-snapshot <case.json> <snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --export-sql-series <case.json> <snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --export-sql-comparison <case.json> <baseline-snapshot-id> <current-snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --export-job <case.json> <job-name-or-id> <output.json> [--json]\n  arch-notebook --export-path <case.json> <path-name-or-id> <output.json> [--json]\n  arch-notebook --import-path <case.json> <input.json> [--name <path-name>] [--json]\n  arch-notebook --import-job <case.json> <input.json> [--name <job-name>] [--chart <chart-title-or-uuid>] [--database <path>] [--series <label>] [--param name=value ...] [--json]\n  arch-notebook --export-import-design <case.json> <design-name-or-id> <output.json> [--json]\n  arch-notebook --import-import-design <case.json> <input.json> [--name <design-name>] [--update <design-name-or-id>] [--json]\n  arch-notebook --list-jobs <case.json> [--enabled-only] [--schema-adaptation-needed] [--json]\n  arch-notebook --list-batches <case.json> [--json]\n  arch-notebook --list-runs <case.json> [--json] [--job <name-or-id>] [--batch <batch-uuid>] [--trigger <desktop|scheduled|cli|replay|legacy>] [--schema-adaptation-needed] [--schema-stability-failed] [--offset <count>] [--limit <count>]\n  arch-notebook --export-runs <case.json> <output.csv|tsv> [--job <name-or-id>] [--batch <batch-uuid>] [--trigger <desktop|scheduled|cli|replay|legacy>] [--schema-adaptation-needed] [--schema-stability-failed] [--offset <count>] [--limit <count>] [--json]\n  arch-notebook --explain-job <case.json> <job-name-or-id> [--param name=value ...] [--json]\n  arch-notebook --validate-job <case.json> <job-name-or-id> [--query-only] [--param name=value ...] [--json]\n  arch-notebook --validate-enabled-jobs <case.json> [--json] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --check-enabled-job-queries <case.json> [--json] [--require-usable] [--require-unchanged-schema] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --validate-run <case.json> <run-id> [--json]\n  arch-notebook --run-enabled-jobs <case.json> [--json] [--resume-batch <batch-id>] [--export-chart-csv-dir <absolute-directory>] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --run-job <case.json> <job-name-or-id> [--param name=value ...] [--resume-batch <batch-id>] [--export-chart-csv <output.csv|tsv>] [--json]\n  arch-notebook --rerun-run <case.json> <run-id> [--export-chart-csv <output.csv|tsv>] [--json]\n\nJob and import design packages contain portable configuration, not case data or run history. Batch runs save snapshots and run history to the case file. JSON output is available for scheduler integration. Additional commands:"
+            "Arch Notebook\n\nUsage:\n  arch-notebook\n  arch-notebook --version [--json]\n  arch-notebook --benchmark-chart-vectors <case.json> [--iterations <count>]\n  arch-notebook --inspect-sqlite <database.sqlite> [--json]\n  arch-notebook --import-graphml <case.json> <input.graphml> [--json]\n  arch-notebook --import-kml <case.json> <input.kml> [--json]\n  arch-notebook --import-document-packets <case.json> <packets.jsonl> [--json]\n  arch-notebook --import-delimited <case.json> <input.csv|tsv> [--design <name-or-id>] [--chart <title-or-uuid> | --new-chart] [--source <provenance-key>] [--json]\n  arch-notebook --export-graphml <case.json> <output.graphml> [--chart <title-or-uuid>] [--include-source-catalog | --omit-source-catalog] [--json]\n  arch-notebook --export-anx <case.json> <output.anx> [--chart <title-or-uuid>] [--json]\n  arch-notebook --export-kml <case.json> <output.kml> [--json]\n  arch-notebook --export-sql-snapshot <case.json> <snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --export-sql-series <case.json> <snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --export-sql-comparison <case.json> <baseline-snapshot-id> <current-snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --export-job <case.json> <job-name-or-id> <output.json> [--json]\n  arch-notebook --export-path <case.json> <path-name-or-id> <output.json> [--json]\n  arch-notebook --import-path <case.json> <input.json> [--name <path-name>] [--json]\n  arch-notebook --import-job <case.json> <input.json> [--name <job-name>] [--chart <chart-title-or-uuid>] [--database <path>] [--series <label>] [--param name=value ...] [--json]\n  arch-notebook --export-import-design <case.json> <design-name-or-id> <output.json> [--json]\n  arch-notebook --import-import-design <case.json> <input.json> [--name <design-name>] [--update <design-name-or-id>] [--json]\n  arch-notebook --list-jobs <case.json> [--enabled-only] [--schema-adaptation-needed] [--json]\n  arch-notebook --list-batches <case.json> [--json]\n  arch-notebook --list-runs <case.json> [--json] [--job <name-or-id>] [--batch <batch-uuid>] [--trigger <desktop|scheduled|cli|replay|legacy>] [--schema-adaptation-needed] [--schema-stability-failed] [--offset <count>] [--limit <count>]\n  arch-notebook --export-runs <case.json> <output.csv|tsv> [--job <name-or-id>] [--batch <batch-uuid>] [--trigger <desktop|scheduled|cli|replay|legacy>] [--schema-adaptation-needed] [--schema-stability-failed] [--offset <count>] [--limit <count>] [--json]\n  arch-notebook --explain-job <case.json> <job-name-or-id> [--param name=value ...] [--json]\n  arch-notebook --validate-job <case.json> <job-name-or-id> [--query-only] [--param name=value ...] [--json]\n  arch-notebook --validate-enabled-jobs <case.json> [--json] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --check-enabled-job-queries <case.json> [--json] [--require-usable] [--require-unchanged-schema] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --validate-run <case.json> <run-id> [--json]\n  arch-notebook --run-enabled-jobs <case.json> [--json] [--resume-batch <batch-id>] [--export-chart-csv-dir <absolute-directory>] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --run-job <case.json> <job-name-or-id> [--param name=value ...] [--resume-batch <batch-id>] [--export-chart-csv <output.csv|tsv>] [--json]\n  arch-notebook --rerun-run <case.json> <run-id> [--export-chart-csv <output.csv|tsv>] [--json]\n\nJob and import design packages contain portable configuration, not case data or run history. Batch runs save snapshots and run history to the case file. JSON output is available for scheduler integration. Additional commands:"
         );
         println!("  GraphML and ANX export accept --chart <title-or-uuid> to choose a chart.");
         println!(
@@ -44120,6 +44290,23 @@ mod tests {
         entity_positions.insert(case.links[loop_index].from, loop_start);
         let route_lanes = super::geometric_link_lane_offsets(&case, &entity_positions, &lanes);
         let pointer = loop_points[12];
+        let entity_indices: std::collections::HashMap<Uuid, usize> = case
+            .entities
+            .iter()
+            .enumerate()
+            .map(|(index, entity)| (entity.id, index))
+            .collect();
+        assert!(
+            super::chart_link_cycle_candidates(
+                &case,
+                &entity_positions,
+                &entity_indices,
+                &route_lanes,
+                pointer,
+                1.0,
+            )
+            .contains(&loop_index)
+        );
         assert_eq!(
             super::nearest_link_index_at_position(
                 &case.links,
@@ -44132,6 +44319,37 @@ mod tests {
             Some(loop_index),
             "pointer on the self-loop route selects its exact relationship record"
         );
+    }
+
+    #[test]
+    fn prepared_chart_vector_geometry_matches_direct_lane_and_position_calculation() {
+        let case: CaseFile =
+            serde_json::from_str(include_str!("../fixtures/chart/correctness.case.json"))
+                .expect("checked-in chart fixture is valid");
+        let rect = egui::Rect::from_min_size(egui::pos2(10.0, 20.0), egui::vec2(900.0, 600.0));
+        let zoom = 1.35;
+        let pan = egui::vec2(17.0, -9.0);
+        let prepared = super::chart_vector_geometry(&case, rect, zoom, pan);
+        let expected_positions: std::collections::HashMap<Uuid, egui::Pos2> = case
+            .entities
+            .iter()
+            .map(|entity| {
+                let base = egui::pos2(
+                    rect.left() + entity.x * rect.width(),
+                    rect.top() + entity.y * rect.height(),
+                );
+                (
+                    entity.id,
+                    rect.center() + (base - rect.center()) * zoom + pan,
+                )
+            })
+            .collect();
+        let expected_lanes = super::link_lane_offsets(&case);
+        let expected_routes =
+            super::geometric_link_lane_offsets(&case, &expected_positions, &expected_lanes);
+        assert_eq!(prepared.link_lanes, expected_lanes);
+        assert_eq!(prepared.entity_positions, expected_positions);
+        assert_eq!(prepared.route_lanes, expected_routes);
     }
 
     #[test]

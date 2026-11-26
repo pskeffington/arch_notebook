@@ -1,0 +1,95 @@
+#!/usr/bin/env python3
+"""Run reproducible CPU-only chart geometry measurements on synthetic cases."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import platform
+import subprocess
+import tempfile
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--binary", type=Path, required=True, help="built arch-notebook executable")
+    parser.add_argument("--output", type=Path, required=True, help="JSON report path")
+    parser.add_argument("--iterations", type=int, default=7)
+    parser.add_argument("--sizes", type=int, nargs="+", default=[100, 1_000, 10_000])
+    parser.add_argument(
+        "--families",
+        nargs="+",
+        choices=("sparse", "hub", "disconnected", "dense"),
+        default=["sparse", "hub", "disconnected", "dense"],
+    )
+    args = parser.parse_args()
+    binary = args.binary.resolve(strict=True)
+    if not binary.is_file():
+        parser.error(f"not a file: {binary}")
+    if args.iterations < 5:
+        parser.error("--iterations must be at least 5")
+    if any(size < 10 or size > 10_000 for size in args.sizes):
+        parser.error("sizes must be between 10 and 10,000")
+
+    results = []
+    with tempfile.TemporaryDirectory(prefix="arch-notebook-vector-bench-") as temporary:
+        temp = Path(temporary)
+        for family in args.families:
+            for size in args.sizes:
+                fixture = temp / f"{family}-{size}.json"
+                subprocess.run(
+                    [
+                        "python3",
+                        str(ROOT / "scripts/generate-chart-fixtures.py"),
+                        "--family",
+                        family,
+                        "--nodes",
+                        str(size),
+                        "--output",
+                        str(fixture),
+                    ],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+                completed = subprocess.run(
+                    [
+                        str(binary),
+                        "--benchmark-chart-vectors",
+                        str(fixture),
+                        "--iterations",
+                        str(args.iterations),
+                    ],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+                report = json.loads(completed.stdout)
+                report["fixture_family"] = family
+                results.append(report)
+
+    output = {
+        "schema_version": 1,
+        "benchmark_suite": "arch_notebook_chart_vector_cpu_geometry",
+        "host": {"platform": platform.platform(), "machine": platform.machine()},
+        "binary": str(binary),
+        "results": results,
+        "limitations": [
+            "Synthetic fictional graph fixtures only.",
+            "Measures CPU geometry preparation and nearest-link hit testing only.",
+            "Does not measure painting, text shaping, GPU work, compositor or presentation latency, or FPS.",
+            "Timing values are host-specific and are not universal performance targets.",
+        ],
+    }
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_text(json.dumps(output, indent=2) + "\n", encoding="utf-8")
+    print(json.dumps({"output": str(args.output.resolve()), "cases": len(results)}))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
