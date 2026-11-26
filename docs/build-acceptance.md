@@ -151,7 +151,8 @@ Exact commands, report hashes, window boundaries, and work directories are recor
 | Current-source SQL scheduler harnesses | PASS, harness-scoped | Linux generated-service and macOS runner simulation selected the expected rolling-month row; SQLite source unchanged in macOS simulation. Host dispatch remains unverified. |
 | User install and desktop graphics synchronization | PASS, scoped | Installed binary equals the release artifact; desktop launcher validation passed; installed and repository icon hashes match. |
 | Remote workflow for source commit | BLOCKED / unverified | GitHub Actions API was unreachable; no remote workflow conclusion is asserted for `b637d96`. |
-| Native UI interaction/visual acceptance | BLOCKED | Wayland display access is denied in this session; do not claim layout or import-dialog visual acceptance. |
+| Native UI rendering | PASS, render-only | The installed app rendered the fictional UI-00 chart, navigator, and geodesic panel in a native window. See [UI-00 render evidence](evidence/vector-ui/UI-00-native-render-20261126.md). |
+| Native chart/input and ANX dialog interaction | BLOCKED | Pointer/keyboard event injection remains unavailable; responsive interaction and visual parity against IBM are not established. |
 
 Exact commands, artifact hashes, report hashes, and remaining interoperability/platform gates are in [UI-INGEST-NAV-01](evidence/vector-ui/UI-INGEST-NAV-01-linux.md). The source commit is pushed on this non-main branch.
 
