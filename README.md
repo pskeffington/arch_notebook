@@ -85,6 +85,8 @@ An earlier capture showed “Not Responding” and compositor access was inconsi
 
 Entity-type chart layout now distributes type clusters across an aspect-aware grid and centers sparse clusters within their cells. The Rust regression and offline release build pass, and the installed Linux launcher matches the release binary; pointer and keyboard interaction remain unverified because this session cannot inject input events.
 
+The chart layout menu also offers an experimental community-aware force arrangement with a configurable iteration count. Community detection and coordinate calculation run in a background worker; results are applied only if the active chart, source positions, pins, and relationship endpoints remain unchanged. Synthetic Linux CPU timing covers 1,000–10,000 entities, and a session-scoped restore action returns to pre-force positions; native visual review remains outstanding; see [G3 workload evidence](docs/evidence/vector-ui/G3-community-force-benchmark-linux.md).
+
 The Analysis sidebar also measures unweighted geodesic hop layers from a selected entity and displays its direction/weight assumptions. ANX XML parsing in the desktop app runs in the background, while CLI import remains synchronous. The combined candidate passes Rust tests, release build, ANX round-trip/security checks, and current Linux/macOS-runner SQL scheduler harnesses; native GUI interaction and IBM schema/application validation remain open. See [UI-INGEST-NAV-01 evidence](docs/evidence/vector-ui/UI-INGEST-NAV-01-linux.md).
 
 ## Start here

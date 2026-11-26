@@ -910,6 +910,61 @@ struct ChartVectorGeometry {
     route_lanes: Vec<f32>,
 }
 
+#[derive(Clone)]
+struct CommunityLayoutWorkerResult {
+    chart_id: Uuid,
+    entity_ids: Vec<Uuid>,
+    original_positions: Vec<(f32, f32, bool)>,
+    link_endpoints: Vec<(Uuid, Uuid)>,
+    positions: Vec<(f32, f32)>,
+}
+
+struct CommunityLayoutRestoreSnapshot {
+    chart_id: Uuid,
+    entities: Vec<(Uuid, f32, f32, bool)>,
+}
+
+fn community_layout_snapshot_matches(
+    active_chart_id: Uuid,
+    entities: &[Entity],
+    links: &[Link],
+    result: &CommunityLayoutWorkerResult,
+) -> bool {
+    active_chart_id == result.chart_id
+        && entities.len() == result.entity_ids.len()
+        && result.positions.len() == entities.len()
+        && entities
+            .iter()
+            .zip(&result.entity_ids)
+            .all(|(entity, id)| entity.id == *id)
+        && entities
+            .iter()
+            .zip(&result.original_positions)
+            .all(|(entity, (x, y, pinned))| {
+                entity.x == *x && entity.y == *y && entity.position_locked == *pinned
+            })
+        && links.len() == result.link_endpoints.len()
+        && links
+            .iter()
+            .zip(&result.link_endpoints)
+            .all(|(link, (from, to))| link.from == *from && link.to == *to)
+}
+
+fn community_layout_restore_matches(
+    active_chart_id: Uuid,
+    entities: &[Entity],
+    snapshot: &CommunityLayoutRestoreSnapshot,
+) -> bool {
+    active_chart_id == snapshot.chart_id
+        && entities.len() == snapshot.entities.len()
+        && entities
+            .iter()
+            .zip(&snapshot.entities)
+            .all(|(entity, (id, _, _, pinned))| {
+                entity.id == *id && entity.position_locked == *pinned
+            })
+}
+
 struct ConnectionGroup {
     first: Uuid,
     second: Uuid,
@@ -2298,6 +2353,8 @@ struct App {
     linked_search_follow_directions: bool,
     layout_mode: LayoutMode,
     layout_iterations: usize,
+    layout_worker: Option<Receiver<CommunityLayoutWorkerResult>>,
+    layout_restore: Option<CommunityLayoutRestoreSnapshot>,
     link_sort: LinkSort,
     link_table_view: LinkTableView,
     data_query: String,
@@ -2954,6 +3011,8 @@ impl Default for App {
             linked_search_follow_directions: false,
             layout_mode: LayoutMode::Connectivity,
             layout_iterations: 50,
+            layout_worker: None,
+            layout_restore: None,
             link_sort: LinkSort::Date,
             link_table_view: LinkTableView::Connections,
             data_query: String::new(),
@@ -3994,6 +4053,8 @@ impl App {
             linked_search_follow_directions: false,
             layout_mode: LayoutMode::Connectivity,
             layout_iterations: 50,
+            layout_worker: None,
+            layout_restore: None,
             link_sort: LinkSort::Date,
             link_table_view: LinkTableView::Connections,
             data_query: String::new(),
@@ -11924,6 +11985,13 @@ impl App {
 
     fn auto_layout(&mut self) {
         self.chart_focus_group = None;
+        if self.layout_worker.is_some() {
+            self.status = "CHART LAYOUT IS ALREADY RUNNING".into();
+            return;
+        }
+        if self.layout_mode != LayoutMode::CommunityForce {
+            self.layout_restore = None;
+        }
         let n = self.case.entities.len();
         if n == 0 {
             return;
@@ -12246,55 +12314,8 @@ impl App {
                 }
             }
             LayoutMode::CommunityForce => {
-                let groups = community::detected_communities(
-                    self.case
-                        .entities
-                        .iter()
-                        .map(|entity| (entity.id, entity.name.as_str())),
-                    self.case.links.iter().map(|link| (link.from, link.to)),
-                );
-                let mut community_by_id = HashMap::new();
-                for (group, members) in groups.iter().enumerate() {
-                    for id in members {
-                        community_by_id.insert(*id, group);
-                    }
-                }
-                let nodes: Vec<layout::LayoutNode> = self
-                    .case
-                    .entities
-                    .iter()
-                    .map(|entity| layout::LayoutNode {
-                        x: entity.x,
-                        y: entity.y,
-                        pinned: entity.position_locked,
-                        community: community_by_id.get(&entity.id).copied().unwrap_or(0),
-                    })
-                    .collect();
-                let edges: Vec<(usize, usize)> = self
-                    .case
-                    .links
-                    .iter()
-                    .filter_map(|link| {
-                        Some((
-                            *entity_positions.get(&link.from)?,
-                            *entity_positions.get(&link.to)?,
-                        ))
-                    })
-                    .collect();
-                let positions = layout::force_layout(
-                    &nodes,
-                    &edges,
-                    layout::LayoutSettings {
-                        iterations: self.layout_iterations,
-                        seed: 0x4152_4348_4e4f_5445,
-                    },
-                );
-                for (entity, (x, y)) in self.case.entities.iter_mut().zip(positions) {
-                    if !entity.position_locked {
-                        entity.x = x;
-                        entity.y = y;
-                    }
-                }
+                self.start_community_force_layout();
+                return;
             }
         }
         self.chart_zoom = 1.0;
@@ -12320,6 +12341,152 @@ impl App {
         if pinned_count > 0 {
             self.status = format!("{} · {pinned_count} POSITIONS PINNED", self.status);
         }
+    }
+
+    fn start_community_force_layout(&mut self) {
+        let (sender, receiver) = mpsc::channel();
+        let chart_id = self.case.active_chart_id;
+        let entities = self.case.entities.clone();
+        let links = self.case.links.clone();
+        let iterations = self.layout_iterations;
+        self.layout_worker = Some(receiver);
+        self.status = "COMMUNITY-AWARE LAYOUT RUNNING · CHART REMAINS RESPONSIVE".into();
+        thread::spawn(move || {
+            let groups = community::detected_communities(
+                entities
+                    .iter()
+                    .map(|entity| (entity.id, entity.name.as_str())),
+                links.iter().map(|link| (link.from, link.to)),
+            );
+            let community_by_id: HashMap<Uuid, usize> = groups
+                .iter()
+                .enumerate()
+                .flat_map(|(group, members)| members.iter().map(move |id| (*id, group)))
+                .collect();
+            let entity_index: HashMap<Uuid, usize> = entities
+                .iter()
+                .enumerate()
+                .map(|(index, entity)| (entity.id, index))
+                .collect();
+            let nodes: Vec<layout::LayoutNode> = entities
+                .iter()
+                .map(|entity| layout::LayoutNode {
+                    x: entity.x,
+                    y: entity.y,
+                    pinned: entity.position_locked,
+                    community: community_by_id.get(&entity.id).copied().unwrap_or(0),
+                })
+                .collect();
+            let edges: Vec<(usize, usize)> = links
+                .iter()
+                .filter_map(|link| {
+                    Some((*entity_index.get(&link.from)?, *entity_index.get(&link.to)?))
+                })
+                .collect();
+            let positions = layout::force_layout(
+                &nodes,
+                &edges,
+                layout::LayoutSettings {
+                    iterations,
+                    seed: 0x4152_4348_4e4f_5445,
+                },
+            );
+            let _ = sender.send(CommunityLayoutWorkerResult {
+                chart_id,
+                entity_ids: entities.iter().map(|entity| entity.id).collect(),
+                original_positions: entities
+                    .iter()
+                    .map(|entity| (entity.x, entity.y, entity.position_locked))
+                    .collect(),
+                link_endpoints: links.iter().map(|link| (link.from, link.to)).collect(),
+                positions,
+            });
+        });
+    }
+
+    fn poll_community_layout_worker(&mut self, ctx: &egui::Context) {
+        let result = self.layout_worker.as_ref().map(Receiver::try_recv);
+        match result {
+            Some(Ok(result)) => {
+                self.layout_worker = None;
+                if !community_layout_snapshot_matches(
+                    self.case.active_chart_id,
+                    &self.case.entities,
+                    &self.case.links,
+                    &result,
+                ) {
+                    self.status = "LAYOUT RESULT DISCARDED · CHART CHANGED WHILE ARRANGING".into();
+                    return;
+                }
+                let restore = CommunityLayoutRestoreSnapshot {
+                    chart_id: result.chart_id,
+                    entities: result
+                        .entity_ids
+                        .iter()
+                        .copied()
+                        .zip(&result.original_positions)
+                        .map(|(id, (x, y, pinned))| (id, *x, *y, *pinned))
+                        .collect(),
+                };
+                for (entity, (x, y)) in self.case.entities.iter_mut().zip(result.positions) {
+                    if !entity.position_locked {
+                        entity.x = x;
+                        entity.y = y;
+                    }
+                }
+                self.chart_zoom = 1.0;
+                self.chart_pan = egui::Vec2::ZERO;
+                self.chart_focus = None;
+                self.chart_focus_link = None;
+                self.chart_fit_entities = None;
+                self.chart_fit_path = None;
+                self.chart_focus_group = None;
+                let pinned_count = self
+                    .case
+                    .entities
+                    .iter()
+                    .filter(|entity| entity.position_locked)
+                    .count();
+                self.status = format!(
+                    "LAYOUT ARRANGED BY COMMUNITY-AWARE FORCE · {pinned_count} POSITIONS PINNED"
+                );
+                self.layout_restore = Some(restore);
+            }
+            Some(Err(std::sync::mpsc::TryRecvError::Disconnected)) => {
+                self.layout_worker = None;
+                self.status = "COMMUNITY-AWARE LAYOUT FAILED · WORKER STOPPED".into();
+            }
+            Some(Err(std::sync::mpsc::TryRecvError::Empty)) => {
+                ctx.request_repaint_after(Duration::from_millis(100));
+            }
+            None => {}
+        }
+    }
+
+    fn restore_pre_force_layout(&mut self) {
+        let Some(snapshot) = self.layout_restore.take() else {
+            return;
+        };
+        if !community_layout_restore_matches(
+            self.case.active_chart_id,
+            &self.case.entities,
+            &snapshot,
+        ) {
+            self.status = "PRE-LAYOUT RESTORE UNAVAILABLE · CHART ENTITIES OR PINS CHANGED".into();
+            return;
+        }
+        for (entity, (_, x, y, _)) in self.case.entities.iter_mut().zip(&snapshot.entities) {
+            entity.x = *x;
+            entity.y = *y;
+        }
+        self.chart_zoom = 1.0;
+        self.chart_pan = egui::Vec2::ZERO;
+        self.chart_focus = None;
+        self.chart_focus_link = None;
+        self.chart_fit_entities = None;
+        self.chart_fit_path = None;
+        self.chart_focus_group = None;
+        self.status = "PRE-FORCE LAYOUT POSITIONS RESTORED".into();
     }
 
     fn delete_selected(&mut self) {
@@ -17467,6 +17634,7 @@ fn path_record_exclusion_reason(
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
+        self.poll_community_layout_worker(ctx);
         if ctx.input(|input| input.viewport().close_requested())
             && (self.automation_worker.is_some()
                 || self.automation_schedule_worker.is_some()
@@ -18823,6 +18991,23 @@ impl eframe::App for App {
                         }
                         if ui.button("Arrange chart").clicked() {
                             self.auto_layout();
+                            ui.close_menu();
+                        }
+                        let restore_enabled = self.layout_restore.as_ref().is_some_and(|snapshot| {
+                            community_layout_restore_matches(
+                                self.case.active_chart_id,
+                                &self.case.entities,
+                                snapshot,
+                            )
+                        });
+                        if ui
+                            .add_enabled(
+                                restore_enabled,
+                                egui::Button::new("Restore positions from before force layout"),
+                            )
+                            .clicked()
+                        {
+                            self.restore_pre_force_layout();
                             ui.close_menu();
                         }
                         if self.page == WorkspacePage::Chart {
@@ -27937,6 +28122,91 @@ fn benchmark_chart_vectors(
             "previous_pointer_path_proxy_frame_prepare_plus_duplicate_vector_prepare_and_same_pointer_pick": duration_summary(&previous_path_proxy_samples),
         },
         "scope": "CPU chart vector preparation and the same sorted pointer cycle-candidate scan used by the UI. The previous pointer-path value is a proxy that repeats frame preparation plus the former duplicate vector preparation before that same scan. No chart painting, text shaping, GPU, compositor, presentation, input-to-paint latency, or FPS.",
+    }))
+}
+
+fn benchmark_community_layout(
+    case_path: &str,
+    iterations: usize,
+    samples: usize,
+) -> Result<serde_json::Value, String> {
+    if !(1..=120).contains(&iterations) || !(3..=100).contains(&samples) {
+        return Err("layout iterations must be 1..=120 and samples 3..=100".into());
+    }
+    let contents = fs::read_to_string(case_path)
+        .map_err(|error| format!("cannot read chart fixture: {error}"))?;
+    let case = serde_json::from_str::<CaseFile>(&contents)
+        .map_err(|error| format!("cannot parse chart fixture: {error}"))?;
+    let community_detection_started = Instant::now();
+    let groups = community::detected_communities(
+        case.entities
+            .iter()
+            .map(|entity| (entity.id, entity.name.as_str())),
+        case.links.iter().map(|link| (link.from, link.to)),
+    );
+    let community_detection_elapsed_ns = community_detection_started.elapsed().as_nanos();
+    let community_by_entity: HashMap<Uuid, usize> = groups
+        .iter()
+        .enumerate()
+        .flat_map(|(group, members)| members.iter().map(move |id| (*id, group)))
+        .collect();
+    let nodes: Vec<layout::LayoutNode> = case
+        .entities
+        .iter()
+        .map(|entity| layout::LayoutNode {
+            x: entity.x,
+            y: entity.y,
+            pinned: entity.position_locked,
+            community: community_by_entity.get(&entity.id).copied().unwrap_or(0),
+        })
+        .collect();
+    let entity_index: HashMap<Uuid, usize> = case
+        .entities
+        .iter()
+        .enumerate()
+        .map(|(index, entity)| (entity.id, index))
+        .collect();
+    let edges: Vec<(usize, usize)> = case
+        .links
+        .iter()
+        .filter_map(|link| Some((*entity_index.get(&link.from)?, *entity_index.get(&link.to)?)))
+        .collect();
+    let settings = layout::LayoutSettings {
+        iterations,
+        seed: 0x4152_4348_4e4f_5445,
+    };
+    const WARMUP_RUNS: usize = 1;
+    for _ in 0..WARMUP_RUNS {
+        std::hint::black_box(layout::force_layout(&nodes, &edges, settings));
+    }
+    let mut elapsed_ns = Vec::with_capacity(samples);
+    let mut coordinate_checksum = 0.0f64;
+    for _ in 0..samples {
+        let started = Instant::now();
+        let positions = layout::force_layout(&nodes, &edges, settings);
+        elapsed_ns.push(started.elapsed().as_nanos());
+        coordinate_checksum = positions
+            .iter()
+            .map(|(x, y)| f64::from(*x) + f64::from(*y))
+            .sum();
+        std::hint::black_box(&positions);
+    }
+    Ok(serde_json::json!({
+        "schema_version": 1,
+        "benchmark": "community_aware_force_layout_cpu",
+        "application_version": env!("CARGO_PKG_VERSION"),
+        "fixture_path": case_path,
+        "fixture_sha256": sha256_hex(contents.as_bytes()),
+        "entities": case.entities.len(),
+        "relationship_records": case.links.len(),
+        "detected_communities": groups.len(),
+        "community_detection_elapsed_ns_single_sample": community_detection_elapsed_ns,
+        "iterations_per_layout": iterations,
+        "samples": samples,
+        "warmup_runs": WARMUP_RUNS,
+        "coordinate_checksum": coordinate_checksum,
+        "timing": duration_summary(&elapsed_ns),
+        "scope": "Reports one untuned community-detection timing and repeated layout-coordinate timings; excludes UI, painting, compositor, and presentation",
     }))
 }
 
@@ -41438,10 +41708,39 @@ fn main() -> eframe::Result<()> {
     }
     if args
         .first()
+        .is_some_and(|arg| arg == "--benchmark-community-layout")
+    {
+        let usage = "usage: arch-notebook --benchmark-community-layout <case.json> [--iterations <count>] [--samples <count>]";
+        let Some(case_path) = args.get(1).filter(|value| !value.starts_with("--")) else {
+            report_cli_usage_error(usage, false);
+        };
+        let mut iterations = 20_usize;
+        let mut samples = 5_usize;
+        let mut index = 2;
+        while index < args.len() {
+            let destination = match args[index].as_str() {
+                "--iterations" => &mut iterations,
+                "--samples" => &mut samples,
+                _ => report_cli_usage_error(usage, false),
+            };
+            let Some(value) = args.get(index + 1) else {
+                report_cli_usage_error(usage, false);
+            };
+            *destination = value.parse().unwrap_or(0);
+            index += 2;
+        }
+        match benchmark_community_layout(case_path, iterations, samples) {
+            Ok(report) => println!("{}", serde_json::to_string_pretty(&report).unwrap()),
+            Err(error) => report_cli_error("community layout benchmark failed", error, true),
+        }
+        return Ok(());
+    }
+    if args
+        .first()
         .is_some_and(|arg| arg == "--help" || arg == "-h")
     {
         println!(
-            "Arch Notebook\n\nUsage:\n  arch-notebook\n  arch-notebook --version [--json]\n  arch-notebook --benchmark-chart-vectors <case.json> [--iterations <count>]\n  arch-notebook --inspect-sqlite <database.sqlite> [--json]\n  arch-notebook --import-graphml <case.json> <input.graphml> [--json]\n  arch-notebook --import-kml <case.json> <input.kml> [--json]\n  arch-notebook --import-document-packets <case.json> <packets.jsonl> [--json]\n  arch-notebook --import-delimited <case.json> <input.csv|tsv> [--design <name-or-id>] [--chart <title-or-uuid> | --new-chart] [--source <provenance-key>] [--json]\n  arch-notebook --export-graphml <case.json> <output.graphml> [--chart <title-or-uuid>] [--include-source-catalog | --omit-source-catalog] [--json]\n  arch-notebook --export-anx <case.json> <output.anx> [--chart <title-or-uuid>] [--json]\n  arch-notebook --export-kml <case.json> <output.kml> [--json]\n  arch-notebook --export-sql-snapshot <case.json> <snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --export-sql-series <case.json> <snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --export-sql-comparison <case.json> <baseline-snapshot-id> <current-snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --export-job <case.json> <job-name-or-id> <output.json> [--json]\n  arch-notebook --export-path <case.json> <path-name-or-id> <output.json> [--json]\n  arch-notebook --import-path <case.json> <input.json> [--name <path-name>] [--json]\n  arch-notebook --import-job <case.json> <input.json> [--name <job-name>] [--chart <chart-title-or-uuid>] [--database <path>] [--series <label>] [--param name=value ...] [--json]\n  arch-notebook --export-import-design <case.json> <design-name-or-id> <output.json> [--json]\n  arch-notebook --import-import-design <case.json> <input.json> [--name <design-name>] [--update <design-name-or-id>] [--json]\n  arch-notebook --list-jobs <case.json> [--enabled-only] [--schema-adaptation-needed] [--json]\n  arch-notebook --list-batches <case.json> [--json]\n  arch-notebook --list-runs <case.json> [--json] [--job <name-or-id>] [--batch <batch-uuid>] [--trigger <desktop|scheduled|cli|replay|legacy>] [--schema-adaptation-needed] [--schema-stability-failed] [--offset <count>] [--limit <count>]\n  arch-notebook --export-runs <case.json> <output.csv|tsv> [--job <name-or-id>] [--batch <batch-uuid>] [--trigger <desktop|scheduled|cli|replay|legacy>] [--schema-adaptation-needed] [--schema-stability-failed] [--offset <count>] [--limit <count>] [--json]\n  arch-notebook --explain-job <case.json> <job-name-or-id> [--param name=value ...] [--json]\n  arch-notebook --validate-job <case.json> <job-name-or-id> [--query-only] [--param name=value ...] [--json]\n  arch-notebook --validate-enabled-jobs <case.json> [--json] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --check-enabled-job-queries <case.json> [--json] [--require-usable] [--require-unchanged-schema] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --validate-run <case.json> <run-id> [--json]\n  arch-notebook --run-enabled-jobs <case.json> [--json] [--resume-batch <batch-id>] [--export-chart-csv-dir <absolute-directory>] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --run-job <case.json> <job-name-or-id> [--param name=value ...] [--resume-batch <batch-id>] [--export-chart-csv <output.csv|tsv>] [--json]\n  arch-notebook --rerun-run <case.json> <run-id> [--export-chart-csv <output.csv|tsv>] [--json]\n\nJob and import design packages contain portable configuration, not case data or run history. Batch runs save snapshots and run history to the case file. JSON output is available for scheduler integration. Additional commands:"
+            "Arch Notebook\n\nUsage:\n  arch-notebook\n  arch-notebook --version [--json]\n  arch-notebook --benchmark-chart-vectors <case.json> [--iterations <count>]\n  arch-notebook --benchmark-community-layout <case.json> [--iterations <count>] [--samples <count>]\n  arch-notebook --inspect-sqlite <database.sqlite> [--json]\n  arch-notebook --import-graphml <case.json> <input.graphml> [--json]\n  arch-notebook --import-kml <case.json> <input.kml> [--json]\n  arch-notebook --import-document-packets <case.json> <packets.jsonl> [--json]\n  arch-notebook --import-delimited <case.json> <input.csv|tsv> [--design <name-or-id>] [--chart <title-or-uuid> | --new-chart] [--source <provenance-key>] [--json]\n  arch-notebook --export-graphml <case.json> <output.graphml> [--chart <title-or-uuid>] [--include-source-catalog | --omit-source-catalog] [--json]\n  arch-notebook --export-anx <case.json> <output.anx> [--chart <title-or-uuid>] [--json]\n  arch-notebook --export-kml <case.json> <output.kml> [--json]\n  arch-notebook --export-sql-snapshot <case.json> <snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --export-sql-series <case.json> <snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --export-sql-comparison <case.json> <baseline-snapshot-id> <current-snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --export-job <case.json> <job-name-or-id> <output.json> [--json]\n  arch-notebook --export-path <case.json> <path-name-or-id> <output.json> [--json]\n  arch-notebook --import-path <case.json> <input.json> [--name <path-name>] [--json]\n  arch-notebook --import-job <case.json> <input.json> [--name <job-name>] [--chart <chart-title-or-uuid>] [--database <path>] [--series <label>] [--param name=value ...] [--json]\n  arch-notebook --export-import-design <case.json> <design-name-or-id> <output.json> [--json]\n  arch-notebook --import-import-design <case.json> <input.json> [--name <design-name>] [--update <design-name-or-id>] [--json]\n  arch-notebook --list-jobs <case.json> [--enabled-only] [--schema-adaptation-needed] [--json]\n  arch-notebook --list-batches <case.json> [--json]\n  arch-notebook --list-runs <case.json> [--json] [--job <name-or-id>] [--batch <batch-uuid>] [--trigger <desktop|scheduled|cli|replay|legacy>] [--schema-adaptation-needed] [--schema-stability-failed] [--offset <count>] [--limit <count>]\n  arch-notebook --export-runs <case.json> <output.csv|tsv> [--job <name-or-id>] [--batch <batch-uuid>] [--trigger <desktop|scheduled|cli|replay|legacy>] [--schema-adaptation-needed] [--schema-stability-failed] [--offset <count>] [--limit <count>] [--json]\n  arch-notebook --explain-job <case.json> <job-name-or-id> [--param name=value ...] [--json]\n  arch-notebook --validate-job <case.json> <job-name-or-id> [--query-only] [--param name=value ...] [--json]\n  arch-notebook --validate-enabled-jobs <case.json> [--json] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --check-enabled-job-queries <case.json> [--json] [--require-usable] [--require-unchanged-schema] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --validate-run <case.json> <run-id> [--json]\n  arch-notebook --run-enabled-jobs <case.json> [--json] [--resume-batch <batch-id>] [--export-chart-csv-dir <absolute-directory>] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --run-job <case.json> <job-name-or-id> [--param name=value ...] [--resume-batch <batch-id>] [--export-chart-csv <output.csv|tsv>] [--json]\n  arch-notebook --rerun-run <case.json> <run-id> [--export-chart-csv <output.csv|tsv>] [--json]\n\nJob and import design packages contain portable configuration, not case data or run history. Batch runs save snapshots and run history to the case file. JSON output is available for scheduler integration. Additional commands:"
         );
         println!("  GraphML and ANX export accept --chart <title-or-uuid> to choose a chart.");
         println!(
@@ -44099,6 +44398,91 @@ mod tests {
         assert!(alpha.0 > harbor.0);
         assert!(alpha.0 < zulu.0);
         assert_eq!(alpha.1, zulu.1);
+    }
+
+    #[test]
+    fn community_layout_results_are_rejected_after_chart_or_graph_edits() {
+        let chart_id = Uuid::from_u128(900);
+        let entities = vec![
+            layout_entity("First", "PERSON", false),
+            layout_entity("Second", "PERSON", true),
+        ];
+        let links = vec![super::Link {
+            from: entities[0].id,
+            to: entities[1].id,
+            connection_id: "link-1".into(),
+            label: "ASSOCIATED WITH".into(),
+            date: String::new(),
+            confidence: 2,
+            directed: false,
+            notes: String::new(),
+            source_notes: String::new(),
+            source_reference: String::new(),
+            ingest_source: None,
+            attributes: Vec::new(),
+        }];
+        let result = super::CommunityLayoutWorkerResult {
+            chart_id,
+            entity_ids: entities.iter().map(|entity| entity.id).collect(),
+            original_positions: entities
+                .iter()
+                .map(|entity| (entity.x, entity.y, entity.position_locked))
+                .collect(),
+            link_endpoints: links.iter().map(|link| (link.from, link.to)).collect(),
+            positions: vec![(0.3, 0.4), (0.6, 0.7)],
+        };
+        assert!(super::community_layout_snapshot_matches(
+            chart_id, &entities, &links, &result
+        ));
+        assert!(!super::community_layout_snapshot_matches(
+            Uuid::from_u128(901),
+            &entities,
+            &links,
+            &result
+        ));
+
+        let mut moved_entities = entities.clone();
+        moved_entities[0].x += 0.1;
+        assert!(!super::community_layout_snapshot_matches(
+            chart_id,
+            &moved_entities,
+            &links,
+            &result
+        ));
+
+        let changed_links = vec![super::Link {
+            from: entities[1].id,
+            ..links[0].clone()
+        }];
+        assert!(!super::community_layout_snapshot_matches(
+            chart_id,
+            &entities,
+            &changed_links,
+            &result
+        ));
+
+        let restore = super::CommunityLayoutRestoreSnapshot {
+            chart_id,
+            entities: entities
+                .iter()
+                .map(|entity| (entity.id, entity.x, entity.y, entity.position_locked))
+                .collect(),
+        };
+        assert!(super::community_layout_restore_matches(
+            chart_id, &entities, &restore
+        ));
+        assert!(!super::community_layout_restore_matches(
+            Uuid::from_u128(901),
+            &entities,
+            &restore
+        ));
+        let mut changed_pin = entities.clone();
+        changed_pin[1].position_locked = false;
+        assert!(!super::community_layout_restore_matches(
+            chart_id,
+            &changed_pin,
+            &restore
+        ));
     }
 
     #[test]
