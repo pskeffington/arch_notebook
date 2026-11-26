@@ -11,6 +11,7 @@
 | --- | --- | --- |
 | SQL automation, diagnostics, recovery and chart interchange | PASS | Preflight, immutable capture/comparison, one-run override isolation, schema drift rejection, failed-run retention, reviewed schema repair, resumable batches, mismatch rejection, and CSV/TSV round-trip. |
 | Joined-header scale ingestion | PASS | 7,121 records, 1,500 entities, 7,121 composite IDs, 4,121 repeated endpoint pairs, two snapshots, nullable properties, zero skipped rows. |
+| Per-entity live SQL source lookup invariants | PASS, headless | Three focused tests and the 31-test suite cover multi-source composite identities, read-only behavior, unsafe/ambiguous query rejection, and bounded display; native inspector interaction remains pending. See [SQL-DRILLBACK-01](evidence/sql-automation/SQL-DRILLBACK-01-linux.md). |
 | Linux scheduler generation and invocation | PASS, stubbed | Five cadences and generated service invocation passed; `systemctl` was a temporary stub. Live timer firing is not tested. |
 | macOS LaunchAgent generation and runner simulation | PASS, stubbed | Five cadences and generated runner passed; `launchctl` was a temporary stub and the real macOS host was untouched. |
 | Candidate GitHub Actions run | PENDING | Actions API returned zero runs for product source commit `fae574d`. |
