@@ -57,12 +57,21 @@ pub(super) fn force_layout(
             sums[cell].0 += x;
             sums[cell].1 += y;
         }
-        let mut community_sums = std::collections::HashMap::<usize, (usize, f32, f32)>::new();
+        let mut community_sums = std::collections::BTreeMap::<usize, (usize, f32, f32)>::new();
         for (i, node) in nodes.iter().enumerate() {
             let entry = community_sums.entry(node.community).or_default();
             entry.0 += 1;
             entry.1 += positions[i].0;
             entry.2 += positions[i].1;
+        }
+        let mut community_counts = vec![0usize; GRID * GRID];
+        let mut community_centroids = vec![(0.0f32, 0.0f32); GRID * GRID];
+        for (count, sum_x, sum_y) in community_sums.values() {
+            let center = (*sum_x / *count as f32, *sum_y / *count as f32);
+            let cell = cell_index(center.0, center.1);
+            community_counts[cell] += 1;
+            community_centroids[cell].0 += center.0;
+            community_centroids[cell].1 += center.1;
         }
         let cooling = 1.0 - iteration as f32 / iterations as f32;
         let mut forces = vec![(0.0f32, 0.0f32); nodes.len()];
@@ -100,7 +109,42 @@ pub(super) fn force_layout(
                 let dx = x - cx;
                 let dy = y - cy;
                 let d2 = dx * dx + dy * dy + 0.0004;
-                let scale = 0.000018 * weight / d2;
+                let scale = 0.00018 * weight / d2;
+                forces[i].0 += dx * scale;
+                forces[i].1 += dy * scale;
+            }
+            // Translate each community as a unit away from other community
+            // centroids. Unlike centroid attraction, this cannot collapse a
+            // community's members onto one point.
+            let (group_count, group_x, group_y) = community_sums[&nodes[i].community];
+            let group_center = (group_x / group_count as f32, group_y / group_count as f32);
+            let group_cell = cell_index(group_center.0, group_center.1);
+            for cell in 0..community_counts.len() {
+                let count = community_counts[cell];
+                if count == 0 {
+                    continue;
+                }
+                let (cx, cy, weight) = if cell == group_cell {
+                    if count <= 1 {
+                        continue;
+                    }
+                    let others = (count - 1) as f32;
+                    (
+                        (community_centroids[cell].0 - group_center.0) / others,
+                        (community_centroids[cell].1 - group_center.1) / others,
+                        others,
+                    )
+                } else {
+                    (
+                        community_centroids[cell].0 / count as f32,
+                        community_centroids[cell].1 / count as f32,
+                        count as f32,
+                    )
+                };
+                let dx = group_center.0 - cx;
+                let dy = group_center.1 - cy;
+                let d2 = dx * dx + dy * dy + 0.0025;
+                let scale = 0.00008 * weight / d2;
                 forces[i].0 += dx * scale;
                 forces[i].1 += dy * scale;
             }
@@ -109,7 +153,12 @@ pub(super) fn force_layout(
             let dx = positions[b].0 - positions[a].0;
             let dy = positions[b].1 - positions[a].1;
             let distance = (dx * dx + dy * dy).sqrt().max(0.0001);
-            let scale = 0.018 * (distance - 0.13) / distance;
+            let attraction = if nodes[a].community == nodes[b].community {
+                0.018
+            } else {
+                0.0045
+            };
+            let scale = attraction * (distance - 0.13) / distance;
             if !nodes[a].pinned {
                 forces[a].0 += dx * scale;
                 forces[a].1 += dy * scale;
@@ -122,13 +171,6 @@ pub(super) fn force_layout(
         for (i, node) in nodes.iter().enumerate() {
             if node.pinned {
                 continue;
-            }
-            let (count, sx, sy) = community_sums[&node.community];
-            if count > 1 {
-                let cx = (sx - positions[i].0) / (count - 1) as f32;
-                let cy = (sy - positions[i].1) / (count - 1) as f32;
-                forces[i].0 += (cx - positions[i].0) * 0.006;
-                forces[i].1 += (cy - positions[i].1) * 0.006;
             }
             velocity[i].0 = (velocity[i].0 * 0.72 + forces[i].0).clamp(-0.035, 0.035);
             velocity[i].1 = (velocity[i].1 * 0.72 + forces[i].1).clamp(-0.035, 0.035);
@@ -236,5 +278,46 @@ mod tests {
             ),
             vec![(0.3, 0.7)]
         );
+    }
+
+    #[test]
+    fn force_layout_keeps_a_single_community_spread_across_the_canvas() {
+        let nodes: Vec<LayoutNode> = (0..30)
+            .map(|index| LayoutNode {
+                x: 0.12 + (index % 6) as f32 * 0.15,
+                y: 0.12 + (index / 6) as f32 * 0.15,
+                pinned: false,
+                community: 0,
+            })
+            .collect();
+        let edges: Vec<(usize, usize)> = (0..30)
+            .flat_map(|index| [(index, (index + 1) % 30), (index, (index + 6) % 30)])
+            .collect();
+        let positions = force_layout(
+            &nodes,
+            &edges,
+            LayoutSettings {
+                iterations: 50,
+                seed: 13,
+            },
+        );
+        let min_x = positions
+            .iter()
+            .map(|(x, _)| *x)
+            .fold(f32::INFINITY, f32::min);
+        let max_x = positions
+            .iter()
+            .map(|(x, _)| *x)
+            .fold(f32::NEG_INFINITY, f32::max);
+        let min_y = positions
+            .iter()
+            .map(|(_, y)| *y)
+            .fold(f32::INFINITY, f32::min);
+        let max_y = positions
+            .iter()
+            .map(|(_, y)| *y)
+            .fold(f32::NEG_INFINITY, f32::max);
+        assert!(max_x - min_x > 0.5, "single group collapsed horizontally");
+        assert!(max_y - min_y > 0.5, "single group collapsed vertically");
     }
 }

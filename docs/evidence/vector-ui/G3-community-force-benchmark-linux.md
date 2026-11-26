@@ -1,48 +1,48 @@
-# G3 community-aware force layout — Linux workload evidence
+# G3 community-aware force layout — Linux evidence
 
 - **Task/owner:** G3 layout performance follow-up / Codex implementation
-- **Source baseline:** `dc53df2805397bc90215a2f23139a768bfb97c66` on `codex/ui-00-chart-baseline`
-- **Candidate:** uncommitted working tree containing the asynchronous arrangement and benchmark CLI; source commit will be recorded in Git history.
+- **Source baseline:** `95da004b26dd2d067a05c808a5bba60cd3ef1651` on `codex/ui-00-chart-baseline`
+- **Candidate:** working tree including the single-community spread regression and revised forces.
 - **Fixture source:** `scripts/generate-chart-fixtures.py`; deterministic fictional sparse, hub, disconnected, and dense graphs.
-- **Raw data:** [25-sample JSON](artifacts/G3-community-force-25samples.json), SHA-256 `c0fd5ca8c9976e58ea29851bbe12cc3c35c7506bccc641f60b7503710bdd1314`.
-- **Release binary:** `/tmp/arch-notebook-target/release/arch-notebook`, SHA-256 `4666b683af0cb9f59e9bffdae81a69389916b9a56082103181104e0ee4c0c1a1`.
+- **Corrected raw data:** [25-sample JSON](artifacts/G3-community-force-25samples-corrected.json), SHA-256 `87b0ccbad6d09ebe3f379a1f77d2522064ffc08bf2f3e13533facb8d3d78c02e`.
+- **Release binary:** `/tmp/arch-notebook-target/release/arch-notebook`, SHA-256 `e42240f90edfa058d78304ab549e45f8237d426dcba7e25ae8995bb6c7124e1a`.
 - **Host:** Linux x86_64, kernel `7.3.5-zen1-1-zen`, glibc 2.44.
 
-## Reproduction and results
+## Automated checks
 
-| Command/check | Result |
+| Check | Result |
 | --- | --- |
 | `cargo fmt --all` | **PASS**, exit 0 |
-| `python3 -m py_compile scripts/benchmark-community-layout.py` | **PASS**, exit 0 |
 | `git diff --check` | **PASS**, exit 0 |
-| `CARGO_TARGET_DIR=/tmp/arch-notebook-target cargo test --locked --offline -- --test-threads=1` | **PASS**, 45 passed, 0 failed |
+| `CARGO_TARGET_DIR=/tmp/arch-notebook-target cargo test --locked --offline -- --test-threads=1` | **PASS**, 46 passed, 0 failed |
 | `CARGO_TARGET_DIR=/tmp/arch-notebook-target cargo check --locked --offline` | **PASS**, exit 0 |
 | `CARGO_TARGET_DIR=/tmp/arch-notebook-target cargo build --release --locked --offline` | **PASS**, exit 0 |
-| `python3 scripts/benchmark-community-layout.py --binary /tmp/arch-notebook-target/release/arch-notebook --output /tmp/arch-notebook-g3-layout-benchmark-final.json --iterations 20 --samples 25` | **PASS**, 12 cases, exit 0 |
+| `python3 scripts/benchmark-community-layout.py --binary /tmp/arch-notebook-target/release/arch-notebook --output /tmp/arch-notebook-g3-layout-benchmark-v2.json --iterations 20 --samples 25` | **PASS**, 12 cases, exit 0 |
 
-Layout coordinate timings below are medians and p95s over 25 samples after one warmup; all use 20 force iterations. Community detection was timed once separately for each fixture and is not included in the repeated layout timings.
+The corrected timings below are medians and p95s over 25 samples after one warmup. Community detection is a single sample; it is not included in repeated layout timings.
 
-| Fixture | Nodes | Relationship records | Communities | Community detection (one sample) | Layout median | Layout p95 |
+| Fixture | Nodes | Relationship records | Communities | Community detection | Layout median | Layout p95 |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Sparse | 1,000 | 3,000 | 61 | 6.01 ms | 9.66 ms | 15.12 ms |
-| Sparse | 5,000 | 15,000 | 310 | 21.72 ms | 43.47 ms | 68.38 ms |
-| Sparse | 10,000 | 30,000 | 635 | 37.78 ms | 84.88 ms | 87.30 ms |
-| Hub | 1,000 | 3,000 | 393 | 13.05 ms | 8.54 ms | 17.97 ms |
-| Hub | 5,000 | 15,000 | 2,087 | 76.85 ms | 43.90 ms | 47.14 ms |
-| Hub | 10,000 | 30,000 | 4,259 | 232.16 ms | 89.61 ms | 92.30 ms |
-| Disconnected | 1,000 | 2,000 | 237 | 2.22 ms | 8.76 ms | 11.42 ms |
-| Disconnected | 5,000 | 10,000 | 1,192 | 7.96 ms | 44.46 ms | 82.85 ms |
-| Disconnected | 10,000 | 20,000 | 2,372 | 24.33 ms | 90.28 ms | 94.83 ms |
-| Dense | 1,000 | 10,000 | 444 | 1.74 ms | 11.13 ms | 11.48 ms |
-| Dense | 5,000 | 50,000 | 2,230 | 16.53 ms | 47.34 ms | 49.67 ms |
-| Dense | 10,000 | 100,000 | 4,462 | 45.33 ms | 96.38 ms | 100.14 ms |
+| Sparse | 1,000 | 3,000 | 61 | 3.36 ms | 12.74 ms | 17.33 ms |
+| Sparse | 5,000 | 15,000 | 310 | 16.88 ms | 56.16 ms | 67.31 ms |
+| Sparse | 10,000 | 30,000 | 635 | 72.42 ms | 133.46 ms | 141.50 ms |
+| Hub | 1,000 | 3,000 | 393 | 11.82 ms | 14.53 ms | 88.26 ms |
+| Hub | 5,000 | 15,000 | 2,087 | 71.31 ms | 79.70 ms | 89.53 ms |
+| Hub | 10,000 | 30,000 | 4,259 | 228.07 ms | 162.18 ms | 170.15 ms |
+| Disconnected | 1,000 | 2,000 | 237 | 2.47 ms | 12.90 ms | 56.11 ms |
+| Disconnected | 5,000 | 10,000 | 1,192 | 8.00 ms | 68.04 ms | 75.52 ms |
+| Disconnected | 10,000 | 20,000 | 2,372 | 32.93 ms | 142.95 ms | 154.78 ms |
+| Dense | 1,000 | 10,000 | 444 | 1.66 ms | 18.09 ms | 26.24 ms |
+| Dense | 5,000 | 50,000 | 2,230 | 19.45 ms | 91.25 ms | 95.33 ms |
+| Dense | 10,000 | 100,000 | 4,462 | 19.95 ms | 178.34 ms | 184.67 ms |
 
-The hub community detection timing was notably expensive. Both detection and layout now run off the UI thread. The worker applies results only when the active chart ID, ordered entities and positions, pin states, and ordered relationship endpoints still match its input snapshot; stale results are discarded. Regression coverage checks chart switch, entity movement, and endpoint changes. A chart-scoped **Restore positions from before force layout** action is now available when entity order and pin states still match; source tests cover those guards, but native interaction is unreviewed.
+The revision prevents the single-community collapse found in native review by removing member-to-centroid attraction, strengthening node repulsion, and adding community-level translation repulsion. A deterministic 30-node source regression requires spread in both dimensions. The old broken arrangement is preserved in [overlap-before-fix.png](artifacts/G3-community-force-overlap-before-fix.png), SHA-256 `24d7843b7b83c19f614ba70806995c2b94f9097a39f35ec17212dfb9a22ea59e`. A native capture of the corrected build before arrangement is [native-before-retest.png](artifacts/G3-community-force-native-before-retest.png); it does not demonstrate corrected arrange/restore behavior.
 
 ## Acceptance and limits
 
-- Candidate CPU timing characterization: **PASS for measured 1k/5k/10k synthetic fixtures at 20 iterations**. Direct comparison against a G0 layout baseline was **NOT RUN**. These are machine-specific timings, not service-level guarantees.
-- Native visual/input acceptance: **NOT RUN**. Thread responsiveness and perceived layout quality still need an input-capable desktop review.
-- Restore/undo UX: **SOURCE PASS; NATIVE REVIEW NOT RUN**. The one-action restore is transient for the open case session and is not preserved across app restart.
-- This measures the CPU coordinate routine and a single community-detection sample only. It does not measure rendering, drawing, compositor, input-to-display latency, or full-app save/load interaction.
-- The layout is an exploratory display arrangement; positions do not establish social distance, causality, or importance.
+- Corrected algorithm source regression, full Rust suite, offline compile, release build, and synthetic CPU timings: **PASS**.
+- Native input and corrected arrange/restore visual acceptance: **BLOCKED**. The app window remained visible to `xwininfo`, but `xdotool getwindowfocus` failed with “Failed creating new xdo instance”; `import -window` failed to open X server `:0`; Spectacle active-window capture aborted. Do not treat the earlier broken-layout capture as acceptance of the fix.
+- The earlier native review did exercise the old layout and exposed a severe overlap defect. The repair has not yet been exercised through the UI.
+- Direct comparison against the G0 layout baseline: **NOT RUN**. Timings are machine-specific and measure coordinate calculation plus one detection sample only; they do not measure rendering or input-to-display latency.
+- Restore is transient within the open case session and is not preserved across app restart. No independent code review has been performed on this follow-up.
+- Spatial arrangement is exploratory display geometry and does not encode social distance, causality, or importance.
