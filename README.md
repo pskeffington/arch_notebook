@@ -111,6 +111,8 @@ See [Automated SQL ingestion](docs/automation.md) for configuration, preflight, 
 
 GraphML and KML are interchange formats, not full substitutes for local case and snapshot history. External IBM import fidelity still requires testing in a receiving installation.
 
+On Linux, the CLI can package a saved chart as `finding.md` plus a simplified SVG network overview for analyst handoff. Names, chart title, relationship labels, record IDs, and evidence reference strings are independently opt-in; source notes, evidence contents, and SQL connection details are omitted. The package is an Arch Notebook report handoff and does not claim IBM ANX compatibility. See [Notebook workflows](docs/notebook-workflows.md#export-an-analyst-finding-packet).
+
 ## Data integrity and boundaries
 
 - SQLite sources open read-only; writable statements are rejected. Each capture records query results and schema version in one read transaction.

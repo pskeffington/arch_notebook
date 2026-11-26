@@ -14008,6 +14008,338 @@ fn network_analysis_method_card_text(
     )
 }
 
+#[derive(Clone, Copy, Default)]
+struct AnalysisPacketDisclosure {
+    names: bool,
+    relationship_labels: bool,
+    ids: bool,
+    evidence_references: bool,
+}
+
+fn analysis_packet_svg(
+    case: &CaseFile,
+    disclosure: AnalysisPacketDisclosure,
+) -> Result<String, String> {
+    const WIDTH: i32 = 1200;
+    const HEIGHT: i32 = 800;
+    let mut entities: Vec<&Entity> = case.entities.iter().collect();
+    entities.sort_by_key(|entity| entity.id);
+    let entity_index: HashMap<Uuid, usize> = entities
+        .iter()
+        .enumerate()
+        .map(|(index, entity)| (entity.id, index))
+        .collect();
+    let mut links: Vec<&Link> = case.links.iter().collect();
+    links.sort_by(|a, b| {
+        (
+            a.from,
+            a.to,
+            a.directed,
+            a.connection_id.as_str(),
+            a.label.as_str(),
+            a.date.as_str(),
+        )
+            .cmp(&(
+                b.from,
+                b.to,
+                b.directed,
+                b.connection_id.as_str(),
+                b.label.as_str(),
+                b.date.as_str(),
+            ))
+    });
+    if links
+        .iter()
+        .any(|link| !entity_index.contains_key(&link.from) || !entity_index.contains_key(&link.to))
+    {
+        return Err(
+            "analysis packet cannot export relationships with missing chart endpoints".into(),
+        );
+    }
+    let pair_key = |link: &Link| {
+        if link.from <= link.to {
+            (link.from, link.to)
+        } else {
+            (link.to, link.from)
+        }
+    };
+    let mut pair_counts = HashMap::new();
+    for link in &links {
+        *pair_counts.entry(pair_key(link)).or_insert(0usize) += 1;
+    }
+    let mut pair_lanes = HashMap::new();
+    let mut svg = format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{WIDTH}\" height=\"{HEIGHT}\" viewBox=\"0 0 {WIDTH} {HEIGHT}\"><title>Simplified network overview</title><desc>Stored chart positions; distances are not a social measure.</desc><defs><marker id=\"arrow\" markerWidth=\"10\" markerHeight=\"7\" refX=\"9\" refY=\"3.5\" orient=\"auto\"><polygon points=\"0 0, 10 3.5, 0 7\" fill=\"#46545f\"/></marker></defs><rect width=\"100%\" height=\"100%\" fill=\"white\"/>\n"
+    );
+    let point = |entity: &Entity| -> (f32, f32) {
+        (
+            40.0 + entity.x.clamp(0.0, 1.0) * 1120.0,
+            40.0 + entity.y.clamp(0.0, 1.0) * 660.0,
+        )
+    };
+    for (index, link) in links.iter().enumerate() {
+        let from = entities[entity_index[&link.from]];
+        let to = entities[entity_index[&link.to]];
+        let (x1, y1) = point(from);
+        let (x2, y2) = point(to);
+        let dx = x2 - x1;
+        let dy = y2 - y1;
+        let length = (dx * dx + dy * dy).sqrt().max(1.0);
+        let key = pair_key(link);
+        let lane = pair_lanes.entry(key).or_insert(0usize);
+        let offset =
+            ((*lane as f32 - (pair_counts[&key] as f32 - 1.0) / 2.0) * 7.0).clamp(-24.0, 24.0);
+        *lane += 1;
+        let (sx, sy) = (x1 + offset * dy / length, y1 - offset * dx / length);
+        let (tx, ty) = (x2 + offset * dy / length, y2 - offset * dx / length);
+        let label = if disclosure.relationship_labels {
+            format!(" · {}", link.label)
+        } else {
+            String::new()
+        };
+        let edge_label = format!("Relationship {:03}{label}", index + 1);
+        let record_label = if disclosure.ids && !link.connection_id.is_empty() {
+            escape_xml_text(&link.connection_id)
+        } else {
+            format!("Relationship {:03}", index + 1)
+        };
+        let marker = if link.directed {
+            " marker-end=\"url(#arrow)\""
+        } else {
+            ""
+        };
+        let edge = if link.from == link.to {
+            let loop_direction = if x1 > WIDTH as f32 - 60.0 { -1.0 } else { 1.0 };
+            format!(
+                "<path d=\"M {x1:.2} {y1:.2} C {:.2} {:.2}, {:.2} {:.2}, {:.2} {:.2}\" stroke=\"#46545f\" stroke-width=\"1.5\" fill=\"none\"{marker} />",
+                x1 + 42.0 * loop_direction,
+                y1 - 36.0,
+                x1 + 42.0 * loop_direction,
+                y1 + 36.0,
+                x1 + 7.0 * loop_direction,
+                y1 + 7.0
+            )
+        } else {
+            format!(
+                "<line x1=\"{sx:.2}\" y1=\"{sy:.2}\" x2=\"{tx:.2}\" y2=\"{ty:.2}\" stroke=\"#46545f\" stroke-width=\"1.5\"{marker} />"
+            )
+        };
+        svg.push_str(&format!(
+            "<g data-record=\"{record_label}\"><title>{}</title>{edge}</g>\n",
+            escape_xml_text(&edge_label)
+        ));
+    }
+    for (index, entity) in entities.iter().enumerate() {
+        let (x, y) = point(entity);
+        let full_text = if disclosure.names {
+            format!("{} · {}", entity.name, entity.kind)
+        } else {
+            format!("Entity {:03}", index + 1)
+        };
+        let mut text: String = full_text.chars().take(28).collect();
+        if full_text.chars().count() > 28 {
+            text.push('…');
+        }
+        let label_width = (text.chars().count() as f32 * 7.0 + 8.0).clamp(62.0, 170.0);
+        let (label_x, anchor, background_x) = if x + 16.0 + label_width <= WIDTH as f32 - 12.0 {
+            (x + 14.0, "start", x + 11.0)
+        } else {
+            (x - 14.0, "end", x - 14.0 - label_width - 3.0)
+        };
+        let label_y = (y + 4.0).clamp(15.0, HEIGHT as f32 - 8.0);
+        let entity_label = if disclosure.ids {
+            escape_xml_text(&entity.id.to_string())
+        } else {
+            format!("Entity {:03}", index + 1)
+        };
+        svg.push_str(&format!(
+            "<g data-entity=\"{entity_label}\"><title>{}</title><circle cx=\"{x:.2}\" cy=\"{y:.2}\" r=\"9\" fill=\"#397fa0\" stroke=\"#173b4d\"/><rect x=\"{background_x:.2}\" y=\"{:.2}\" width=\"{label_width:.2}\" height=\"18\" rx=\"3\" fill=\"white\" fill-opacity=\".88\"/><text x=\"{label_x:.2}\" y=\"{label_y:.2}\" text-anchor=\"{anchor}\" font-family=\"sans-serif\" font-size=\"11\" fill=\"#17252d\">{}</text></g>\n",
+            escape_xml_text(&full_text),
+            label_y - 13.0,
+            escape_xml_text(&text)
+        ));
+    }
+    svg.push_str("<g font-family=\"sans-serif\" font-size=\"12\" fill=\"#17252d\"><line x1=\"24\" y1=\"776\" x2=\"60\" y2=\"776\" stroke=\"#46545f\" stroke-width=\"1.5\"/><text x=\"68\" y=\"780\">Undirected relationship record</text><line x1=\"310\" y1=\"776\" x2=\"346\" y2=\"776\" stroke=\"#46545f\" stroke-width=\"1.5\" marker-end=\"url(#arrow)\"/><text x=\"354\" y=\"780\">Directed relationship record</text><circle cx=\"610\" cy=\"776\" r=\"7\" fill=\"#397fa0\" stroke=\"#173b4d\"/><text x=\"624\" y=\"780\">Entity</text></g>\n");
+    if disclosure.evidence_references {
+        for (index, link) in links.iter().enumerate() {
+            if !link.source_reference.is_empty() {
+                svg.push_str(&format!(
+                    "<metadata id=\"evidence-{:03}\">{}</metadata>\n",
+                    index + 1,
+                    escape_xml_text(&link.source_reference)
+                ));
+            }
+        }
+    }
+    svg.push_str("</svg>\n");
+    Ok(svg)
+}
+
+fn escape_markdown_inline(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for character in value.chars() {
+        match character {
+            '\n' | '\r' => escaped.push(' '),
+            '\\' | '*' | '_' | '`' | '!' | '[' | ']' | '(' | ')' | '<' | '>' => {
+                escaped.push('\\');
+                escaped.push(character);
+            }
+            character => escaped.push(character),
+        }
+    }
+    escaped
+}
+
+fn analysis_packet_report(
+    case: &CaseFile,
+    disclosure: AnalysisPacketDisclosure,
+    chart_title: &str,
+) -> String {
+    let card = network_analysis_method_card(case);
+    let mut methods = network_analysis_method_card_text(&card, false, PathTimeFlow::Any, false);
+    if !disclosure.relationship_labels {
+        methods = methods.replace("Relationship type", "relationship type");
+    }
+    format!(
+        "# Analyst finding packet\n\n{}\n\n> Simplified SVG overview of the full persisted chart. This export does not apply unsaved selection, search, or timeline filters. Stored chart positions are for layout only; visual distance is not a measure.\n\n> Privacy: topology and aggregate counts may still identify people even when labels are pseudonymous. Review locally before sharing.\n\n## Export options\n\n- Names: {}\n- Relationship labels: {}\n- IDs: {}\n- Evidence references: {}\n\n## Analysis method card\n\n{}\n\n## Analyst-authored fields\n\n### Question\n\n\n### Findings (software generated no findings)\n\n\n### Evidence selected/references\n\n\n### Limitations and alternative explanations\n\n\n### Audience and privacy review\n\n\n### Analyst / date / version\n\n\n",
+        if disclosure.names {
+            format!("Chart: {}", escape_markdown_inline(chart_title))
+        } else {
+            "Chart: Redacted".to_owned()
+        },
+        disclosure.names,
+        disclosure.relationship_labels,
+        disclosure.ids,
+        disclosure.evidence_references,
+        methods
+    )
+}
+
+fn export_analysis_packet_cli(
+    case_path: &str,
+    output_dir: &str,
+    selector: Option<&str>,
+    disclosure: AnalysisPacketDisclosure,
+    json_output: bool,
+) -> Result<(), String> {
+    let output = Path::new(output_dir);
+    if output.file_name().is_none() {
+        return Err("output directory must name a new child directory".into());
+    }
+    let parent = output
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    if !parent.is_dir() {
+        return Err("output parent must already exist and be a directory".into());
+    }
+    if fs::symlink_metadata(output).is_ok() {
+        return Err("output directory already exists; choose a new path".into());
+    }
+    if paths_refer_to_same_file(case_path, output_dir) {
+        return Err("output directory cannot replace the case file".into());
+    }
+    let content =
+        fs::read_to_string(case_path).map_err(|error| format!("cannot read case: {error}"))?;
+    let mut case = serde_json::from_str::<CaseFile>(&content)
+        .map_err(|error| format!("cannot parse case: {error}"))?;
+    let source_hash = sha256_hex(content.as_bytes());
+    if let Some(selector) = selector {
+        let chart_id = chart_id_for_selector(&case, selector)?;
+        let chart_title = chart_title_for_id(&case, chart_id)
+            .ok_or("chart title missing")?
+            .to_owned();
+        let chart_entities = chart_entities_for_id(&case, chart_id)
+            .ok_or("chart entities missing")?
+            .to_vec();
+        let chart_links = chart_links_for_id(&case, chart_id)
+            .ok_or("chart relationships missing")?
+            .to_vec();
+        case.active_chart_id = chart_id;
+        case.active_chart_title = chart_title;
+        case.entities = chart_entities;
+        case.links = chart_links;
+    }
+    let selected_chart_title = case.active_chart_title.clone();
+    let svg = analysis_packet_svg(&case, disclosure)?;
+    let report = analysis_packet_report(&case, disclosure, &selected_chart_title);
+    let name = output.file_name().ok_or("invalid output directory")?;
+    let mut stage_name = name.to_os_string();
+    stage_name.push(format!(".tmp-{}-{}", std::process::id(), Uuid::new_v4()));
+    let stage = parent.join(stage_name);
+    fs::create_dir(&stage)
+        .map_err(|error| format!("cannot create packet staging directory: {error}"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&stage, fs::Permissions::from_mode(0o700)).map_err(|error| {
+            format!("cannot restrict packet staging directory permissions: {error}")
+        })?;
+    }
+    let result = (|| -> Result<(), String> {
+        #[cfg(unix)]
+        use std::os::unix::fs::OpenOptionsExt;
+        for (name, contents) in [
+            ("finding.md", report.as_bytes()),
+            ("network.svg", svg.as_bytes()),
+        ] {
+            let mut options = fs::OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            options.mode(0o600);
+            let mut file = options
+                .open(stage.join(name))
+                .map_err(|e| format!("cannot create {name}: {e}"))?;
+            file.write_all(contents)
+                .map_err(|e| format!("cannot write {name}: {e}"))?;
+            file.sync_all()
+                .map_err(|e| format!("cannot sync {name}: {e}"))?;
+        }
+        #[cfg(target_os = "linux")]
+        {
+            let parent_fd = rustix::fs::open(
+                parent,
+                rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::DIRECTORY,
+                rustix::fs::Mode::empty(),
+            )
+            .map_err(|e| format!("cannot open output parent: {e}"))?;
+            let stage_name = stage.file_name().ok_or("invalid staging directory")?;
+            let output_name = output.file_name().ok_or("invalid output directory")?;
+            rustix::fs::renameat_with(
+                &parent_fd,
+                stage_name,
+                &parent_fd,
+                output_name,
+                rustix::fs::RenameFlags::NOREPLACE,
+            )
+            .map_err(|e| format!("cannot publish packet without replacing destination: {e}"))?;
+        }
+        #[cfg(not(target_os = "linux"))]
+        return Err(
+            "atomic no-replace directory publication is currently supported only on Linux".into(),
+        );
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_dir_all(&stage);
+    }
+    result?;
+    if json_output {
+        println!(
+            "{}",
+            serde_json::json!({"schema_version":1,"ok":true,"output":output_dir,"entities":case.entities.len(),"relationships":case.links.len(),"options":{"names":disclosure.names,"relationship_labels":disclosure.relationship_labels,"ids":disclosure.ids,"evidence_references":disclosure.evidence_references},"source_sha256":source_hash})
+        );
+    } else {
+        println!(
+            "ANALYSIS PACKET EXPORTED · {} ENTITIES · {} RELATIONSHIPS · {}",
+            case.entities.len(),
+            case.links.len(),
+            output_dir
+        );
+    }
+    Ok(())
+}
+
 fn linked_entities_within_depth(
     case: &CaseFile,
     seeds: &HashSet<Uuid>,
@@ -40372,6 +40704,12 @@ fn main() -> eframe::Result<()> {
             "Arch Notebook\n\nUsage:\n  arch-notebook\n  arch-notebook --version [--json]\n  arch-notebook --inspect-sqlite <database.sqlite> [--json]\n  arch-notebook --import-graphml <case.json> <input.graphml> [--json]\n  arch-notebook --import-kml <case.json> <input.kml> [--json]\n  arch-notebook --import-document-packets <case.json> <packets.jsonl> [--json]\n  arch-notebook --import-delimited <case.json> <input.csv|tsv> [--design <name-or-id>] [--chart <title-or-uuid> | --new-chart] [--source <provenance-key>] [--json]\n  arch-notebook --export-graphml <case.json> <output.graphml> [--chart <title-or-uuid>] [--include-source-catalog | --omit-source-catalog] [--json]\n  arch-notebook --export-anx <case.json> <output.anx> [--chart <title-or-uuid>] [--json]\n  arch-notebook --export-kml <case.json> <output.kml> [--json]\n  arch-notebook --export-sql-snapshot <case.json> <snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --export-sql-series <case.json> <snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --export-sql-comparison <case.json> <baseline-snapshot-id> <current-snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --export-job <case.json> <job-name-or-id> <output.json> [--json]\n  arch-notebook --export-path <case.json> <path-name-or-id> <output.json> [--json]\n  arch-notebook --import-path <case.json> <input.json> [--name <path-name>] [--json]\n  arch-notebook --import-job <case.json> <input.json> [--name <job-name>] [--chart <chart-title-or-uuid>] [--database <path>] [--series <label>] [--param name=value ...] [--json]\n  arch-notebook --export-import-design <case.json> <design-name-or-id> <output.json> [--json]\n  arch-notebook --import-import-design <case.json> <input.json> [--name <design-name>] [--update <design-name-or-id>] [--json]\n  arch-notebook --list-jobs <case.json> [--enabled-only] [--schema-adaptation-needed] [--json]\n  arch-notebook --list-batches <case.json> [--json]\n  arch-notebook --list-runs <case.json> [--json] [--job <name-or-id>] [--batch <batch-uuid>] [--trigger <desktop|scheduled|cli|replay|legacy>] [--schema-adaptation-needed] [--schema-stability-failed] [--offset <count>] [--limit <count>]\n  arch-notebook --export-runs <case.json> <output.csv|tsv> [--job <name-or-id>] [--batch <batch-uuid>] [--trigger <desktop|scheduled|cli|replay|legacy>] [--schema-adaptation-needed] [--schema-stability-failed] [--offset <count>] [--limit <count>] [--json]\n  arch-notebook --explain-job <case.json> <job-name-or-id> [--param name=value ...] [--json]\n  arch-notebook --validate-job <case.json> <job-name-or-id> [--query-only] [--param name=value ...] [--json]\n  arch-notebook --validate-enabled-jobs <case.json> [--json] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --check-enabled-job-queries <case.json> [--json] [--require-usable] [--require-unchanged-schema] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --validate-run <case.json> <run-id> [--json]\n  arch-notebook --run-enabled-jobs <case.json> [--json] [--resume-batch <batch-id>] [--export-chart-csv-dir <absolute-directory>] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --run-job <case.json> <job-name-or-id> [--param name=value ...] [--resume-batch <batch-id>] [--export-chart-csv <output.csv|tsv>] [--json]\n  arch-notebook --rerun-run <case.json> <run-id> [--export-chart-csv <output.csv|tsv>] [--json]\n\nJob and import design packages contain portable configuration, not case data or run history. Batch runs save snapshots and run history to the case file. JSON output is available for scheduler integration. Additional commands:"
         );
         println!("  GraphML and ANX export accept --chart <title-or-uuid> to choose a chart.");
+        println!(
+            "  arch-notebook --export-analysis-packet <case.json> <new-output-dir> [--chart <title-or-uuid>] [--include-names] [--include-relationship-labels] [--include-ids] [--include-evidence-references] [--json]"
+        );
+        println!(
+            "  Analysis packets contain finding.md and network.svg; names, relationship labels, IDs, and evidence references are opt-in."
+        );
         println!("  ANX import uses --import-anx <case.json> <input.anx> [--json].");
         println!(
             "  Attach TRANS candidate provenance with --attach-transcription-candidates <case.json> <manifest.json> [--json]."
@@ -40513,6 +40851,49 @@ fn main() -> eframe::Result<()> {
             json_output,
         ) {
             report_cli_error("ANX export failed", error, json_output);
+        }
+        return Ok(());
+    }
+    if args
+        .first()
+        .is_some_and(|arg| arg == "--export-analysis-packet")
+    {
+        let json_output = args.iter().any(|arg| arg == "--json");
+        let usage = "usage: arch-notebook --export-analysis-packet <case.json> <new-output-dir> [--chart <title-or-uuid>] [--include-names] [--include-relationship-labels] [--include-ids] [--include-evidence-references] [--json]";
+        let (Some(case_path), Some(output_dir)) = (args.get(1), args.get(2)) else {
+            report_cli_usage_error(usage, json_output);
+        };
+        let mut selector = None;
+        let mut disclosure = AnalysisPacketDisclosure::default();
+        let mut seen_json = false;
+        let mut index = 3;
+        while index < args.len() {
+            match args[index].as_str() {
+                "--chart" if selector.is_none() => {
+                    index += 1;
+                    let Some(value) = args.get(index).filter(|value| !value.starts_with("--"))
+                    else {
+                        report_cli_usage_error(usage, json_output);
+                    };
+                    selector = Some(value.as_str());
+                }
+                "--include-names" if !disclosure.names => disclosure.names = true,
+                "--include-relationship-labels" if !disclosure.relationship_labels => {
+                    disclosure.relationship_labels = true
+                }
+                "--include-ids" if !disclosure.ids => disclosure.ids = true,
+                "--include-evidence-references" if !disclosure.evidence_references => {
+                    disclosure.evidence_references = true
+                }
+                "--json" if !seen_json => seen_json = true,
+                _ => report_cli_usage_error(usage, json_output),
+            }
+            index += 1;
+        }
+        if let Err(error) =
+            export_analysis_packet_cli(case_path, output_dir, selector, disclosure, json_output)
+        {
+            report_cli_error("analysis packet export failed", error, json_output);
         }
         return Ok(());
     }
@@ -41829,10 +42210,10 @@ fn main() -> eframe::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        App, AutomationJob, AutomationParameterOverrides, AutomationWorkerResult, CaseFile,
-        ConnectionFact, ConnectionSnapshot, Entity, EntityRepresentation, Uuid,
-        canonical_connection, compare_snapshots, entity_type_layout_positions,
-        grid_layout_dimensions,
+        AnalysisPacketDisclosure, App, AutomationJob, AutomationParameterOverrides,
+        AutomationWorkerResult, CaseFile, ChartDocument, ConnectionFact, ConnectionSnapshot,
+        Entity, EntityRepresentation, Uuid, canonical_connection, compare_snapshots,
+        entity_type_layout_positions, export_analysis_packet_cli, grid_layout_dimensions,
     };
 
     fn layout_entity(name: &str, kind: &str, position_locked: bool) -> Entity {
@@ -41935,6 +42316,295 @@ mod tests {
             case_before_copy,
             "building and formatting the card must not mutate case data"
         );
+    }
+
+    #[test]
+    fn analysis_packet_redacts_by_default_and_exports_selected_chart_without_overwrite() {
+        let root =
+            std::env::temp_dir().join(format!("arch-notebook-packet-test-{}", Uuid::new_v4()));
+        std::fs::create_dir(&root).expect("create isolated packet fixture directory");
+        let case_path = root.join("case.json");
+        let mut case = super::demo_case();
+        case.title = "PRIVATE CASE TITLE".into();
+        case.active_chart_title = "PRIVATE CHART TITLE".into();
+        case.links[0].connection_id = "PRIVATE CONNECTION ID".into();
+        case.links[0].source_reference = "PRIVATE EVIDENCE <reference>".into();
+        case.links[0].notes = "PRIVATE ANALYST NOTE".into();
+
+        let alternate_chart_id = Uuid::new_v4();
+        case.chart_tabs.push(ChartDocument {
+            id: alternate_chart_id,
+            title: "Alternate **Chart**\n# injected heading".into(),
+            zoom: 1.0,
+            pan: [0.0, 0.0],
+            entities: vec![layout_entity("ALTERNATE ENTITY", "Organization", false)],
+            links: Vec::new(),
+            labels: Vec::new(),
+            template_id: None,
+        });
+        let case_before = serde_json::to_vec_pretty(&case).expect("serialize packet case");
+        std::fs::write(&case_path, &case_before).expect("write packet source case");
+
+        let redacted_dir = root.join("redacted");
+        export_analysis_packet_cli(
+            &case_path.to_string_lossy(),
+            &redacted_dir.to_string_lossy(),
+            None,
+            AnalysisPacketDisclosure::default(),
+            true,
+        )
+        .expect("export privacy-default packet");
+        let redacted_report = std::fs::read_to_string(redacted_dir.join("finding.md"))
+            .expect("read privacy-default report");
+        let redacted_svg = std::fs::read_to_string(redacted_dir.join("network.svg"))
+            .expect("read privacy-default network");
+        for private_value in [
+            "PRIVATE CASE TITLE",
+            "PRIVATE CHART TITLE",
+            "Avery Rowan",
+            "DIRECTOR OF",
+            "PRIVATE CONNECTION ID",
+            "PRIVATE EVIDENCE",
+            "PRIVATE ANALYST NOTE",
+        ] {
+            assert!(
+                !redacted_report.contains(private_value),
+                "report disclosed {private_value}"
+            );
+            assert!(
+                !redacted_svg.contains(private_value),
+                "SVG disclosed {private_value}"
+            );
+        }
+        assert!(redacted_report.contains("Chart: Redacted"));
+        assert!(redacted_svg.contains("Relationship 001"));
+        assert!(!redacted_svg.contains("<metadata"));
+
+        let selected_dir = root.join("selected");
+        let disclosure = AnalysisPacketDisclosure {
+            names: true,
+            relationship_labels: true,
+            ids: true,
+            evidence_references: true,
+        };
+        export_analysis_packet_cli(
+            &case_path.to_string_lossy(),
+            &selected_dir.to_string_lossy(),
+            Some(&alternate_chart_id.to_string()),
+            disclosure,
+            true,
+        )
+        .expect("export selected chart with explicit disclosures");
+        let selected_report = std::fs::read_to_string(selected_dir.join("finding.md"))
+            .expect("read selected chart report");
+        let selected_svg = std::fs::read_to_string(selected_dir.join("network.svg"))
+            .expect("read selected chart network");
+        assert!(selected_report.contains("Chart: Alternate"));
+        assert!(!selected_report.contains("!["));
+        assert!(!selected_report.contains("<script"));
+        assert!(selected_report.contains("Entities: 1"));
+        assert!(selected_report.contains("Relationship records: 0 total"));
+        assert!(selected_svg.contains("ALTERNATE ENTITY"));
+        assert!(!selected_svg.contains("Avery Rowan"));
+        assert!(!selected_svg.contains("PRIVATE EVIDENCE"));
+
+        let same_chart_dir = root.join("same-chart");
+        export_analysis_packet_cli(
+            &case_path.to_string_lossy(),
+            &same_chart_dir.to_string_lossy(),
+            None,
+            disclosure,
+            false,
+        )
+        .expect("export active chart with disclosures");
+        let same_chart_svg = std::fs::read_to_string(same_chart_dir.join("network.svg")).unwrap();
+        let repeated_dir = root.join("repeated");
+        export_analysis_packet_cli(
+            &case_path.to_string_lossy(),
+            &repeated_dir.to_string_lossy(),
+            None,
+            disclosure,
+            false,
+        )
+        .expect("repeat deterministic export");
+        assert_eq!(
+            same_chart_svg,
+            std::fs::read_to_string(repeated_dir.join("network.svg")).unwrap()
+        );
+
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(root.join("missing-target"), root.join("broken-symlink"))
+                .unwrap();
+            let error = export_analysis_packet_cli(
+                &case_path.to_string_lossy(),
+                &root.join("broken-symlink").to_string_lossy(),
+                None,
+                AnalysisPacketDisclosure::default(),
+                false,
+            )
+            .expect_err("broken symlink destination rejected");
+            assert!(error.contains("already exists"));
+        }
+
+        let occupied_dir = root.join("occupied");
+        std::fs::create_dir(&occupied_dir).expect("create occupied destination");
+        std::fs::write(occupied_dir.join("sentinel"), "keep").expect("write sentinel");
+        let error = export_analysis_packet_cli(
+            &case_path.to_string_lossy(),
+            &occupied_dir.to_string_lossy(),
+            None,
+            AnalysisPacketDisclosure::default(),
+            false,
+        )
+        .expect_err("existing output directory must be rejected");
+        assert!(error.contains("already exists"));
+        assert_eq!(
+            std::fs::read(occupied_dir.join("sentinel")).unwrap(),
+            b"keep"
+        );
+        assert_eq!(std::fs::read(&case_path).unwrap(), case_before);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(&redacted_dir)
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o700
+            );
+            assert_eq!(
+                std::fs::metadata(redacted_dir.join("finding.md"))
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o600
+            );
+            assert_eq!(
+                std::fs::metadata(redacted_dir.join("network.svg"))
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o600
+            );
+        }
+        let ambiguous_id = Uuid::new_v4();
+        case.chart_tabs.push(ChartDocument {
+            id: ambiguous_id,
+            title: "Alternate **Chart**\n# injected heading".into(),
+            zoom: 1.0,
+            pan: [0.0, 0.0],
+            entities: Vec::new(),
+            links: Vec::new(),
+            labels: Vec::new(),
+            template_id: None,
+        });
+        let ambiguous_path = root.join("ambiguous.json");
+        std::fs::write(&ambiguous_path, serde_json::to_vec(&case).unwrap()).unwrap();
+        let error = export_analysis_packet_cli(
+            &ambiguous_path.to_string_lossy(),
+            &root.join("ambiguous-output").to_string_lossy(),
+            Some("Alternate **Chart**\n# injected heading"),
+            AnalysisPacketDisclosure::default(),
+            false,
+        )
+        .expect_err("ambiguous title rejected");
+        assert!(error.contains("ambiguous"));
+        let mut malformed = case.clone();
+        malformed.links.push(super::Link {
+            from: Uuid::new_v4(),
+            to: malformed.entities[0].id,
+            connection_id: String::new(),
+            label: "missing endpoint".into(),
+            date: String::new(),
+            confidence: 1,
+            directed: false,
+            notes: String::new(),
+            source_notes: String::new(),
+            source_reference: String::new(),
+            ingest_source: None,
+            attributes: Vec::new(),
+        });
+        let malformed_path = root.join("malformed.json");
+        std::fs::write(&malformed_path, serde_json::to_vec(&malformed).unwrap()).unwrap();
+        let missing_output = root.join("missing-output");
+        let error = export_analysis_packet_cli(
+            &malformed_path.to_string_lossy(),
+            &missing_output.to_string_lossy(),
+            None,
+            AnalysisPacketDisclosure::default(),
+            false,
+        )
+        .expect_err("missing endpoints rejected");
+        assert!(error.contains("missing chart endpoints"));
+        assert!(std::fs::symlink_metadata(&missing_output).is_err());
+        std::fs::remove_dir_all(root).expect("remove isolated packet fixture directory");
+    }
+
+    #[test]
+    fn analysis_packet_redacts_default_output_and_escapes_opt_in_text() {
+        let mut case = super::demo_case();
+        case.title = "SECRET TITLE".into();
+        case.entities = vec![
+            layout_entity("SECRET <ALPHA>", "Actor", false),
+            layout_entity("SECRET BRAVO", "Actor", false),
+        ];
+        case.links.clear();
+        let a = case.entities[0].id;
+        let b = case.entities[1].id;
+        case.links.push(super::Link {
+            from: a,
+            to: b,
+            connection_id: "SECRET-ID".into(),
+            label: "LABEL & SECRET".into(),
+            date: "".into(),
+            confidence: 3,
+            directed: true,
+            notes: "SECRET NOTE".into(),
+            source_notes: "SECRET SOURCE NOTE".into(),
+            source_reference: "SECRET REF".into(),
+            ingest_source: None,
+            attributes: vec![],
+        });
+        let default =
+            super::analysis_packet_svg(&case, super::AnalysisPacketDisclosure::default()).unwrap();
+        for secret in [
+            "SECRET TITLE",
+            "SECRET <ALPHA>",
+            "SECRET BRAVO",
+            "SECRET-ID",
+            "LABEL & SECRET",
+            "SECRET REF",
+            "SECRET NOTE",
+        ] {
+            assert!(!default.contains(secret));
+        }
+        assert!(default.contains("Entity 001"));
+        let opted = super::analysis_packet_svg(
+            &case,
+            super::AnalysisPacketDisclosure {
+                names: true,
+                relationship_labels: true,
+                ids: true,
+                evidence_references: true,
+            },
+        )
+        .unwrap();
+        assert!(opted.contains("SECRET &lt;ALPHA&gt;"));
+        assert!(opted.contains("LABEL &amp; SECRET"));
+        assert!(opted.contains("SECRET-ID"));
+        assert!(opted.contains("SECRET REF"));
+        let report = super::analysis_packet_report(
+            &case,
+            super::AnalysisPacketDisclosure::default(),
+            &case.active_chart_title,
+        );
+        assert!(report.contains("Findings (software generated no findings)"));
+        assert!(report.contains("topology and aggregate counts may still identify people"));
     }
 
     #[test]
