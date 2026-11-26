@@ -59,6 +59,8 @@ The scheduler harness also checks a rolling previous-UTC-month SQL query through
 
 The isolated macOS LaunchAgent harness now runs the bundled automation runner against the same rolling-window case and checks the scheduled trigger, boundary rows, CSV output, and unchanged SQLite source. The harness uses a temporary `launchctl` stub on Linux; live macOS dispatch is still pending. See [SQL-SCHED-04 evidence](docs/evidence/sql-automation/SQL-SCHED-04-macos-window-linux-harness.md).
 
+The current installed Rust release was also rerun through the SQL scale, automation/recovery, Linux generated-service, and macOS runner harnesses. All four passed with synthetic SQLite fixtures. The scheduler checks use stubs/simulations and do not establish live timer dispatch; see [SQL-AUTO-02 current-release evidence](docs/evidence/sql-automation/SQL-AUTO-02-current-release-linux.md).
+
 Both rolling-window scheduler harnesses were rerun against the current installed release binary: Linux generated-service invocation and the bundled macOS runner simulation each included only the expected prior-month boundary row. The macOS simulation also confirmed the SQLite source remained unchanged. These checks still do not exercise live systemd or macOS `launchd` dispatch; see [SQL-SCHED-05 evidence](docs/evidence/sql-automation/SQL-SCHED-05-current-branch-window-linux.md).
 
 Desktop SQL automation now has worker-level cancellation regression coverage: after cancelling a long second query, the failed run is retained while the earlier successful snapshot and batch checkpoint remain. The test confirms the source database stays unchanged, but does not exercise the native cancel button; see [cancellation evidence](docs/evidence/sql-automation/SQL-CANCEL-01-worker-linux.md).

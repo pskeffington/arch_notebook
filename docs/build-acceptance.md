@@ -1,5 +1,22 @@
 # Local build acceptance record
 
+## Current SQL automation acceptance — 2026-11-26
+
+**Task / owner:** Resume Arch Notebook SQL ingestion and automation acceptance; implementation session.
+**Repository / branch:** `/home/sysadmin/github/arch_notebook` / `codex/ui-00-chart-baseline`.
+**Source baseline:** `bc536880d29075234525c0fde4f6a860caf71101`; product source `a5208a0e3aa8c0fe3b3a1e3f02986e45e97b919a`.
+**Installed artifact:** `/home/sysadmin/.local/bin/arch-notebook`, SHA-256 `765f8fa2e6384a2df4747890a9b954920a1668dc35557068f749f89afcea1fc7`.
+
+| Gate | Result | Evidence and limits |
+| --- | --- | --- |
+| SQL scale ingestion and longitudinal comparison | PASS | 7,121 composite relationship IDs, two snapshots, 1,500 entities, NULL handling, query-only preflight, and zero skipped rows; synthetic fixture. |
+| SQL automation, failure diagnosis, recovery, and interchange | PASS | Preflight, baseline/current capture, history, comparison export, schema drift rejection, retained failures, CSV/TSV round trip, reviewed query repair, and batch resume all passed. Mismatched resume configuration was rejected. |
+| Linux scheduler generation and service invocation | PASS, harness scoped | Five cadences and case-isolated units; generated service command captured the expected snapshot and CSV. `systemctl` was stubbed; live timer dispatch is unverified. |
+| macOS LaunchAgent runner | PASS, simulation scoped | Five cadences and case isolation; runner simulation generated the expected capture and CSV. `launchctl` was stubbed on Linux; macOS dispatch is unverified. |
+| Native Automation UI, IBM XSD/application compatibility | BLOCKED | Pointer-driven Automation UI review and IBM validation have not been performed. |
+
+Exact commands, exit status, report hashes, and fixture caveats are recorded in [SQL-AUTO-02](evidence/sql-automation/SQL-AUTO-02-current-release-linux.md). No tests or builds were run for this documentation update. The pre-existing `src/main.rs` worktree diff was left unstaged and is outside this evidence change.
+
 > **Historical record:** The original local build below is retained as written for provenance. Its dirty `main` worktree and “no tests” findings describe the 2026-11-25 candidate only; they do not describe the current feature branch. Current branch evidence is summarized in [Current continuation: UI-00 and local install](#current-continuation-ui-00-and-local-install).
 
 [![Linux local build: passing](https://img.shields.io/badge/Linux%20local%20build-passing-brightgreen)](#feature-branch-increment-reusable-chart-templates)
