@@ -23709,25 +23709,20 @@ impl eframe::App for App {
                                 {
                                     self.select_chart_entity(entity_id, false);
                                 } else {
-                                    let nearest_link = self
+                                    let entity_positions: HashMap<Uuid, egui::Pos2> = self
                                         .case
-                                        .links
+                                        .entities
                                         .iter()
-                                        .enumerate()
-                                        .filter_map(|(index, link)| {
-                                            let from = self.case.entities.get(*entity_indices.get(&link.from)?)?;
-                                            let to = self.case.entities.get(*entity_indices.get(&link.to)?)?;
-                                            let points = connection_curve_points(
-                                                center(from),
-                                                center(to),
-                                                link_lanes[index] * self.chart_zoom,
-                                            );
-                                            Some((index, polyline_distance(pos, &points)))
-                                        })
-                                        .min_by(|left, right| left.1.total_cmp(&right.1));
-                                    if let Some((index, distance)) = nearest_link
-                                        && distance < 22.0 * self.chart_zoom
-                                    {
+                                        .map(|entity| (entity.id, center(entity)))
+                                        .collect();
+                                    if let Some(index) = nearest_link_index_at_position(
+                                        &self.case.links,
+                                        &entity_positions,
+                                        &link_lanes,
+                                        pos,
+                                        self.chart_zoom,
+                                        22.0 * self.chart_zoom,
+                                    ) {
                                         self.clear_chart_entity_selection();
                                         self.selected_link = Some(index);
                                     } else {
@@ -27523,6 +27518,29 @@ fn polyline_distance(point: egui::Pos2, points: &[egui::Pos2]) -> f32 {
         .windows(2)
         .map(|segment| segment_distance(point, segment[0], segment[1]))
         .fold(f32::INFINITY, f32::min)
+}
+
+fn nearest_link_index_at_position(
+    links: &[Link],
+    entity_positions: &HashMap<Uuid, egui::Pos2>,
+    lanes: &[f32],
+    pointer: egui::Pos2,
+    zoom: f32,
+    maximum_distance: f32,
+) -> Option<usize> {
+    links
+        .iter()
+        .enumerate()
+        .filter_map(|(index, link)| {
+            let from = *entity_positions.get(&link.from)?;
+            let to = *entity_positions.get(&link.to)?;
+            let lane = *lanes.get(index)?;
+            let points = connection_curve_points(from, to, lane * zoom);
+            Some((index, polyline_distance(pointer, &points)))
+        })
+        .min_by(|left, right| left.1.total_cmp(&right.1))
+        .filter(|(_, distance)| *distance < maximum_distance)
+        .map(|(index, _)| index)
 }
 
 fn segment_distance(point: egui::Pos2, start: egui::Pos2, end: egui::Pos2) -> f32 {
@@ -43116,6 +43134,38 @@ mod tests {
                     "fixture link indices {left_index} and {right_index} render the same route"
                 );
             }
+        }
+
+        let mut entity_positions: std::collections::HashMap<Uuid, egui::Pos2> = case
+            .entities
+            .iter()
+            .enumerate()
+            .map(|(index, entity)| (entity.id, egui::pos2(-500.0 - index as f32 * 50.0, -500.0)))
+            .collect();
+        entity_positions.insert(first_link.from, egui::pos2(100.0, 100.0));
+        entity_positions.insert(first_link.to, egui::pos2(300.0, 200.0));
+        for (index, link) in case.links.iter().enumerate().filter(|(_, link)| {
+            (link.from == first_link.from && link.to == first_link.to)
+                || (link.from == first_link.to && link.to == first_link.from)
+        }) {
+            let points = super::connection_curve_points(
+                entity_positions[&link.from],
+                entity_positions[&link.to],
+                lanes[index],
+            );
+            let pointer = points[points.len() / 2];
+            assert_eq!(
+                super::nearest_link_index_at_position(
+                    &case.links,
+                    &entity_positions,
+                    &lanes,
+                    pointer,
+                    1.0,
+                    22.0,
+                ),
+                Some(index),
+                "pointer on fixture link {index} selects its exact relationship record"
+            );
         }
     }
 
