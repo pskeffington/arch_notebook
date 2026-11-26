@@ -15,7 +15,9 @@ The saved SQL job is disabled. `--validate-enabled-jobs` therefore returned exit
 
 The CLI exported the saved snapshot comparison to a disposable CSV under `/tmp`. Export returned exit 0 and contained three `DATE CHANGED` records, with no other change categories. The script summarized counts only; it did not print names, addresses, subjects, message bodies, or row-level records.
 
-SHA-256 values for the case and SQLite file matched before and after query validation, history listing, and comparison export. The export remained under `/tmp`; no source or case write was requested.
+The latest saved run was then replay-validated with `--validate-run <case> <run-id> --json`. It returned exit 0, `status=PASS`, `saved=false`, 6,173 captured relationships, zero skipped rows, and zero additions, removals, or changes against the saved baseline. The CLI reported a 332 ms run duration for this host and query; this is one observation, not a performance target.
+
+SHA-256 values for the case and SQLite file matched before and after query validation, history listing, comparison export, and saved-run replay. The export remained under `/tmp`; no source or case write was requested.
 
 ## Commands and evidence
 
@@ -25,6 +27,7 @@ SHA-256 values for the case and SQLite file matched before and after query valid
 | `arch-notebook --list-runs <case> --json` | PASS; exit 0, two runs with status `PASS` |
 | `arch-notebook --list-batches <case> --json` | PASS; exit 0, two batches with status `COMPLETE` |
 | `arch-notebook --export-sql-comparison <case> <baseline-id> <current-id> /tmp/.../saved-comparison.csv --json` | PASS; exit 0, three rows, all `DATE CHANGED` |
+| `arch-notebook --validate-run <case> <latest-run-id> --json` | PASS; exit 0, 6,173 rows, zero skipped, zero deltas, `saved=false` |
 | Case and SQLite SHA-256 before/after | PASS; both unchanged |
 
 ## Limits and next action
