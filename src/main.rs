@@ -41406,7 +41406,8 @@ fn main() -> eframe::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        CaseFile, ConnectionFact, ConnectionSnapshot, Entity, EntityRepresentation, Uuid,
+        App, AutomationJob, AutomationParameterOverrides, AutomationWorkerResult, CaseFile,
+        ConnectionFact, ConnectionSnapshot, Entity, EntityRepresentation, Uuid,
         canonical_connection, compare_snapshots, entity_type_layout_positions,
         grid_layout_dimensions,
     };
@@ -41449,6 +41450,141 @@ mod tests {
             "Automation",
             "sql jobs scheduled captures"
         ));
+    }
+
+    #[test]
+    fn cancelling_desktop_sql_automation_saves_run_and_keeps_prior_checkpoint() {
+        let root =
+            std::env::temp_dir().join(format!("arch-notebook-cancel-test-{}", Uuid::new_v4()));
+        std::fs::create_dir(&root).expect("create isolated cancellation fixture directory");
+        let database_path = root.join("source.sqlite");
+        let database = rusqlite::Connection::open(&database_path)
+            .expect("create disposable read-only SQL source");
+        drop(database);
+        let source_hash_before = std::fs::read(&database_path).expect("read source bytes");
+
+        let mut case: CaseFile =
+            serde_json::from_str(include_str!("../fixtures/chart/correctness.case.json"))
+                .expect("correctness fixture is a valid case");
+        let make_job = |name: &str, series: &str, query: &str| AutomationJob {
+            id: Uuid::new_v4(),
+            chart_id: None,
+            name: name.into(),
+            database_path: database_path.to_string_lossy().into_owned(),
+            series: series.into(),
+            query: query.into(),
+            parameters: Vec::new(),
+            query_timeout_minutes: 15,
+            enabled: true,
+            minimum_connections: 1,
+            minimum_confidence: None,
+            maximum_connections: None,
+            maximum_regressions: None,
+            maximum_added_connections: None,
+            maximum_connection_property_changes: None,
+            maximum_entity_property_changes: None,
+            maximum_skipped_rows: Some(0),
+            require_unchanged_schema: false,
+        };
+        let successful_job = make_job(
+            "Synthetic checkpoint",
+            "cancellation-checkpoint",
+            "SELECT 'Synthetic A' AS source, 'Synthetic B' AS target, 'TEST LINK' AS relationship",
+        );
+        let cancellable_job = make_job(
+            "Synthetic cancellable query",
+            "cancellation-active-query",
+            "WITH RECURSIVE counter(value) AS (SELECT 1 UNION ALL SELECT value + 1 FROM counter WHERE value < 500000000) SELECT 'Synthetic Source' AS source, 'Synthetic Target' AS target, 'TEST LINK' AS relationship FROM counter WHERE value = (SELECT MAX(value) FROM counter)",
+        );
+        let job_ids = vec![successful_job.id, cancellable_job.id];
+        case.automation_jobs = vec![successful_job, cancellable_job];
+
+        let case_path = root.join("cancellation.case.json");
+        let mut app = App::automation_context(case, &case_path.to_string_lossy());
+        let saved_json = app
+            .current_case_json()
+            .expect("serialize the cancellation case");
+        std::fs::write(&case_path, &saved_json).expect("save the fixture case before automation");
+        app.saved_case_json = Some(saved_json.clone());
+        app.disk_case_json = Some(saved_json);
+        app.start_automation_work(
+            job_ids,
+            None,
+            true,
+            AutomationParameterOverrides {
+                global: Vec::new(),
+                scoped: Vec::new(),
+            },
+            None,
+        );
+
+        let progress = app
+            .automation_progress
+            .as_ref()
+            .cloned()
+            .expect("automation worker publishes progress");
+        let started = std::time::Instant::now();
+        loop {
+            let message = progress.lock().expect("read automation progress").clone();
+            if message.starts_with("Running job 2 of 2") {
+                break;
+            }
+            assert!(
+                started.elapsed() < std::time::Duration::from_secs(10),
+                "second SQL job did not start; last progress: {message}"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        app.automation_cancel
+            .store(true, std::sync::atomic::Ordering::Release);
+
+        let worker = app
+            .automation_worker
+            .take()
+            .expect("automation worker channel is available");
+        let outcome = worker
+            .recv_timeout(std::time::Duration::from_secs(15))
+            .expect("cancelled SQL worker should finish promptly")
+            .expect("cancelled SQL worker should return its persisted recovery state");
+        let (completed_case, status) = match outcome {
+            AutomationWorkerResult::SavedCase { case, status, .. } => (case, status),
+            AutomationWorkerResult::FailedCase { error, .. } => {
+                panic!("automation worker failed before saving cancellation: {error}")
+            }
+            AutomationWorkerResult::UnsavedCase { status, .. }
+            | AutomationWorkerResult::Validation { status, .. } => {
+                panic!("expected saved cancellation result, got: {status}")
+            }
+        };
+        assert!(status.contains("AUTOMATION CANCELLED"), "{status}");
+        assert_eq!(completed_case.automation_runs.len(), 2);
+        assert!(completed_case.automation_runs[0].success);
+        assert!(!completed_case.automation_runs[1].success);
+        assert!(
+            completed_case.automation_runs[1]
+                .message
+                .to_ascii_lowercase()
+                .contains("sql query cancelled by analyst")
+        );
+        assert_eq!(completed_case.snapshots.len(), 1);
+        assert_eq!(completed_case.snapshots[0].connections.len(), 1);
+        assert_eq!(completed_case.automation_batches.len(), 1);
+        assert_eq!(completed_case.automation_batches[0].completed_jobs.len(), 1);
+        assert_eq!(
+            completed_case.automation_batches[0].completed_jobs[0].job_id,
+            completed_case.automation_runs[0].job_id
+        );
+        let persisted_case: CaseFile = serde_json::from_str(
+            &std::fs::read_to_string(&case_path).expect("cancelled case checkpoint exists"),
+        )
+        .expect("cancelled case checkpoint is valid JSON");
+        assert_eq!(persisted_case.automation_runs.len(), 2);
+        assert_eq!(
+            std::fs::read(&database_path).expect("read source after capture"),
+            source_hash_before
+        );
+        std::fs::remove_dir_all(root).expect("remove only this disposable fixture directory");
     }
 
     #[test]
