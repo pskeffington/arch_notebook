@@ -1,5 +1,23 @@
 # Local build acceptance record
 
+## Synchronized-branch SQL automation recheck — 2026-11-26
+
+**Task / owner:** Continue the Rust notebook build with emphasis on SQL automation, acceptance evidence, and synchronized progress; implementation session.
+**Repository / branch:** `/home/sysadmin/github/arch_notebook` / `codex/ui-00-chart-baseline`.
+**Product source commit:** `8c08da9285c6104d35a66386676b244d44f1270e`; evidence baseline `991c4764715c71e682af784fbdbf9e2db3e833c7`.
+**Release binary:** `/tmp/arch-notebook-target/release/arch-notebook`, SHA-256 `1ef36e782956eaf1196a06d074ad8edf02591b45095d9acb805879b000cfe941`.
+
+| Gate | Result | Evidence |
+| --- | --- | --- |
+| SQL capture, comparison, failure retention, reviewed schema adaptation, batch resume, CSV/TSV exchange | PASS | Current release automation harness passed; source SQLite remained unchanged during app captures and preflight. |
+| Joined-header SQL scale | PASS | Fictional 7,121-row joined workload; two snapshots, 1,500 entities, composite identities, repeated pairs, zero skipped rows. |
+| Linux systemd schedule generation and invocation | PASS, stubbed | Five cadences and generated service invocation passed using a temporary `systemctl` stub. |
+| macOS LaunchAgent generation and runner simulation | PASS, stubbed on Linux | Five cadences, rollback, rolling-window output, and unchanged SQLite source passed using a temporary `launchctl` stub. |
+| Native Automation UI | BLOCKED | App exits with Winit `Connection(NoCompositor)` despite compositor globals being visible to `wayland-info`; X11 is inaccessible. |
+| Live scheduler dispatch and IBM application/schema validation | NOT TESTED | No live timer/LaunchAgent run or IBM XSD/application was used. |
+
+Exact commands, fixture scope, and report hashes are in [SQL-AUTO-05](evidence/sql-automation/SQL-AUTO-05-current-branch-linux.md). This recheck updates the earlier SQL baseline for the synchronized release; it does not claim native UI, live scheduling, production-schema, or IBM interoperability acceptance.
+
 ## Chart viewport navigation — 2026-11-26
 
 **Task / owner:** Improve analyst recovery from an over-zoomed chart; implementation session.
