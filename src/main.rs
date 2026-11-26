@@ -1,5 +1,6 @@
 mod community;
 mod layout;
+mod proximity;
 
 use eframe::egui;
 use quick_xml::{
@@ -2307,7 +2308,8 @@ struct App {
     community_analysis: Option<std::sync::Arc<CommunityAnalysis>>,
     selected_community_interaction: Option<(usize, usize)>,
     network_bridges: Option<std::sync::Arc<Vec<(Uuid, usize)>>>,
-    network_geodesic_layers: Option<(Uuid, Vec<Vec<Uuid>>)>,
+    network_proximity_analysis: Option<(Uuid, std::sync::Arc<proximity::Analysis>)>,
+    selected_proximity_interaction: Option<(usize, usize)>,
     analysis_method_card: Option<(Uuid, NetworkAnalysisMethodCard)>,
     chart_navigator_dragging: bool,
     new_link_from: Option<Uuid>,
@@ -2956,7 +2958,8 @@ impl Default for App {
             community_analysis: None,
             selected_community_interaction: None,
             network_bridges: None,
-            network_geodesic_layers: None,
+            network_proximity_analysis: None,
+            selected_proximity_interaction: None,
             analysis_method_card: None,
             chart_navigator_dragging: false,
             new_link_from: None,
@@ -3965,7 +3968,8 @@ impl App {
         self.community_analysis = None;
         self.selected_community_interaction = None;
         self.network_bridges = None;
-        self.network_geodesic_layers = None;
+        self.network_proximity_analysis = None;
+        self.selected_proximity_interaction = None;
         self.analysis_method_card = None;
         self.chart_focus_group = None;
         self.clear_path_result();
@@ -4007,7 +4011,8 @@ impl App {
             community_analysis: None,
             selected_community_interaction: None,
             network_bridges: None,
-            network_geodesic_layers: None,
+            network_proximity_analysis: None,
+            selected_proximity_interaction: None,
             analysis_method_card: None,
             chart_navigator_dragging: false,
             new_link_from: None,
@@ -4490,7 +4495,8 @@ impl App {
                 self.network_groups = None;
                 self.community_analysis = None;
                 self.selected_community_interaction = None;
-                self.network_geodesic_layers = None;
+                self.network_proximity_analysis = None;
+                self.selected_proximity_interaction = None;
                 self.analysis_method_card = None;
                 self.case_path = requested_path.clone();
                 self.case_path_input = requested_path;
@@ -12582,7 +12588,8 @@ impl App {
         self.network_groups = None;
         self.community_analysis = None;
         self.selected_community_interaction = None;
-        self.network_geodesic_layers = None;
+        self.network_proximity_analysis = None;
+        self.selected_proximity_interaction = None;
         self.analysis_method_card = None;
         self.chart_focus_group = None;
         self.sql_snapshot_source = None;
@@ -14283,69 +14290,6 @@ fn detected_community_analysis(case: &CaseFile) -> CommunityAnalysis {
         groups,
         interactions,
     }
-}
-
-fn network_geodesic_layers(case: &CaseFile, origin: Uuid) -> Vec<Vec<Uuid>> {
-    let names: HashMap<Uuid, String> = case
-        .entities
-        .iter()
-        .map(|entity| (entity.id, entity.name.to_lowercase()))
-        .collect();
-    if !names.contains_key(&origin) {
-        return Vec::new();
-    }
-
-    let mut adjacency: HashMap<Uuid, Vec<Uuid>> = case
-        .entities
-        .iter()
-        .map(|entity| (entity.id, Vec::new()))
-        .collect();
-    for link in &case.links {
-        if link.from == link.to
-            || !adjacency.contains_key(&link.from)
-            || !adjacency.contains_key(&link.to)
-        {
-            continue;
-        }
-        adjacency.entry(link.from).or_default().push(link.to);
-        adjacency.entry(link.to).or_default().push(link.from);
-    }
-    for neighbors in adjacency.values_mut() {
-        neighbors.sort_unstable();
-        neighbors.dedup();
-    }
-
-    let mut distances = HashMap::from([(origin, 0usize)]);
-    let mut queue = VecDeque::from([origin]);
-    let mut max_distance = 0;
-    while let Some(current) = queue.pop_front() {
-        let distance = distances[&current];
-        for neighbor in adjacency.get(&current).into_iter().flatten() {
-            if distances.contains_key(neighbor) {
-                continue;
-            }
-            let next_distance = distance + 1;
-            distances.insert(*neighbor, next_distance);
-            max_distance = max_distance.max(next_distance);
-            queue.push_back(*neighbor);
-        }
-    }
-
-    let mut layers = vec![Vec::new(); max_distance];
-    for (entity, distance) in distances {
-        if distance > 0 {
-            layers[distance - 1].push(entity);
-        }
-    }
-    for layer in &mut layers {
-        layer.sort_by(|first, second| {
-            names
-                .get(first)
-                .cmp(&names.get(second))
-                .then_with(|| first.cmp(second))
-        });
-    }
-    layers
 }
 
 fn network_analysis_method_card(case: &CaseFile) -> NetworkAnalysisMethodCard {
@@ -18525,6 +18469,7 @@ impl eframe::App for App {
         let network_groups = self.network_groups.clone();
         let community_analysis = self.community_analysis.clone();
         let network_bridges = self.network_bridges.clone();
+        let network_proximity_analysis = self.network_proximity_analysis.clone();
         let analysis_method_card = self.analysis_method_card.clone();
         let bg = egui::Color32::from_rgb(12, 19, 27);
         let panel = egui::Color32::from_rgb(18, 28, 39);
@@ -25509,13 +25454,21 @@ impl eframe::App for App {
                                 .unwrap_or("(missing entity)");
                             ui.label(egui::RichText::new(format!("Current chart selection · {origin_name}")).small().color(muted));
                             if ui.button("Measure hop layers").clicked() {
-                                self.network_geodesic_layers =
-                                    Some((origin, network_geodesic_layers(&self.case, origin)));
+                                let analysis = proximity::analyze(
+                                    self.case.entities.iter().map(|entity| (entity.id, entity.name.as_str())),
+                                    self.case.links.iter().map(|link| (link.from, link.to, link.directed)),
+                                    origin,
+                                );
+                                self.network_proximity_analysis =
+                                    Some((origin, std::sync::Arc::new(analysis)));
+                                self.selected_proximity_interaction = None;
                             }
                         } else {
                             ui.label(egui::RichText::new("Select an entity on the chart to choose a center.").small().color(muted));
                         }
-                        if let Some((origin, layers)) = self.network_geodesic_layers.clone() {
+                        if let Some((origin, analysis)) = &network_proximity_analysis {
+                            let origin = *origin;
+                            let layers = &analysis.layers;
                             if let Some(center) = self.case.entities.iter().find(|entity| entity.id == origin) {
                                 let reached_count: usize = layers.iter().map(Vec::len).sum();
                                 ui.label(egui::RichText::new(format!(
@@ -25556,6 +25509,148 @@ impl eframe::App for App {
                                         names
                                     }).small().color(muted));
                                 }
+                            }
+                        }
+                        if let Some((analysis_origin, analysis)) = &network_proximity_analysis
+                            && Some(*analysis_origin) == geodesic_origin
+                        {
+                            ui.add_space(8.0);
+                            ui.label(egui::RichText::new("CONTACT GROUPS BY HOP").size(9.0).strong().color(cyan));
+                            ui.label(egui::RichText::new(format!(
+                                "{} within-layer contact groups · {} cross-group records · {} reachable · {} outside the origin component",
+                                analysis.groups.len(),
+                                analysis.interactions.iter().map(|item| item.relationship_record_count).sum::<usize>(),
+                                analysis.reachable_entity_count,
+                                analysis.unreachable_entity_count,
+                            )).small().color(muted));
+                            ui.label(egui::RichText::new(
+                                "Entities at the same hop are grouped when they contact within that layer. Group links retain record counts and direction; parallel records remain individually inspectable.",
+                            ).small().color(muted));
+                            egui::ScrollArea::vertical()
+                                .id_salt("proximity_contact_groups")
+                                .max_height(150.0)
+                                .show_rows(ui, 32.0, analysis.groups.len(), |ui, rows| {
+                                    for index in rows {
+                                        let group = &analysis.groups[index];
+                                        let sample_names = group.members.iter().take(3)
+                                            .filter_map(|id| self.case.entities.iter().find(|entity| entity.id == *id).map(|entity| entity.name.as_str()))
+                                            .collect::<Vec<_>>().join(" · ");
+                                        ui.horizontal(|ui| {
+                                            ui.label(format!(
+                                                "Group {:02} · hop {} · {} entities · {} internal records",
+                                                index + 1, group.hop_distance, group.members.len(), group.internal_record_count,
+                                            )).on_hover_text(sample_names);
+                                            if ui.small_button("Show").clicked() {
+                                                self.chart_fit_entities = Some(group.members.clone());
+                                                self.chart_fit_path = None;
+                                                self.chart_focus_group = Some(group.members.iter().copied().collect());
+                                                self.chart_focus = None;
+                                                self.chart_focus_link = None;
+                                                self.clear_path_result();
+                                                self.sql_source_focus = None;
+                                                self.selected = group.members.first().copied();
+                                                self.selected_link = None;
+                                                self.page = WorkspacePage::Chart;
+                                                self.show_timeline = false;
+                                            }
+                                        });
+                                    }
+                                });
+                            if !analysis.interactions.is_empty() {
+                                ui.label(egui::RichText::new("GROUP-TO-GROUP CONTACTS · select a row to inspect exact records").size(9.0).strong().color(cyan));
+                                egui::ScrollArea::vertical()
+                                    .id_salt("proximity_group_interactions")
+                                    .max_height(170.0)
+                                    .show_rows(ui, 30.0, analysis.interactions.len(), |ui, rows| {
+                                        for row in rows {
+                                            let interaction = &analysis.interactions[row];
+                                            let key = (interaction.first_group, interaction.second_group);
+                                            let label = format!(
+                                                "G{} ↔ G{} · {} records / {} endpoint pairs · →{} ←{} ↔{}",
+                                                interaction.first_group + 1,
+                                                interaction.second_group + 1,
+                                                interaction.relationship_record_count,
+                                                interaction.distinct_endpoint_pair_count,
+                                                interaction.first_to_second_record_count,
+                                                interaction.second_to_first_record_count,
+                                                interaction.undirected_record_count,
+                                            );
+                                            if ui
+                                                .selectable_label(
+                                                    self.selected_proximity_interaction == Some(key),
+                                                    label,
+                                                )
+                                                .clicked()
+                                            {
+                                                self.selected_proximity_interaction = Some(key);
+                                            }
+                                        }
+                                    });
+                                if let Some(key) = self.selected_proximity_interaction
+                                    && let Some(interaction) = analysis.interactions.iter().find(|item| (item.first_group, item.second_group) == key)
+                                {
+                                    let first = &analysis.groups[interaction.first_group];
+                                    let second = &analysis.groups[interaction.second_group];
+                                    if ui.small_button("Show contacting groups").clicked() {
+                                        let mut members = first.members.clone();
+                                        members.extend(second.members.iter().copied());
+                                        members.sort_unstable();
+                                        members.dedup();
+                                        self.chart_fit_entities = Some(members.clone());
+                                        self.chart_fit_path = None;
+                                        self.chart_focus_group = Some(members.into_iter().collect());
+                                        self.chart_focus = None;
+                                        self.chart_focus_link = None;
+                                        self.clear_path_result();
+                                        self.sql_source_focus = None;
+                                        self.selected = first.members.first().copied();
+                                        self.selected_link = None;
+                                        self.page = WorkspacePage::Chart;
+                                        self.show_timeline = false;
+                                    }
+                                    ui.label(egui::RichText::new(format!(
+                                        "Records between Group {} and Group {} · {} exact records",
+                                        key.0 + 1,
+                                        key.1 + 1,
+                                        interaction.link_indices.len(),
+                                    )).small().color(muted));
+                                    egui::ScrollArea::vertical()
+                                        .id_salt("proximity_interaction_records")
+                                        .max_height(120.0)
+                                        .show_rows(ui, 24.0, interaction.link_indices.len(), |ui, record_rows| {
+                                            for record_row in record_rows {
+                                                let Some(link_index) = interaction.link_indices.get(record_row).copied() else { continue };
+                                                let Some((from, to, directed, relationship)) = self.case.links.get(link_index).map(|link| (link.from, link.to, link.directed, link.label.clone())) else { continue };
+                                                let from_name = self.case.entities.iter().find(|entity| entity.id == from).map(|entity| entity.name.as_str()).unwrap_or("(missing entity)");
+                                                let to_name = self.case.entities.iter().find(|entity| entity.id == to).map(|entity| entity.name.as_str()).unwrap_or("(missing entity)");
+                                                let label = format!("Inspect · {from_name} {} {to_name} · {relationship}", if directed { "→" } else { "↔" });
+                                                if ui.small_button(label).clicked() {
+                                                    self.focus_link_from_chart_search(link_index);
+                                                    self.chart_fit_entities = Some(vec![from, to]);
+                                                    self.page = WorkspacePage::Chart;
+                                                    self.show_timeline = false;
+                                                }
+                                            }
+                                        });
+                                }
+                            }
+                            ui.label(egui::RichText::new("CROSS-GROUP PROXIES").size(9.0).strong().color(cyan));
+                            ui.label(egui::RichText::new(
+                                "Ranks entities whose direct contacts reach at least two other proximity groups. This is a structural contact score, not a claim of intent or influence.",
+                            ).small().color(muted));
+                            if analysis.proxies.is_empty() {
+                                ui.label(egui::RichText::new("No entity directly contacts multiple proximity groups from this center.").small().color(muted));
+                            }
+                            for proxy in analysis.proxies.iter().take(6) {
+                                let Some(entity_name) = self.case.entities.iter().find(|entity| entity.id == proxy.entity_id).map(|entity| entity.name.clone()) else { continue };
+                                ui.horizontal(|ui| {
+                                    if ui.small_button(format!("{} · {} groups", entity_name, proxy.distinct_group_contacts)).clicked() {
+                                        self.focus_entity_from_chart_search(proxy.entity_id);
+                                        self.page = WorkspacePage::Chart;
+                                        self.show_timeline = false;
+                                    }
+                                    ui.label(format!("{} distinct entities · {} records", proxy.distinct_counterpart_entities, proxy.relationship_record_count));
+                                });
                             }
                         }
                         ui.add_space(16.0);
@@ -44627,9 +44722,23 @@ mod tests {
             link(entities[0].id, entities[0].id, true),
             link(entities[3].id, entities[4].id, true),
         ];
-        let layers = super::network_geodesic_layers(&case, entities[0].id);
-        assert_eq!(layers, vec![vec![entities[1].id], vec![entities[2].id]]);
-        assert!(super::network_geodesic_layers(&case, Uuid::new_v4()).is_empty());
+        let analyze = |origin| {
+            super::proximity::analyze(
+                case.entities
+                    .iter()
+                    .map(|entity| (entity.id, entity.name.as_str())),
+                case.links
+                    .iter()
+                    .map(|link| (link.from, link.to, link.directed)),
+                origin,
+            )
+        };
+        let analysis = analyze(entities[0].id);
+        assert_eq!(
+            analysis.layers,
+            vec![vec![entities[1].id], vec![entities[2].id]]
+        );
+        assert!(analyze(Uuid::new_v4()).layers.is_empty());
     }
 
     #[test]
@@ -44646,11 +44755,18 @@ mod tests {
             groups: vec![vec![Uuid::new_v4()]],
             interactions: Vec::new(),
         }));
+        app.network_proximity_analysis = Some((
+            app.case.active_chart_id,
+            std::sync::Arc::new(super::proximity::Analysis::default()),
+        ));
+        app.selected_proximity_interaction = Some((0, 1));
 
         app.invalidate_network_groups();
 
         assert!(app.analysis_method_card.is_none());
         assert!(app.community_analysis.is_none());
+        assert!(app.network_proximity_analysis.is_none());
+        assert!(app.selected_proximity_interaction.is_none());
     }
 
     #[test]
