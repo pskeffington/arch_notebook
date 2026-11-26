@@ -134,6 +134,26 @@ See [UI-ENTITY-TYPE-LAYOUT-02 evidence](evidence/vector-ui/UI-ENTITY-TYPE-LAYOUT
 
 Exact commands, report hashes, window boundaries, and work directories are recorded in [SQL-SCHED-05](evidence/sql-automation/SQL-SCHED-05-current-branch-window-linux.md). These harnesses use synthetic SQLite data and make no claims about live scheduler dispatch.
 
+## Feature-branch increment: geodesic navigation and responsive ANX parsing
+
+**Task / owner:** Improve analyst chart navigation and exchange-file ingestion; implementation session.
+**Repository / branch:** `/home/sysadmin/github/arch_notebook` / `codex/ui-00-chart-baseline`.
+**Baseline:** `dff7acfb5a5ffa9c79b692e0e32841821c4f64c8`.
+**Source commit:** `b637d965ae5ed4aeea9ec4300860523dfb95b71b`.
+**Changed paths:** `src/main.rs`, `README.md`, `docs/analyst-notebook-parity.md`, `docs/notebook-workflows.md`, and `docs/research/social-network-graphing-and-delivery-review.md`.
+**Scope:** Add defined unweighted, undirected shortest-hop layers from an entity; move desktop ANX XML parsing to a worker while preserving synchronous CLI/automation behavior and guarding against chart-switch races.
+
+| Gate | Result | Evidence and limits |
+| --- | --- | --- |
+| Formatting, diff, and Rust unit tests | PASS | Formatting and diff checks exited 0; offline tests: 22 passed, 0 failed, 0 ignored. |
+| Offline integration check and release build | PASS | `cargo check --locked --offline` and optimized release build exited 0. |
+| ANX internal round-trip and rejection behavior | PASS, internal scope | 8 entities, 8 relationships, and one label retained; malformed shape and DTD external entity rejected without case mutation. IBM XSD/application validation remains NOT RUN. |
+| Current-source SQL scheduler harnesses | PASS, harness-scoped | Linux generated-service and macOS runner simulation selected the expected rolling-month row; SQLite source unchanged in macOS simulation. Host dispatch remains unverified. |
+| User install and desktop graphics synchronization | PASS, scoped | Installed binary equals the release artifact; desktop launcher validation passed; installed and repository icon hashes match. |
+| Native UI interaction/visual acceptance | BLOCKED | Wayland display access is denied in this session; do not claim layout or import-dialog visual acceptance. |
+
+Exact commands, artifact hashes, report hashes, and remaining interoperability/platform gates are in [UI-INGEST-NAV-01](evidence/vector-ui/UI-INGEST-NAV-01-linux.md). The source commit is pushed on this non-main branch.
+
 ## Feature-branch increment: reusable chart templates
 
 **Task / owner:** Continue Analyst's Notebook parity, especially adaptability; orchestrator-owned implementation.

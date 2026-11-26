@@ -67,6 +67,8 @@ The current source also has a release build and limited Wayland runs of the fict
 
 Entity-type chart layout now distributes type clusters across an aspect-aware grid and centers sparse clusters within their cells. The Rust regression and offline release build pass, and the installed Linux launcher matches the release binary; native chart interaction remains unverified because this session cannot access the Wayland compositor.
 
+The Analysis sidebar also measures unweighted geodesic hop layers from a selected entity and displays its direction/weight assumptions. ANX XML parsing in the desktop app runs in the background, while CLI import remains synchronous. The combined candidate passes Rust tests, release build, ANX round-trip/security checks, and current Linux/macOS-runner SQL scheduler harnesses; native GUI interaction and IBM schema/application validation remain open. See [UI-INGEST-NAV-01 evidence](docs/evidence/vector-ui/UI-INGEST-NAV-01-linux.md).
+
 ## Start here
 
 1. [Install Arch Notebook](docs/build-and-deploy.md) or build from source.
