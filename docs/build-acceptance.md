@@ -1,6 +1,24 @@
 # Local build acceptance record
 
-## Current SQL automation acceptance — 2026-11-26
+## Current-release SQL automation recheck — 2026-11-26
+
+**Task / owner:** Revalidate SQL capture, recovery, scale and scheduler runners on the pushed route-geometry candidate; implementation session.
+**Repository / branch:** `/home/sysadmin/github/arch_notebook` / `codex/ui-00-chart-baseline`.
+**Product source commit:** `fae574dc74af78ae19a950641ba2b14e652901c2` (branch HEAD `e51c83a` contains documentation updates only).
+**Release binary:** `/tmp/arch-notebook-target/release/arch-notebook`, SHA-256 `63d008c9d5431390663da1f58f803534908e3e5d4904d67054895b3391093088`.
+
+| Gate | Result | Evidence and limits |
+| --- | --- | --- |
+| SQL automation, diagnostics, recovery and chart interchange | PASS | Preflight, immutable capture/comparison, one-run override isolation, schema drift rejection, failed-run retention, reviewed schema repair, resumable batches, mismatch rejection, and CSV/TSV round-trip. |
+| Joined-header scale ingestion | PASS | 7,121 records, 1,500 entities, 7,121 composite IDs, 4,121 repeated endpoint pairs, two snapshots, nullable properties, zero skipped rows. |
+| Linux scheduler generation and invocation | PASS, stubbed | Five cadences and generated service invocation passed; `systemctl` was a temporary stub. Live timer firing is not tested. |
+| macOS LaunchAgent generation and runner simulation | PASS, stubbed | Five cadences and generated runner passed; `launchctl` was a temporary stub and the real macOS host was untouched. |
+| Candidate GitHub Actions run | PENDING | Actions API returned zero runs for product source commit `fae574d`. |
+| Native Automation UI and IBM XSD/application compatibility | BLOCKED / not tested | No native pointer-driven review or IBM application/schema validation was performed. |
+
+Exact commands, fixture and binary hashes, report digests, and scope limits are in [SQL-AUTO-04](evidence/sql-automation/SQL-AUTO-04-current-release-linux.md). All harness data is fictional; the joined-header fixture contains no message bodies. Scheduler stubs establish generated runner behavior, not live host dispatch.
+
+## Previous SQL automation acceptance — 2026-11-26
 
 **Task / owner:** Resume Arch Notebook SQL ingestion and automation acceptance; implementation session.
 **Repository / branch:** `/home/sysadmin/github/arch_notebook` / `codex/ui-00-chart-baseline`.
@@ -15,7 +33,7 @@
 | macOS LaunchAgent runner | PASS, simulation scoped | Five cadences and case isolation; runner simulation generated the expected capture and CSV. `launchctl` was stubbed on Linux; macOS dispatch is unverified. |
 | Native Automation UI, IBM XSD/application compatibility | BLOCKED | Pointer-driven Automation UI review and IBM validation have not been performed. |
 
-Exact commands, exit status, report hashes, and fixture caveats are recorded in [SQL-AUTO-02](evidence/sql-automation/SQL-AUTO-02-current-release-linux.md). No tests or builds were run for this documentation update. The pre-existing `src/main.rs` worktree diff was left unstaged and is outside this evidence change.
+Historical commands, exit status, report hashes, and fixture caveats are recorded in [SQL-AUTO-02](evidence/sql-automation/SQL-AUTO-02-current-release-linux.md). This older acceptance record does not describe the current release binary above.
 
 ## Linux analyst packet acceptance — 2026-11-26
 
