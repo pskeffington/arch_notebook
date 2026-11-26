@@ -118,6 +118,22 @@ No build or test command was run for this documentation-only reconciliation. Nex
 
 See [UI-ENTITY-TYPE-LAYOUT-02 evidence](evidence/vector-ui/UI-ENTITY-TYPE-LAYOUT-02-linux.md) for exact commands, hashes, and limitations. The change is pushed on the feature branch; proceed with native UI-00 interaction review when a compositor session is available.
 
+## SQL acceptance: current-branch scheduler recheck
+
+**Task / owner:** Verify rolling SQL window scheduling against the current application release; implementation session.
+**Repository / branch:** `/home/sysadmin/github/arch_notebook` / `codex/ui-00-chart-baseline`.
+**Product source:** `a09b49c6faddbd0401c9ac59b191e8151a830e70`; current branch head at recheck: `cb0ff938ae1328b3f9a9859b19edae874f82138c`.
+**Scope:** Execute the Linux generated service command and macOS packaged runner against isolated synthetic databases using the current release binary.
+
+| Gate | Result | Evidence and limits |
+| --- | --- | --- |
+| Linux generated-service SQL scheduling | PASS, harness-scoped | Five cadence installers passed; generated service saved one scheduled capture and one-row CSV; prior-UTC-month start/end behavior passed. `systemctl` was stubbed. |
+| macOS automation runner and rollback lifecycle | PASS, harness-scoped | Five LaunchAgent schedules, preflight, rollback and removal passed under a temporary `launchctl` stub on Linux. Live `launchd` was not run. |
+| Source DB immutability | PASS | macOS harness confirmed unchanged source SHA-256 `7c62cccec9459451a0c00da3cbb35265be7bf36f7ddb81c6bf18527c0d1a3071`. |
+| Live host scheduler dispatch | BLOCKED | systemd user manager access and a native macOS host are unavailable in this run. |
+
+Exact commands, report hashes, window boundaries, and work directories are recorded in [SQL-SCHED-05](evidence/sql-automation/SQL-SCHED-05-current-branch-window-linux.md). These harnesses use synthetic SQLite data and make no claims about live scheduler dispatch.
+
 ## Feature-branch increment: reusable chart templates
 
 **Task / owner:** Continue Analyst's Notebook parity, especially adaptability; orchestrator-owned implementation.
