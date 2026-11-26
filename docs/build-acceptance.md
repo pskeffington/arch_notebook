@@ -163,6 +163,19 @@ Exact commands, exit codes, paths, and report digests are in [SQL-AUTO-03](evide
 
 See [UI-00 fixture reproduction evidence](evidence/vector-ui/UI-00-fixture-reproduction-linux.md) for exact commands, hashes, and the corrected local summary assertion.
 
+## SQL scheduler acceptance: current-release installer and runner recheck
+
+**Task / owner:** Verify isolated Linux systemd and macOS LaunchAgent installation/runner paths with the current release; implementation session.
+**Product source:** `750b6cb9f9214089678cc3341dae5ecd7c65005b`; release binary SHA-256 `f8c14cabd73164b27218068685d75c62ecd2e9d854287299b9aca534ec373032`.
+
+| Gate | Result | Evidence and limits |
+| --- | --- | --- |
+| Linux unit installer / generated-service invocation | PASS, harness-scoped | Five cadences, failed-preflight rejection, special paths, case-specific removal, scheduled capture and CSV export passed under temporary `systemctl` stubs. |
+| macOS LaunchAgent installer / generated runner | PASS, Linux harness | Five cadences, failed install/replacement rollback, special paths, scheduled capture and CSV export passed under temporary `launchctl` stubs. |
+| Live host dispatch | NOT VERIFIED | No live systemd timer or native macOS launchd dispatch occurred. |
+
+See [SQL-SCHED-06](evidence/sql-automation/SQL-SCHED-06-current-branch-linux.md) for commands, exact report hashes, and scope. These installer/runner harness results are separate from live scheduler acceptance.
+
 ## Feature-branch increment: aspect-aware entity type layout
 
 **Task / owner:** Improve analyst-facing vector organization; implementation session.

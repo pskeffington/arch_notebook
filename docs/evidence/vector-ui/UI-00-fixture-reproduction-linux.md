@@ -16,6 +16,7 @@
 | Dense cap at 10,000 nodes | **PASS** | Two deterministic outputs each contained 10,000 entities and exactly 100,000 links, equal to the manifest cap. The files are in the same `/tmp` work directory. |
 | Summary and artifact record | **PASS** | 12 JSON summary lines retained at `/tmp/arch-notebook-ui00-fixtures-20261126-01/generator-summary.jsonl`; SHA-256 `55cbb2a1a00fec0d84fa47ba0c466a3b8bada41f1b803ba4b82891826685f247`. |
 | Native baseline action sequence and timings | **BLOCKED** | The current Wayland and X11 endpoints reject display access; this generator check supplies no rendering or interaction measurements. See [current-branch UI and SQL acceptance](../sql-automation/SQL-AUTO-03-current-branch-linux.md). |
+| Current-release window launch | **BLOCKED** | `timeout 10s env -u WAYLAND_DISPLAY XDG_DATA_HOME=/tmp/arch-notebook-ui00-xdg /tmp/arch-notebook-target/release/arch-notebook fixtures/chart/correctness.case.json` exited 1 with `XNotSupported(XOpenDisplayFailed)`. The release binary SHA-256 is recorded in the linked SQL-AUTO-03 report. |
 | PR CI execution for this candidate | **PENDING** | The current feature branch has no implementation PR. The CI workflow contains the test and deterministic-generator steps, but no PR-triggered run for `4fda60a` was available; local results are not reported as CI. |
 
 ## Reproducibility details
