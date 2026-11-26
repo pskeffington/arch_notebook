@@ -132,6 +132,22 @@ These modified and untracked paths were present during acceptance. The worktree 
 
 No build or test command was run for this documentation-only reconciliation. Next action is to repeat the UI-00 sequence in a stable native desktop session; retain the IBM validation and live scheduler dispatch gates separately.
 
+## SQL acceptance: synchronized branch automation and scale recheck
+
+**Task / owner:** Revalidate SQL automation behavior on the current pushed feature-branch release; implementation session.
+**Repository / branch:** `/home/sysadmin/github/arch_notebook` / `codex/ui-00-chart-baseline`.
+**Product source:** `750b6cb9f9214089678cc3341dae5ecd7c65005b`; release binary SHA-256 `f8c14cabd73164b27218068685d75c62ecd2e9d854287299b9aca534ec373032`.
+**Scope:** Re-run the full synthetic SQL automation recovery workflow and 7,121-row joined-header scale harness against the release binary.
+
+| Gate | Result | Evidence and limits |
+| --- | --- | --- |
+| SQL automation/recovery workflow | PASS | Query-only preflight, override isolation, schema drift diagnosis and reviewed repair, failed-run retention, batch resume, mismatch rejection, and CSV/TSV round-trips passed. The app left the SQLite source unchanged. |
+| Joined-header SQL scale | PASS | 7,121 result rows, 1,500 endpoint entities, 7,121 distinct composite record IDs, nullable attributes, two snapshots, and deliberate confidence decline all passed; source unchanged during each capture. |
+| Native GUI and live scheduled dispatch | BLOCKED | The graphical display rejected `wayland-info` and X11 access. Linux systemd and macOS LaunchAgent live dispatch were not exercised by these CLI harnesses. |
+| IBM interoperability | BLOCKED | IBM XSD/application validation was not performed. |
+
+Exact commands, exit codes, paths, and report digests are in [SQL-AUTO-03](evidence/sql-automation/SQL-AUTO-03-current-branch-linux.md). These automated synthetic results do not establish interactive, live-scheduler, production-schema, IBM-compatibility, or release acceptance.
+
 ## Feature-branch increment: aspect-aware entity type layout
 
 **Task / owner:** Improve analyst-facing vector organization; implementation session.
