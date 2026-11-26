@@ -1,4 +1,5 @@
 mod community;
+mod layout;
 
 use eframe::egui;
 use quick_xml::{
@@ -2296,6 +2297,7 @@ struct App {
     linked_search_depth: u8,
     linked_search_follow_directions: bool,
     layout_mode: LayoutMode,
+    layout_iterations: usize,
     link_sort: LinkSort,
     link_table_view: LinkTableView,
     data_query: String,
@@ -2755,6 +2757,7 @@ enum LayoutMode {
     Hierarchy,
     Grid,
     ThemeLineEventDates,
+    CommunityForce,
 }
 
 #[derive(PartialEq, Clone, Copy)]
@@ -2950,6 +2953,7 @@ impl Default for App {
             linked_search_depth: 2,
             linked_search_follow_directions: false,
             layout_mode: LayoutMode::Connectivity,
+            layout_iterations: 50,
             link_sort: LinkSort::Date,
             link_table_view: LinkTableView::Connections,
             data_query: String::new(),
@@ -3989,6 +3993,7 @@ impl App {
             linked_search_depth: 2,
             linked_search_follow_directions: false,
             layout_mode: LayoutMode::Connectivity,
+            layout_iterations: 50,
             link_sort: LinkSort::Date,
             link_table_view: LinkTableView::Connections,
             data_query: String::new(),
@@ -12240,6 +12245,57 @@ impl App {
                     }
                 }
             }
+            LayoutMode::CommunityForce => {
+                let groups = community::detected_communities(
+                    self.case
+                        .entities
+                        .iter()
+                        .map(|entity| (entity.id, entity.name.as_str())),
+                    self.case.links.iter().map(|link| (link.from, link.to)),
+                );
+                let mut community_by_id = HashMap::new();
+                for (group, members) in groups.iter().enumerate() {
+                    for id in members {
+                        community_by_id.insert(*id, group);
+                    }
+                }
+                let nodes: Vec<layout::LayoutNode> = self
+                    .case
+                    .entities
+                    .iter()
+                    .map(|entity| layout::LayoutNode {
+                        x: entity.x,
+                        y: entity.y,
+                        pinned: entity.position_locked,
+                        community: community_by_id.get(&entity.id).copied().unwrap_or(0),
+                    })
+                    .collect();
+                let edges: Vec<(usize, usize)> = self
+                    .case
+                    .links
+                    .iter()
+                    .filter_map(|link| {
+                        Some((
+                            *entity_positions.get(&link.from)?,
+                            *entity_positions.get(&link.to)?,
+                        ))
+                    })
+                    .collect();
+                let positions = layout::force_layout(
+                    &nodes,
+                    &edges,
+                    layout::LayoutSettings {
+                        iterations: self.layout_iterations,
+                        seed: 0x4152_4348_4e4f_5445,
+                    },
+                );
+                for (entity, (x, y)) in self.case.entities.iter_mut().zip(positions) {
+                    if !entity.position_locked {
+                        entity.x = x;
+                        entity.y = y;
+                    }
+                }
+            }
         }
         self.chart_zoom = 1.0;
         self.chart_pan = egui::Vec2::ZERO;
@@ -12255,6 +12311,7 @@ impl App {
             LayoutMode::Hierarchy => "LAYOUT ARRANGED BY CONNECTION DEPTH",
             LayoutMode::Grid => "LAYOUT ARRANGED IN ALPHABETICAL GRID",
             LayoutMode::ThemeLineEventDates => "LAYOUT ARRANGED BY THEME LINE AND EVENT DATE",
+            LayoutMode::CommunityForce => "LAYOUT ARRANGED BY COMMUNITY-AWARE FORCE",
         };
         let pinned_count = n - movable_count;
         if !matches!(self.layout_mode, LayoutMode::CentralEntity) {
@@ -18720,6 +18777,7 @@ impl eframe::App for App {
                                 LayoutMode::Hierarchy => "Hierarchy",
                                 LayoutMode::Grid => "Grid",
                                 LayoutMode::ThemeLineEventDates => "Theme line / event dates",
+                                LayoutMode::CommunityForce => "Community-aware force",
                             })
                             .show_ui(ui, |ui| {
                                 ui.selectable_value(
@@ -18752,7 +18810,17 @@ impl eframe::App for App {
                                     LayoutMode::ThemeLineEventDates,
                                     "Theme line / event dates",
                                 );
+                                ui.selectable_value(
+                                    &mut self.layout_mode,
+                                    LayoutMode::CommunityForce,
+                                    "Community-aware force",
+                                );
                             });
+                        if self.layout_mode == LayoutMode::CommunityForce {
+                            ui.add(egui::Slider::new(&mut self.layout_iterations, 10..=120)
+                                .text("Force iterations"));
+                            ui.label("Display layout only · detected groups are exploratory");
+                        }
                         if ui.button("Arrange chart").clicked() {
                             self.auto_layout();
                             ui.close_menu();
