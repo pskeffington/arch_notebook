@@ -237,6 +237,43 @@ def main() -> int:
     if failure_case.read_bytes() != failure_case_before:
         raise RuntimeError("failed ANX import changed the preexisting case file")
 
+    # IBM documented XML entity injection in older Analyst's Notebook releases.
+    # Keep ANX import strict about DTDs, and prove rejection is atomic. The
+    # local marker contains only fixture text and is never treated as input data.
+    external_marker = work / "xxe-fixture-marker.txt"
+    external_marker.write_text("ANX-XXE-FIXTURE-MARKER", encoding="utf-8")
+    entity_anx = work / "doctype-external-entity.anx"
+    entity_xml = (
+        "<?xml version='1.0' encoding='utf-16'?>"
+        f"<!DOCTYPE Chart [<!ENTITY probe SYSTEM '{external_marker.as_uri()}'>]>"
+        "<Chart><ChartItemCollection><ChartItem Id='XXE-PROBE' Label='&probe;'>"
+        "<End X='0' Y='0'><Entity EntityId='XXE-PROBE' Identity='XXE-PROBE' "
+        "LabelIsIdentity='true'><TextBlock /></Entity></End></ChartItem>"
+        "</ChartItemCollection></Chart>"
+    )
+    entity_anx.write_bytes(entity_xml.encode("utf-16"))
+    doctype_case = work / "doctype-failure.case.json"
+    doctype_case.write_text(json.dumps(source, indent=2) + "\n", encoding="utf-8")
+    doctype_case_before = doctype_case.read_bytes()
+    doctype_rejected = subprocess.run(
+        [str(binary), "--import-anx", str(doctype_case), str(entity_anx), "--json"],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if doctype_rejected.returncode == 0:
+        raise RuntimeError("ANX importer accepted a DTD with an external entity")
+    try:
+        doctype_report = json.loads(doctype_rejected.stdout)
+    except json.JSONDecodeError as error:
+        raise RuntimeError(f"DTD rejection did not return JSON: {error}") from error
+    if "document types are not supported" not in doctype_report.get("error", ""):
+        raise RuntimeError(f"DTD was rejected for an unexpected reason: {doctype_report}")
+    if external_marker.read_text(encoding="utf-8") in doctype_rejected.stdout + doctype_rejected.stderr:
+        raise RuntimeError("external entity fixture content appeared in the rejection output")
+    if doctype_case.read_bytes() != doctype_case_before:
+        raise RuntimeError("DTD rejection changed the preexisting case file")
+
     report = {
         "schema_version": 1,
         "result": "PASS",
@@ -250,11 +287,14 @@ def main() -> int:
         "labels": len(destination_labels),
         "unsupported_shape_rejected": True,
         "failed_import_case_unchanged": True,
+        "doctype_external_entity_rejected": True,
+        "doctype_rejection_case_unchanged": True,
         "local_sql_source_keys_included": exported.get("local_sql_source_keys_included"),
         "commands": [
             {"label": "anx_export", "exit_code": 0},
             {"label": "anx_import", "exit_code": 0},
             {"label": "unsupported_shape_import", "exit_code": rejected.returncode},
+            {"label": "doctype_external_entity_import", "exit_code": doctype_rejected.returncode},
         ],
         "ibm_schema_or_application_validation": "NOT PERFORMED",
         "work_dir": str(work),

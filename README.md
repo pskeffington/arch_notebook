@@ -36,12 +36,12 @@ Version 0.1.0 is under active development. The [2026-11-23 implementation baseli
 | Scheduled captures, preflight and bounded run history | Implemented |
 | CSV/TSV, GraphML and KML interchange | Implemented |
 | Historical SQL capture export to chart-import CSV/TSV, via desktop and CLI | Implemented |
-| ANX XML chart import/export | Implemented; IBM XSD and application validation pending |
+| ANX XML chart import/export | Implemented; internal round-trip and DTD rejection pass; IBM XSD and application validation pending |
 | Deterministic chart fixtures and automated chart regressions | Implemented on `codex/ui-00-chart-baseline` |
 | Interactive host acceptance and external IBM import validation | Pending evidence |
 | Published release and macOS notarization | Pending owner approval / signing evidence |
 
-Recent work added index and SQL-definition inspection, schema drift reporting in SQL Review and automation, KML placemark import, chart-import exports of selected historical captures, and an ANX internal round-trip acceptance gate that preserves supported record IDs, repeated links, positions, labels, and whitespace. See [SQL ingestion and interchange](docs/sql-ingestion.md) and the [Analyst's Notebook compatibility map](docs/analyst-notebook-parity.md) for details. SQLite schema_version is a drift signal, not a complete schema fingerprint. Validate CSV/TSV and ANX files in IBM's application before claiming external interoperability.
+Recent work added index and SQL-definition inspection, schema drift reporting in SQL Review and automation, KML placemark import, chart-import exports of selected historical captures, and ANX internal round-trip acceptance that preserves supported record IDs, repeated links, positions, labels, and whitespace. The importer rejects DTD-bearing files before modifying a case. See [ANX acceptance evidence](docs/evidence/anx/ANX-ROUNDTRIP-02-xxe-linux-1014ba5.md), [SQL ingestion and interchange](docs/sql-ingestion.md), and the [Analyst's Notebook compatibility map](docs/analyst-notebook-parity.md) for details. SQLite schema_version is a drift signal, not a complete schema fingerprint. Validate CSV/TSV and ANX files in IBM's application before claiming external interoperability.
 
 **Linux host progress (2026-11-25):** The operator reports that automatic builds appear to be working on the Linux box. This is a preliminary host observation, separate from CI success; the host architecture, build logs, installed version and runtime/scheduler acceptance remain to be recorded.
 
