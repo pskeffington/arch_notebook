@@ -42461,6 +42461,220 @@ mod tests {
         }
     }
 
+    fn sql_lookup_snapshot(
+        database_path: &std::path::Path,
+        query: &str,
+        parameters: Vec<(String, String)>,
+        series: &str,
+    ) -> ConnectionSnapshot {
+        ConnectionSnapshot {
+            id: Uuid::new_v4(),
+            chart_id: None,
+            series: series.into(),
+            source_key: format!("sqlite:{series}"),
+            database_path: database_path.to_string_lossy().into_owned(),
+            configured_database_path: database_path.to_string_lossy().into_owned(),
+            query: query.into(),
+            parameters,
+            captured_at: "2026-11-26T00:00:00Z".into(),
+            sqlite_schema_version: Some(1),
+            sqlite_schema_fingerprint: None,
+            sqlite_schema_objects: None,
+            connections: Vec::new(),
+            skipped_rows: 0,
+        }
+    }
+
+    fn sql_lookup_fixture_database(path: &std::path::Path, sql: &str) {
+        let connection = rusqlite::Connection::open(path).expect("create SQL lookup fixture");
+        connection
+            .execute_batch(sql)
+            .expect("populate SQL lookup fixture");
+    }
+
+    fn run_sql_source_lookup(
+        snapshot: &ConnectionSnapshot,
+        source_entity_id: &str,
+        case_path: &std::path::Path,
+    ) -> Result<super::SqlEntitySourceRows, String> {
+        super::sql_entity_source_rows(
+            snapshot,
+            source_entity_id,
+            &case_path.to_string_lossy(),
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            std::sync::Arc::new(std::sync::Mutex::new(String::new())),
+        )
+    }
+
+    #[test]
+    fn sql_source_record_lookup_keeps_source_scope_and_is_read_only() {
+        let root =
+            std::env::temp_dir().join(format!("arch-notebook-source-record-{}", Uuid::new_v4()));
+        std::fs::create_dir(&root).expect("create isolated source-record fixture directory");
+        let alpha_path = root.join("alpha.sqlite");
+        let beta_path = root.join("beta.sqlite");
+        let fixture_sql = "CREATE TABLE observations (id INTEGER PRIMARY KEY, tenant TEXT NOT NULL, source_id INTEGER, target_id INTEGER, detail TEXT, optional TEXT, opaque BLOB);
+            INSERT INTO observations VALUES (1, 'alpha', 7, 9, 'current alpha row', NULL, X'01ff');
+            INSERT INTO observations VALUES (2, 'alpha', 11, 7, 'reverse alpha row', 'present', X'02');";
+        sql_lookup_fixture_database(&alpha_path, fixture_sql);
+        sql_lookup_fixture_database(
+            &beta_path,
+            "CREATE TABLE observations (id INTEGER PRIMARY KEY, tenant TEXT NOT NULL, source_id INTEGER, target_id INTEGER, detail TEXT, optional TEXT, opaque BLOB);
+             INSERT INTO observations VALUES (1, 'beta', 7, 8, 'beta source row', NULL, X'03');",
+        );
+        let alpha_before = std::fs::read(&alpha_path).expect("read alpha source before lookup");
+        let beta_before = std::fs::read(&beta_path).expect("read beta source before lookup");
+        let query = "SELECT tenant || ':' || CAST(source_id AS TEXT) AS source_entity_id,
+                tenant || ':' || CAST(target_id AS TEXT) AS target_entity_id,
+                detail, optional, opaque, :capture_tag AS capture_tag
+            FROM observations WHERE tenant = :tenant ORDER BY id";
+        let alpha = sql_lookup_snapshot(
+            &alpha_path,
+            query,
+            vec![
+                ("tenant".into(), "text:alpha".into()),
+                ("capture_tag".into(), "text:baseline".into()),
+            ],
+            "alpha-series",
+        );
+        let beta = sql_lookup_snapshot(
+            &beta_path,
+            query,
+            vec![
+                ("tenant".into(), "text:beta".into()),
+                ("capture_tag".into(), "text:current".into()),
+            ],
+            "beta-series",
+        );
+        let alpha_snapshot_before = serde_json::to_vec(&alpha).expect("serialize saved snapshot");
+        let beta_snapshot_before = serde_json::to_vec(&beta).expect("serialize saved snapshot");
+
+        let alpha_rows = run_sql_source_lookup(&alpha, "ALPHA:7", &root.join("case.json"))
+            .expect("lookup composite identity in alpha source");
+        let beta_rows = run_sql_source_lookup(&beta, "beta:7", &root.join("case.json"))
+            .expect("lookup the same local ID in beta source");
+
+        assert_eq!(alpha_rows.snapshot_id, alpha.id);
+        assert_eq!(alpha_rows.source_entity_id, "ALPHA:7");
+        assert_eq!(
+            alpha_rows.columns.join("|"),
+            "source_entity_id|target_entity_id|detail|optional|opaque|capture_tag"
+        );
+        assert_eq!(alpha_rows.rows_scanned, 2);
+        assert_eq!(alpha_rows.rows.len(), 2);
+        assert_eq!(alpha_rows.rows[0][0], "alpha:7");
+        assert_eq!(alpha_rows.rows[0][2], "current alpha row");
+        assert_eq!(alpha_rows.rows[0][3], "");
+        assert_eq!(alpha_rows.rows[0][4], "BLOB · 2 bytes · 01ff");
+        assert_eq!(alpha_rows.rows[0][5], "baseline");
+        assert_eq!(alpha_rows.rows[1][1], "alpha:7");
+        assert_eq!(beta_rows.snapshot_id, beta.id);
+        assert_eq!(
+            beta_rows.database_path,
+            beta_path
+                .canonicalize()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned()
+        );
+        assert_eq!(beta_rows.rows.len(), 1);
+        assert_eq!(beta_rows.rows[0][0], "beta:7");
+        assert_eq!(beta_rows.rows[0][5], "current");
+        assert_eq!(std::fs::read(&alpha_path).unwrap(), alpha_before);
+        assert_eq!(std::fs::read(&beta_path).unwrap(), beta_before);
+        assert_eq!(serde_json::to_vec(&alpha).unwrap(), alpha_snapshot_before);
+        assert_eq!(serde_json::to_vec(&beta).unwrap(), beta_snapshot_before);
+        assert!(!alpha_rows.truncated && !beta_rows.truncated);
+
+        std::fs::remove_dir_all(root).expect("remove isolated source-record fixture");
+    }
+
+    #[test]
+    fn sql_source_record_lookup_rejects_writes_and_ambiguous_identity_columns() {
+        let root = std::env::temp_dir().join(format!(
+            "arch-notebook-source-record-invalid-{}",
+            Uuid::new_v4()
+        ));
+        std::fs::create_dir(&root).expect("create isolated invalid-query fixture directory");
+        let database_path = root.join("source.sqlite");
+        sql_lookup_fixture_database(
+            &database_path,
+            "CREATE TABLE observations (tenant TEXT, actor_id INTEGER, detail TEXT);
+             INSERT INTO observations VALUES ('alpha', 7, 'unchanged');",
+        );
+        let database_before =
+            std::fs::read(&database_path).expect("read source before invalid queries");
+        let write_query = sql_lookup_snapshot(
+            &database_path,
+            "UPDATE observations SET detail = 'changed' WHERE tenant = :tenant",
+            vec![("tenant".into(), "text:alpha".into())],
+            "write-attempt",
+        );
+        let write_error =
+            match run_sql_source_lookup(&write_query, "alpha:7", &root.join("case.json")) {
+                Ok(_) => panic!("live source lookup must reject a saved write query"),
+                Err(error) => error,
+            };
+        assert!(write_error.contains("no longer read-only"), "{write_error}");
+
+        let ambiguous_query = sql_lookup_snapshot(
+            &database_path,
+            "SELECT 'alpha:7' AS source_entity_id, 'alpha:8' AS SOURCE_ENTITY_ID",
+            Vec::new(),
+            "ambiguous-identity",
+        );
+        let ambiguous_error =
+            match run_sql_source_lookup(&ambiguous_query, "alpha:7", &root.join("case.json")) {
+                Ok(_) => panic!("ambiguous identity columns must be rejected"),
+                Err(error) => error,
+            };
+        assert!(
+            ambiguous_error.contains("ambiguous source entity ID columns"),
+            "{ambiguous_error}"
+        );
+        assert_eq!(std::fs::read(&database_path).unwrap(), database_before);
+        std::fs::remove_dir_all(root).expect("remove isolated invalid-query fixture");
+    }
+
+    #[test]
+    fn sql_source_record_lookup_bounds_rows_and_cell_values() {
+        let root = std::env::temp_dir().join(format!(
+            "arch-notebook-source-record-bounds-{}",
+            Uuid::new_v4()
+        ));
+        std::fs::create_dir(&root).expect("create isolated bounds fixture directory");
+        let database_path = root.join("source.sqlite");
+        sql_lookup_fixture_database(&database_path, "CREATE TABLE placeholder (value TEXT);");
+        let many_rows = sql_lookup_snapshot(
+            &database_path,
+            "WITH RECURSIVE generated(n) AS (
+                SELECT 1 UNION ALL SELECT n + 1 FROM generated WHERE n < 25
+            ) SELECT 'alpha:7' AS source_entity_id, CAST(n AS TEXT) AS value FROM generated",
+            Vec::new(),
+            "row-limit",
+        );
+        let many = run_sql_source_lookup(&many_rows, "alpha:7", &root.join("case.json"))
+            .expect("run bounded many-row lookup");
+        assert_eq!(many.rows.len(), super::SQL_ENTITY_LOOKUP_MAX_ROWS);
+        assert_eq!(many.rows_scanned, super::SQL_ENTITY_LOOKUP_MAX_ROWS + 1);
+        assert!(many.truncated);
+        assert!(!many.scan_limit_reached);
+
+        let long_cell = sql_lookup_snapshot(
+            &database_path,
+            "SELECT 'alpha:7' AS source_entity_id, hex(zeroblob(2048)) AS value",
+            Vec::new(),
+            "cell-limit",
+        );
+        let bounded = run_sql_source_lookup(&long_cell, "alpha:7", &root.join("case.json"))
+            .expect("run bounded cell lookup");
+        assert_eq!(bounded.rows.len(), 1);
+        assert!(bounded.truncated);
+        assert!(bounded.rows[0][1].ends_with("[truncated]"));
+        assert!(bounded.rows[0][1].len() < 1100);
+        std::fs::remove_dir_all(root).expect("remove isolated bounds fixture");
+    }
+
     #[test]
     fn analysis_method_card_counts_records_pairs_isolates_and_date_quality() {
         let mut case = super::demo_case();
