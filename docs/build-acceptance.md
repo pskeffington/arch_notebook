@@ -10,6 +10,7 @@
 | --- | --- | --- |
 | Fit chart access | PASS, source/test | Added **Fit chart** to Quick open search and `Ctrl/Command+0`; **View…** lists the shortcut. Quick-command search regression passed. |
 | Rust suite and build | PASS | Focused command search: 1 passed; full suite: 34 passed; offline `cargo check` and optimized release build exited 0. |
+| GitHub Actions for the pushed candidate | PENDING | GitHub Actions lookup found no PR-triggered run and no combined commit status contexts for `5cf1db5c573f69ce57f6322bb66bb2c958770de1`; no remote CI pass is claimed. |
 | Current-candidate native interaction and Qwen review | BLOCKED | X display access failed, and the local Ollama endpoint refused inference requests. No current-candidate rendering, shortcut input, or Qwen review is claimed. |
 
 Detailed evidence: [UI-NAV-FIT-01](evidence/vector-ui/UI-NAV-FIT-01-linux.md). The previous 1440×900 screenshot is contextual only; repeat visual and keyboard acceptance in an input-capable desktop session.

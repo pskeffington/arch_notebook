@@ -11,6 +11,7 @@
 | Rust regression suite | PASS | `cargo test --offline`: 34 passed, 0 failed. |
 | Formatting and whitespace | PASS | `cargo fmt --all`; `git diff --check`; both exited 0. |
 | Type/build checks | PASS | `CARGO_TARGET_DIR=/tmp/arch-notebook-target cargo check --locked --offline` and `CARGO_TARGET_DIR=/tmp/arch-notebook-target cargo build --release --locked --offline` exited 0. |
+| GitHub Actions for the pushed candidate | PENDING | GitHub Actions lookup returned no PR-triggered runs and the combined commit status had no contexts for `5cf1db5c573f69ce57f6322bb66bb2c958770de1`; no remote CI pass is claimed. |
 | Current-candidate native window | BLOCKED | `env -u WAYLAND_DISPLAY /tmp/arch-notebook-target/release/arch-notebook --open-case "$PWD/fixtures/chart/correctness.case.json"` exited 1 with `XOpenDisplayFailed`. Current-candidate rendering, shortcut input, and viewport result were not observed. |
 | Qwen visual review | BLOCKED | `qwen3.5:9b` appeared in one local Ollama model inventory response, but subsequent local `/api/chat` and `/api/tags` requests were refused. No Qwen critique is claimed. |
 
