@@ -84,10 +84,51 @@ def main() -> int:
     database = sqlite3.connect(scheduler_database)
     try:
         database.executescript(source_sql.read_text(encoding="utf-8"))
+        window_start, window_end, before_window = database.execute(
+            "SELECT date('now', 'start of month', '-1 month'), "
+            "date('now', 'start of month'), "
+            "date('now', 'start of month', '-1 month', '-1 day')"
+        ).fetchone()
+        scheduled_rows = [
+            (
+                "rolling-window",
+                connection_id,
+                source,
+                "PERSON",
+                target,
+                "LOCATION",
+                "OBSERVED",
+                event_date,
+                2,
+                1,
+                "SCHEDULER-ACCEPTANCE",
+                "synthetic calendar boundary",
+            )
+            for connection_id, source, target, event_date in (
+                ("BEFORE-WINDOW", "Prior Boundary", "Prior Place", before_window),
+                ("WINDOW-START", "Window Start", "Included Place", window_start),
+                ("WINDOW-END", "Window End", "Excluded Place", window_end),
+            )
+        ]
+        database.executemany(
+            "INSERT INTO connection_observations VALUES "
+            "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            scheduled_rows,
+        )
         database.commit()
     finally:
         database.close()
     case_payload["automation_jobs"][0]["database_path"] = str(scheduler_database)
+    case_payload["automation_jobs"][0]["series"] = "rolling-utc-month"
+    case_payload["automation_jobs"][0]["parameters"] = []
+    case_payload["automation_jobs"][0]["query"] = """SELECT connection_id, source, source_type, target,
+        target_type, relationship, source AS source_entity_id,
+        target AS target_entity_id, event_date AS date, confidence, directed,
+        source_reference, notes
+        FROM connection_observations
+        WHERE event_date >= date('now', 'start of month', '-1 month')
+          AND event_date < date('now', 'start of month')
+        ORDER BY connection_id"""
 
     home = work / "home"
     config_home = work / "config"
@@ -251,6 +292,15 @@ def main() -> int:
     scheduled_snapshots = scheduled_case_after.get("snapshots", [])
     if not scheduled_snapshots or not scheduled_snapshots[-1].get("connections"):
         raise RuntimeError("generated service command did not save a connection snapshot")
+    scheduled_connection_ids = sorted(
+        connection.get("connection_id")
+        for connection in scheduled_snapshots[-1]["connections"]
+    )
+    if scheduled_connection_ids != ["WINDOW-START"]:
+        raise RuntimeError(
+            "scheduled UTC month query did not include only the half-open window start: "
+            f"{scheduled_connection_ids} (start={window_start}, end={window_end})"
+        )
     scheduled_csv_files = list(exported_dir.glob("*.csv"))
     if len(scheduled_csv_files) != 1:
         raise RuntimeError(
@@ -317,6 +367,12 @@ def main() -> int:
             "trigger": scheduled_runs_after[-1]["trigger"],
             "saved_connections": len(scheduled_snapshots[-1]["connections"]),
             "chart_csv_rows": len(scheduled_csv_rows),
+        },
+        "dynamic_calendar_window": {
+            "window_start_utc": window_start,
+            "window_end_utc_exclusive": window_end,
+            "included_connection_ids": scheduled_connection_ids,
+            "excluded_connection_ids": ["BEFORE-WINDOW", "WINDOW-END"],
         },
         "failed_sql_preflight_installed_nothing": True,
         "invalid_month_day_rejected": True,
