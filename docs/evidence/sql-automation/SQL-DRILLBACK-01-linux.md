@@ -15,6 +15,8 @@
 | Full Rust test suite | **PASS** | `CARGO_TARGET_DIR=/tmp/arch-notebook-target cargo test --locked --offline`, exit 0; 31 passed, 0 failed, 0 ignored. |
 | Locked compile check | **PASS** | `CARGO_TARGET_DIR=/tmp/arch-notebook-target cargo check --locked --offline`, exit 0. |
 | Formatting and whitespace | **PASS** | `cargo fmt --all -- --check` and `git diff --check`, exit 0. |
+| Candidate GitHub Actions run | **PENDING** | After push, `GET /repos/pskeffington/arch_notebook/actions/runs?head_sha=a542d6f7bcfb1def441a52c48ec6c58eba0de400` returned `total_count: 0` on 2026-11-26. |
+| Separate code review | **PENDING** | This implementation session added and ran the tests; no separate code-review handoff is claimed for this test-only change. |
 | Native inspector workflow | **PENDING** | Tests call the lookup function directly; no window, pointer interaction, or rendered result was exercised. |
 
 The source-scoping test creates two separate SQLite files with tenant-composite identities. It verifies matching when the selected entity appears as either endpoint, repeated local IDs remain separate across the sources, typed SQL parameters are bound, NULL becomes an empty display cell, BLOBs are shown as bounded hexadecimal summaries, and each returned result identifies the matching snapshot and canonical database path. The test compares serialized snapshots and source database bytes before and after lookup; both remain identical.
