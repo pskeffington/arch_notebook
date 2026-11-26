@@ -4,10 +4,12 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import hashlib
 import json
 import os
 import plistlib
+import sqlite3
 import subprocess
 import tempfile
 from pathlib import Path
@@ -82,6 +84,57 @@ def main() -> int:
         raise RuntimeError("synthetic SQL fixture acceptance did not pass")
     case_template = fixture_work / "automation.case.json"
     case_payload = json.loads(case_template.read_text(encoding="utf-8"))
+    source_database = work / "scheduled-window.sqlite"
+    database = sqlite3.connect(source_database)
+    try:
+        database.executescript(source_sql.read_text(encoding="utf-8"))
+        window_start, window_end, before_window = database.execute(
+            "SELECT date('now', 'start of month', '-1 month'), "
+            "date('now', 'start of month'), "
+            "date('now', 'start of month', '-1 month', '-1 day')"
+        ).fetchone()
+        scheduled_rows = [
+            (
+                "rolling-window",
+                connection_id,
+                source,
+                "PERSON",
+                target,
+                "LOCATION",
+                "OBSERVED",
+                event_date,
+                2,
+                1,
+                "LAUNCHAGENT-ACCEPTANCE",
+                "synthetic calendar boundary",
+            )
+            for connection_id, source, target, event_date in (
+                ("BEFORE-WINDOW", "Prior Boundary", "Prior Place", before_window),
+                ("WINDOW-START", "Window Start", "Included Place", window_start),
+                ("WINDOW-END", "Window End", "Excluded Place", window_end),
+            )
+        ]
+        database.executemany(
+            "INSERT INTO connection_observations "
+            "(snapshot_id, connection_id, source, source_type, target, target_type, "
+            "relationship, event_date, confidence, directed, source_reference, notes) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            scheduled_rows,
+        )
+        database.commit()
+    finally:
+        database.close()
+    case_payload["automation_jobs"][0]["database_path"] = str(source_database)
+    case_payload["automation_jobs"][0]["series"] = "rolling-utc-month"
+    case_payload["automation_jobs"][0]["parameters"] = []
+    case_payload["automation_jobs"][0]["query"] = """SELECT connection_id, source, source_type, target,
+        target_type, relationship, source AS source_entity_id,
+        target AS target_entity_id, event_date AS date, confidence, directed,
+        source_reference, notes
+        FROM connection_observations
+        WHERE event_date >= date('now', 'start of month', '-1 month')
+          AND event_date < date('now', 'start of month')
+        ORDER BY connection_id"""
 
     home = work / "home"
     fake_bin = work / "host-bin"
@@ -374,6 +427,57 @@ def main() -> int:
     ):
         raise RuntimeError("case-specific removal did not remove the matching legacy schedule")
 
+    scheduled_entry = installed[1]
+    scheduled_case_path = Path(scheduled_entry["case"])
+    scheduled_log_dir = home / "Library" / "Logs" / "ArchNotebook" / canonical_schedule_id(scheduled_case_path)
+    source_database_before = hashlib.sha256(source_database.read_bytes()).hexdigest()
+    run(
+        [
+            str(bundled_runner),
+            str(app_proxy),
+            str(scheduled_case_path),
+            str(scheduled_log_dir),
+            str(export_dir),
+        ],
+        env=base_env,
+    )
+    scheduled_case_after = json.loads(scheduled_case_path.read_text(encoding="utf-8"))
+    scheduled_runs = scheduled_case_after.get("automation_runs", [])
+    if not scheduled_runs or not scheduled_runs[-1].get("success") or scheduled_runs[-1].get("trigger") != "scheduled":
+        raise RuntimeError("LaunchAgent runner did not save a successful scheduled-trigger run")
+    scheduled_snapshots = scheduled_case_after.get("snapshots", [])
+    if not scheduled_snapshots or not scheduled_snapshots[-1].get("connections"):
+        raise RuntimeError("LaunchAgent runner did not save a connection snapshot")
+    scheduled_ids = sorted(
+        connection.get("connection_id")
+        for connection in scheduled_snapshots[-1]["connections"]
+    )
+    if scheduled_ids != ["WINDOW-START"]:
+        raise RuntimeError(
+            "LaunchAgent rolling-month query returned unexpected boundary rows: "
+            f"{scheduled_ids} (start={window_start}, end={window_end})"
+        )
+    scheduled_csvs = list(export_dir.glob("*.csv"))
+    if len(scheduled_csvs) != 1:
+        raise RuntimeError(f"LaunchAgent runner did not export one chart CSV: {scheduled_csvs}")
+    with scheduled_csvs[0].open(newline="", encoding="utf-8") as source:
+        scheduled_csv_rows = list(csv.DictReader(source))
+    if len(scheduled_csv_rows) != 1:
+        raise RuntimeError(f"scheduled chart CSV has unexpected rows: {len(scheduled_csv_rows)}")
+    source_database_after = hashlib.sha256(source_database.read_bytes()).hexdigest()
+    if source_database_after != source_database_before:
+        raise RuntimeError("scheduled LaunchAgent capture modified its SQLite source")
+    app_calls = [json.loads(line) for line in app_log.read_text(encoding="utf-8").splitlines()]
+    scheduled_app_call = app_calls[-1]
+    if scheduled_app_call != [
+        "--run-enabled-jobs",
+        str(scheduled_case_path.resolve()),
+        "--progress",
+        "--export-chart-csv-dir",
+        str(export_dir.resolve()),
+    ]:
+        raise RuntimeError(f"LaunchAgent runner invoked unexpected application arguments: {scheduled_app_call!r}")
+
     launch_calls = [json.loads(line) for line in launch_log.read_text(encoding="utf-8").splitlines()]
     report = {
         "schema_version": 1,
@@ -386,6 +490,15 @@ def main() -> int:
         "failed_replacement_restores_prior_plist_and_agent": True,
         "failed_first_install_leaves_no_agent": True,
         "case_removal_and_legacy_schedule_compatibility": True,
+        "generated_launchagent_runner": {
+            "trigger": scheduled_runs[-1]["trigger"],
+            "included_connection_ids": scheduled_ids,
+            "excluded_connection_ids": ["BEFORE-WINDOW", "WINDOW-END"],
+            "window_start_utc": window_start,
+            "window_end_utc_exclusive": window_end,
+            "chart_csv_rows": len(scheduled_csv_rows),
+            "source_database_unchanged": source_database_after == source_database_before,
+        },
         "launchctl_is_temporary_stub": True,
         "real_macos_launchd_untouched": True,
         "launchctl_calls": len(launch_calls),
