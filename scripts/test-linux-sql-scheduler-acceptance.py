@@ -4,9 +4,11 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import os
 import shlex
+import sqlite3
 import subprocess
 import tempfile
 from pathlib import Path
@@ -78,6 +80,14 @@ def main() -> int:
         raise RuntimeError("synthetic SQL fixture acceptance did not pass")
     case_template = fixture_work / "automation.case.json"
     case_payload = json.loads(case_template.read_text(encoding="utf-8"))
+    scheduler_database = work / "scheduler.sqlite"
+    database = sqlite3.connect(scheduler_database)
+    try:
+        database.executescript(source_sql.read_text(encoding="utf-8"))
+        database.commit()
+    finally:
+        database.close()
+    case_payload["automation_jobs"][0]["database_path"] = str(scheduler_database)
 
     home = work / "home"
     config_home = work / "config"
@@ -203,7 +213,14 @@ def main() -> int:
             raise RuntimeError(f"weekly schedule status did not restore its saved policy: {status.stdout}")
         if label == "hourly" and str(exported_dir.resolve()) not in status.stdout:
             raise RuntimeError(f"schedule status lost its export directory: {status.stdout}")
-        installed.append({"label": label, "case": str(case_path), "timer": timer_path.name})
+        installed.append(
+            {
+                "label": label,
+                "case": str(case_path),
+                "timer": timer_path.name,
+                "service": str(service_path),
+            }
+        )
 
     app_calls = [json.loads(line) for line in app_log.read_text(encoding="utf-8").splitlines()]
     expected_app_calls = len(case_specs)
@@ -215,6 +232,34 @@ def main() -> int:
         for index, call in enumerate(app_calls)
     ):
         raise RuntimeError(f"installer SQL preflight did not use the expected CLI gates: {app_calls}")
+
+    scheduled_case_path = Path(installed[0]["case"])
+    scheduled_case_before = json.loads(scheduled_case_path.read_text(encoding="utf-8"))
+    scheduled_runs_before = len(scheduled_case_before.get("automation_runs", []))
+    scheduled_service_env = env | {"ARCH_NOTEBOOK_AUTOMATION_TRIGGER": "scheduled"}
+    scheduled_service = run(
+        decode_exec_start(Path(installed[0]["service"])), env=scheduled_service_env
+    )
+    scheduled_case_after = json.loads(scheduled_case_path.read_text(encoding="utf-8"))
+    scheduled_runs_after = scheduled_case_after.get("automation_runs", [])
+    if len(scheduled_runs_after) != scheduled_runs_before + 1:
+        raise RuntimeError("generated service command did not append exactly one automation run")
+    if not scheduled_runs_after[-1].get("success") or scheduled_runs_after[-1].get("trigger") != "scheduled":
+        raise RuntimeError(
+            "generated service command did not save a successful scheduled-trigger run"
+        )
+    scheduled_snapshots = scheduled_case_after.get("snapshots", [])
+    if not scheduled_snapshots or not scheduled_snapshots[-1].get("connections"):
+        raise RuntimeError("generated service command did not save a connection snapshot")
+    scheduled_csv_files = list(exported_dir.glob("*.csv"))
+    if len(scheduled_csv_files) != 1:
+        raise RuntimeError(
+            f"scheduled service command did not export exactly one chart CSV: {scheduled_csv_files}"
+        )
+    with scheduled_csv_files[0].open(newline="", encoding="utf-8") as source:
+        scheduled_csv_rows = list(csv.DictReader(source))
+    if len(scheduled_csv_rows) != len(scheduled_snapshots[-1]["connections"]):
+        raise RuntimeError("scheduled chart CSV row count differs from its saved snapshot")
 
     invalid_case = work / "invalid-preflight.case.json"
     invalid_payload = json.loads(json.dumps(case_payload))
@@ -267,6 +312,12 @@ def main() -> int:
         "case_isolated_unit_pairs": len(installed),
         "special_character_paths_preserved": True,
         "preflight_uses_real_arch_notebook_cli": True,
+        "generated_service_invocation": {
+            "exit_code": scheduled_service.returncode,
+            "trigger": scheduled_runs_after[-1]["trigger"],
+            "saved_connections": len(scheduled_snapshots[-1]["connections"]),
+            "chart_csv_rows": len(scheduled_csv_rows),
+        },
         "failed_sql_preflight_installed_nothing": True,
         "invalid_month_day_rejected": True,
         "case_specific_removal_preserved_other_schedules": True,

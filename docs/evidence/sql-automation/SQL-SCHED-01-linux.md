@@ -41,3 +41,21 @@ The scheduler harness calls `test-sql-automation-acceptance.py` with a retained 
 ## Limits and next action
 
 This is not evidence that a native timer fired, survived sleep/reboot, recovered a partially completed batch, or emitted records into a real user journal. Run the interactive systemd service/timer workflow on a native Linux host, then exercise cancellation and resume. The macOS installer now has a separate [isolated LaunchAgent acceptance record](SQL-SCHED-02-macos-isolated.md); native macOS launchd behavior remains unverified.
+
+## Generated service invocation follow-up — 2026-11-25
+
+- **Source baseline:** `ca23dc8e1cd860440566ed5070ef42d266f74360` on `codex/ui-00-chart-baseline`.
+- **Changed path:** `scripts/test-linux-sql-scheduler-acceptance.py`.
+- **Acceptance script SHA-256:** `b9b093b3a8109ba365402ca6ffc22f00de5928cb8cbb866df7e0178ae4dccaa6`.
+- **Rust CLI SHA-256:** `9bcc9ff9b1a505177373f5081094c1419c4079f92121b13c2c0ee67267ed94be`.
+
+The scheduler harness now creates its own fresh SQLite database instead of reusing the SQL acceptance database after that test intentionally renames `event_date` to exercise schema adaptation. It parses and directly invokes one generated `ExecStart` using the disposable service environment and temporary case. This is an end-to-end invocation of the installed service command with the real Rust CLI; systemd itself remains stubbed.
+
+| Check | Result | Evidence |
+| --- | --- | --- |
+| `PYTHONPYCACHEPREFIX=/tmp/arch-notebook-pycache python3 -m py_compile scripts/test-linux-sql-scheduler-acceptance.py` | PASS, exit 0 | Harness syntax compiled. |
+| `python3 scripts/test-linux-sql-scheduler-acceptance.py --binary /tmp/arch-notebook-target/debug/arch-notebook --installer scripts/install-linux-automation.sh --source-sql archive/research.databases/sample_connections.sql --sql-acceptance scripts/test-sql-automation-acceptance.py --work-dir /tmp/arch-notebook-linux-scheduler-invocation-20261125b` | PASS, exit 0 | Five cadence setups, 27 expected stub calls, plus generated service command exit 0. The command saved one successful `scheduled` run, a four-connection snapshot, and a CSV with four rows. Report SHA-256: `e3093e7932be3664bd410f71fdd43d110a4c3cd312362b2f58301d763489738e`. |
+| Fresh scheduler SQLite database | PASS | `/tmp/arch-notebook-linux-scheduler-invocation-20261125b/scheduler.sqlite`, SHA-256 `cbb7a0a273b1b036145f89d652ab28adf24e1c8ac0177a98cf31f206c5b17d9c`. |
+| `systemctl --user is-system-running` | BLOCKED | User-bus connection returned `Operation not permitted`. No live timer was installed or changed. |
+
+The generated service invocation is not a timer firing. Native timer dispatch, reboot/sleep persistence, and cancellation remain pending.
