@@ -53,7 +53,19 @@ def main() -> int:
     source_hash_before = sha256(database)
 
     query = """SELECT connection_id, source, source_type, target, target_type, relationship,
-                      event_date AS date, confidence, directed, source_reference, notes
+                      CASE source
+                        WHEN 'Mara Venn' THEN 'PERSON-001'
+                        WHEN 'Elias Ward' THEN 'PERSON-002'
+                      END AS source_entity_id,
+                      CASE target
+                        WHEN 'North Quay Storage' THEN 'LOCATION-001'
+                        WHEN 'Oriole Freight' THEN 'ORGANIZATION-001'
+                        WHEN 'Eastbridge Depot' THEN 'LOCATION-002'
+                      END AS target_entity_id,
+                      event_date AS date, confidence, directed, source_reference, notes,
+                      'SYNTHETIC REGISTRY' AS "source_attribute:registry",
+                      'SYNTHETIC REGISTRY' AS "target_attribute:registry",
+                      'SQL ACCEPTANCE FIXTURE' AS "connection_attribute:capture_method"
                FROM connection_observations WHERE snapshot_id = :snapshot_id
                ORDER BY connection_id"""
     case_path = work / "automation.case.json"
@@ -283,6 +295,175 @@ def main() -> int:
     ):
         raise RuntimeError("run-history CLI did not retain the failed capture record")
 
+    chart_roundtrips = []
+    canonical_roundtrip_rows: dict[str, list[tuple[str, ...]]] = {}
+    source_hash_before_chart_exchange = sha256(database)
+    source_case_hash_before_chart_export = sha256(case_path)
+    for extension, delimiter, format_name in (("csv", ",", "CSV"), ("tsv", "\t", "TSV")):
+        chart_file = work / f"chart-import.{extension}"
+        exported_chart = run(
+            f"chart_{extension}_export",
+            "--export-sql-chart-csv",
+            str(case_path),
+            snapshots[1]["id"],
+            str(chart_file),
+            "--json",
+        )
+        if (
+            not exported_chart.get("ok")
+            or exported_chart.get("connections") != 4
+            or exported_chart.get("format") != format_name
+            or exported_chart.get("snapshot_id") != snapshots[1]["id"]
+            or exported_chart.get("entity_property_columns") != 1
+            or exported_chart.get("relationship_property_columns") != 1
+        ):
+            raise RuntimeError(f"SQL chart {format_name} export returned unexpected metadata")
+        with chart_file.open(newline="", encoding="utf-8") as source:
+            chart_rows = list(csv.DictReader(source, delimiter=delimiter))
+        if len(chart_rows) != 4:
+            raise RuntimeError(f"SQL chart {format_name} export did not contain four records")
+        required_headers = {
+            "connection_id",
+            "source_external_ids_json",
+            "target_external_ids_json",
+            "source_attribute:registry",
+            "target_attribute:registry",
+            "connection_attribute:capture_method",
+            "ingest_source",
+        }
+        if not required_headers.issubset(chart_rows[0]):
+            raise RuntimeError(f"SQL chart {format_name} export omitted expected identity/property columns")
+        if any(row["record_type"] != "connection" for row in chart_rows):
+            raise RuntimeError(f"SQL chart {format_name} export contains unexpected record types")
+        if any(
+            row["source_attribute:registry"] != "SYNTHETIC REGISTRY"
+            or row["target_attribute:registry"] != "SYNTHETIC REGISTRY"
+            or row["connection_attribute:capture_method"] != "SQL ACCEPTANCE FIXTURE"
+            for row in chart_rows
+        ):
+            raise RuntimeError(f"SQL chart {format_name} export changed SQL properties")
+        canonical_roundtrip_rows[format_name] = sorted(
+            tuple(row[key] for key in sorted(chart_rows[0])) for row in chart_rows
+        )
+
+        design_name = f"SQL snapshot {format_name} handoff"
+        design_path = work / f"chart-import.{extension}.design.json"
+        design_result = run(
+            f"chart_{extension}_design_create",
+            "--create-import-design",
+            str(chart_file),
+            str(design_path),
+            "--name",
+            design_name,
+            "--json",
+        )
+        if not design_result.get("ok"):
+            raise RuntimeError(f"could not create the {format_name} import design: {design_result}")
+
+        roundtrip_case_path = work / f"chart-roundtrip.{extension}.case.json"
+        roundtrip_case = json.loads(case_path.read_text(encoding="utf-8"))
+        for collection in (
+            "entities",
+            "links",
+            "snapshots",
+            "automation_jobs",
+            "automation_runs",
+            "automation_batches",
+        ):
+            roundtrip_case[collection] = []
+        roundtrip_case_path.write_text(
+            json.dumps(roundtrip_case, indent=2) + "\n", encoding="utf-8"
+        )
+        design_import = run(
+            f"chart_{extension}_design_import",
+            "--import-import-design",
+            str(roundtrip_case_path),
+            str(design_path),
+            "--name",
+            design_name,
+            "--json",
+        )
+        if not design_import.get("ok") or design_import.get("saved") is not True:
+            raise RuntimeError(f"could not save the {format_name} import design")
+        chart_import = run(
+            f"chart_{extension}_data_import",
+            "--import-delimited",
+            str(roundtrip_case_path),
+            str(chart_file),
+            "--design",
+            design_name,
+            "--json",
+        )
+        if (
+            not chart_import.get("ok")
+            or chart_import.get("created") != 4
+            or chart_import.get("updated") != 0
+            or chart_import.get("skipped") != 0
+        ):
+            raise RuntimeError(f"SQL chart {format_name} import returned unexpected counts")
+
+        imported_case = json.loads(roundtrip_case_path.read_text(encoding="utf-8"))
+        imported_entities = {entity["id"]: entity for entity in imported_case["entities"]}
+        imported_links = {
+            link["connection_id"]: link for link in imported_case["links"]
+        }
+        if len(imported_case["entities"]) != 5 or len(imported_links) != 4:
+            raise RuntimeError(f"SQL chart {format_name} import lost or duplicated graph records")
+        for row in chart_rows:
+            link = imported_links.get(row["connection_id"])
+            if link is None:
+                raise RuntimeError(f"SQL chart {format_name} import lost {row['connection_id']}")
+            source_entity = imported_entities[link["from"]]
+            target_entity = imported_entities[link["to"]]
+            if (
+                source_entity["name"] != row["source"]
+                or source_entity["kind"] != row["source_type"]
+                or target_entity["name"] != row["target"]
+                or target_entity["kind"] != row["target_type"]
+                or link["label"] != row["relationship"]
+                or link["date"] != row["date"]
+                or link["confidence"] != int(row["confidence"])
+                or link["directed"] != (row["directed"].strip().lower() == "true")
+                or link["source_notes"] != row["source_notes"]
+                or link["source_reference"] != row["source_reference"]
+                or link.get("ingest_source") != row["ingest_source"]
+            ):
+                raise RuntimeError(f"SQL chart {format_name} import changed {row['connection_id']}")
+            source_ids = {tuple(pair) for pair in json.loads(row["source_external_ids_json"])}
+            target_ids = {tuple(pair) for pair in json.loads(row["target_external_ids_json"])}
+            if not source_ids or not target_ids:
+                raise RuntimeError(f"SQL chart {format_name} export omitted stable endpoint identity")
+            if not source_ids.issubset({tuple(pair) for pair in source_entity["external_ids"]}):
+                raise RuntimeError(f"SQL chart {format_name} import changed source identity")
+            if not target_ids.issubset({tuple(pair) for pair in target_entity["external_ids"]}):
+                raise RuntimeError(f"SQL chart {format_name} import changed target identity")
+            if dict(source_entity["attributes"]).get("registry") != row["source_attribute:registry"]:
+                raise RuntimeError(f"SQL chart {format_name} import changed source properties")
+            if dict(target_entity["attributes"]).get("registry") != row["target_attribute:registry"]:
+                raise RuntimeError(f"SQL chart {format_name} import changed target properties")
+            if dict(link["attributes"]).get("capture_method") != row["connection_attribute:capture_method"]:
+                raise RuntimeError(f"SQL chart {format_name} import changed relationship properties")
+        chart_roundtrips.append(
+            {
+                "format": format_name,
+                "exported_connections": exported_chart["connections"],
+                "created_connections": chart_import["created"],
+                "entities": len(imported_entities),
+                "relationships": len(imported_links),
+                "skipped": chart_import["skipped"],
+                "export_sha256": sha256(chart_file),
+                "design_sha256": sha256(design_path),
+                "case_sha256": sha256(roundtrip_case_path),
+            }
+        )
+    if canonical_roundtrip_rows["CSV"] != canonical_roundtrip_rows["TSV"]:
+        raise RuntimeError("SQL chart CSV and TSV exports contain different record values")
+    source_hash_after_chart_exchange = sha256(database)
+    if source_hash_before_chart_exchange != source_hash_after_chart_exchange:
+        raise RuntimeError("chart CSV/TSV exchange changed the SQLite source")
+    if sha256(case_path) != source_case_hash_before_chart_export:
+        raise RuntimeError("chart CSV/TSV export changed the source case")
+
     report = {
         "schema_version": 1,
         "result": "PASS",
@@ -310,6 +491,10 @@ def main() -> int:
         "failure_capture_run_id": failed_runs[-1].get("id"),
         "failure_capture_snapshot_id": failed_outcome.get("snapshot_id"),
         "failure_run_history_retained": True,
+        "chart_csv_tsv_roundtrips": chart_roundtrips,
+        "csv_and_tsv_values_match": True,
+        "source_unchanged_during_chart_exchange": True,
+        "case_unchanged_during_chart_export": True,
         "snapshot_counts": [len(snapshot["connections"]) for snapshot in snapshots],
         "snapshot_ids": [snapshot["id"] for snapshot in snapshots],
         "run_ids": [run_record["id"] for run_record in runs],
