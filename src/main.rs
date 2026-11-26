@@ -22987,6 +22987,7 @@ impl eframe::App for App {
                                     ca,
                                     cb,
                                     link_lanes[link_index] * self.chart_zoom,
+                                    link.from == link.to,
                                 );
                                 for (segment_index, segment) in points.windows(2).enumerate() {
                                     match link.confidence.clamp(1, 3) {
@@ -23022,14 +23023,42 @@ impl eframe::App for App {
                                     }
                                 }
                                 if link.directed {
-                                    let tangent = (points[points.len() - 1] - points[points.len() - 2]).normalized();
-                                    let tip = cb - tangent * 75.0 * self.chart_zoom;
-                                    let wing = egui::vec2(-tangent.y, tangent.x) * 5.0 * self.chart_zoom;
-                                    let arrow_width = conditional_line_width.unwrap_or(1.5) * self.chart_zoom;
-                                    p.line_segment([tip, tip - tangent * 10.0 * self.chart_zoom + wing], (arrow_width, col));
-                                    p.line_segment([tip, tip - tangent * 10.0 * self.chart_zoom - wing], (arrow_width, col));
+                                    if let Some((tip, tangent)) = connection_arrowhead(
+                                        &points,
+                                        ca.distance_sq(cb) <= f32::EPSILON,
+                                        self.chart_zoom,
+                                    ) {
+                                        let wing = egui::vec2(-tangent.y, tangent.x)
+                                            * 5.0
+                                            * self.chart_zoom;
+                                        let arrow_width = conditional_line_width.unwrap_or(1.5)
+                                            * self.chart_zoom;
+                                        p.line_segment(
+                                            [
+                                                tip,
+                                                tip - tangent * 10.0 * self.chart_zoom + wing,
+                                            ],
+                                            (arrow_width, col),
+                                        );
+                                        p.line_segment(
+                                            [
+                                                tip,
+                                                tip - tangent * 10.0 * self.chart_zoom - wing,
+                                            ],
+                                            (arrow_width, col),
+                                        );
+                                    }
                                 }
-                                let mid=points[points.len()/2]; let label_rect=egui::Rect::from_center_size(mid,egui::vec2(110.0,18.0)*self.chart_zoom);
+                                let mid = connection_label_position(
+                                    &points,
+                                    link.from == link.to,
+                                    link_lanes[link_index] * self.chart_zoom,
+                                    self.chart_zoom,
+                                );
+                                let label_rect = egui::Rect::from_center_size(
+                                    mid,
+                                    egui::vec2(110.0, 18.0) * self.chart_zoom,
+                                );
                                 p.rect_filled(label_rect,3.0,if self.selected_link==Some(link_index){egui::Color32::from_rgb(34,61,70)}else{egui::Color32::from_rgb(19,31,41)});
                                 let visible_label = truncate_chart_label(&link.label, 18);
                                 p.text(mid,egui::Align2::CENTER_CENTER,&visible_label,egui::FontId::proportional(9.0*self.chart_zoom),if !in_time{egui::Color32::from_rgb(45,57,64)}else if in_source{cyan}else if in_group{egui::Color32::from_rgb(190,169,227)}else if has_source_focus||has_group_focus{egui::Color32::from_rgb(65,78,87)}else{muted});
@@ -23512,6 +23541,7 @@ impl eframe::App for App {
                                             center(from),
                                             center(to),
                                             lanes[index] * self.chart_zoom,
+                                            link.from == link.to,
                                         );
                                         Some((index, polyline_distance(pos, &points)))
                                     })
@@ -27492,8 +27522,39 @@ fn truncate_chart_label(label: &str, maximum_characters: usize) -> String {
     }
 }
 
-fn connection_curve_points(start: egui::Pos2, end: egui::Pos2, lane: f32) -> Vec<egui::Pos2> {
+fn connection_curve_points(
+    start: egui::Pos2,
+    end: egui::Pos2,
+    lane: f32,
+    is_self_loop: bool,
+) -> Vec<egui::Pos2> {
     const STEPS: usize = 16;
+    if is_self_loop || start.distance_sq(end) <= f32::EPSILON {
+        let radius = lane.abs().max(18.0) * 3.0;
+        let lane_side = if lane.is_sign_negative() { -1.0 } else { 1.0 };
+        let (first_control, second_control) = if is_self_loop {
+            (
+                start + egui::vec2(radius * lane_side, -2.0 * radius),
+                start + egui::vec2(-radius * lane_side, -2.0 * radius),
+            )
+        } else {
+            (
+                start + egui::vec2(2.0 * radius * lane_side, -radius),
+                start + egui::vec2(2.0 * radius * lane_side, radius),
+            )
+        };
+        return (0..=STEPS)
+            .map(|step| {
+                let t = step as f32 / STEPS as f32;
+                let inverse = 1.0 - t;
+                let point = start.to_vec2() * inverse.powi(3)
+                    + first_control.to_vec2() * (3.0 * inverse.powi(2) * t)
+                    + second_control.to_vec2() * (3.0 * inverse * t.powi(2))
+                    + end.to_vec2() * t.powi(3);
+                egui::pos2(point.x, point.y)
+            })
+            .collect();
+    }
     let direction = (end - start).normalized();
     let normal = if direction.length_sq() == 0.0 {
         egui::vec2(1.0, 0.0)
@@ -27511,6 +27572,51 @@ fn connection_curve_points(start: egui::Pos2, end: egui::Pos2, lane: f32) -> Vec
             egui::pos2(point.x, point.y)
         })
         .collect()
+}
+
+fn connection_arrowhead(
+    points: &[egui::Pos2],
+    coincident_endpoints: bool,
+    zoom: f32,
+) -> Option<(egui::Pos2, egui::Vec2)> {
+    if points.len() < 2 {
+        return None;
+    }
+    if coincident_endpoints {
+        let tip_index = (points.len() - 1) * 3 / 4;
+        let tangent = (*points.get(tip_index + 1)? - *points.get(tip_index)?).normalized();
+        (tangent.length_sq() > 0.0).then_some((points[tip_index], tangent))
+    } else {
+        let end = *points.last()?;
+        let previous = points[points.len() - 2];
+        let tangent = (end - previous).normalized();
+        (tangent.length_sq() > 0.0).then_some((end - tangent * 75.0 * zoom, tangent))
+    }
+}
+
+fn connection_label_position(
+    points: &[egui::Pos2],
+    is_self_loop: bool,
+    lane: f32,
+    zoom: f32,
+) -> egui::Pos2 {
+    let midpoint = points[points.len() / 2];
+    if points
+        .first()
+        .zip(points.last())
+        .is_none_or(|(start, end)| start.distance_sq(*end) > f32::EPSILON)
+    {
+        return midpoint;
+    }
+    let lane_side = if lane.is_sign_negative() { -1.0 } else { 1.0 };
+    let route_side = if is_self_loop { lane_side } else { -lane_side };
+    let radius = lane.abs().max(18.0) * 3.0;
+    let route_clearance = if is_self_loop {
+        radius * 0.5
+    } else {
+        radius * 1.5
+    };
+    midpoint + egui::vec2(route_side * (route_clearance + 65.0 * zoom), 0.0)
 }
 
 fn polyline_distance(point: egui::Pos2, points: &[egui::Pos2]) -> f32 {
@@ -27535,7 +27641,7 @@ fn nearest_link_index_at_position(
             let from = *entity_positions.get(&link.from)?;
             let to = *entity_positions.get(&link.to)?;
             let lane = *lanes.get(index)?;
-            let points = connection_curve_points(from, to, lane * zoom);
+            let points = connection_curve_points(from, to, lane * zoom, link.from == link.to);
             Some((index, polyline_distance(pointer, &points)))
         })
         .min_by(|left, right| left.1.total_cmp(&right.1))
@@ -42990,8 +43096,8 @@ mod tests {
     fn connection_curve_has_finite_endpoints_and_bends_for_parallel_lanes() {
         let start = egui::pos2(40.0, 70.0);
         let end = egui::pos2(240.0, 170.0);
-        let center = super::connection_curve_points(start, end, 0.0);
-        let upper_lane = super::connection_curve_points(start, end, 12.0);
+        let center = super::connection_curve_points(start, end, 0.0, false);
+        let upper_lane = super::connection_curve_points(start, end, 12.0, false);
         assert_eq!(center.first(), Some(&start));
         assert_eq!(center.last(), Some(&end));
         assert_eq!(upper_lane.first(), Some(&start));
@@ -43067,7 +43173,7 @@ mod tests {
         let loop_lane = lanes[loop_index];
         assert!(loop_lane.is_finite() && loop_lane > 0.0);
         let loop_start = egui::pos2(100.0, 120.0);
-        let loop_points = super::connection_curve_points(loop_start, loop_start, loop_lane);
+        let loop_points = super::connection_curve_points(loop_start, loop_start, loop_lane, true);
         assert_eq!(loop_points.first(), Some(&loop_start));
         assert_eq!(loop_points.last(), Some(&loop_start));
         assert!(
@@ -43079,6 +43185,78 @@ mod tests {
             loop_points
                 .iter()
                 .any(|point| point.distance(loop_start) > 1.0)
+        );
+        let highest_loop_point = loop_points
+            .iter()
+            .map(|point| point.y)
+            .fold(f32::INFINITY, f32::min);
+        assert!(highest_loop_point < loop_start.y - 50.0);
+
+        let coincident_distinct_route =
+            super::connection_curve_points(loop_start, loop_start, loop_lane, false);
+        assert_ne!(loop_points[8], coincident_distinct_route[8]);
+        assert!(coincident_distinct_route[8].x > loop_start.x);
+
+        for (route, is_self_loop) in [(&loop_points, true), (&coincident_distinct_route, false)] {
+            let label_center =
+                super::connection_label_position(route, is_self_loop, loop_lane, 1.0);
+            let label_bounds = egui::Rect::from_center_size(label_center, egui::vec2(110.0, 18.0));
+            assert!(route.iter().all(|point| !label_bounds.contains(*point)));
+        }
+
+        let mut coincident_link = case.links[loop_index].clone();
+        coincident_link.from = case.entities[0].id;
+        coincident_link.to = case.entities[1].id;
+        let coincident_position = egui::pos2(600.0, 600.0);
+        let coincident_positions = std::collections::HashMap::from([
+            (coincident_link.from, coincident_position),
+            (coincident_link.to, coincident_position),
+        ]);
+        let coincident_lane = [18.0];
+        let coincident_points = super::connection_curve_points(
+            coincident_position,
+            coincident_position,
+            coincident_lane[0],
+            false,
+        );
+        assert_eq!(
+            super::nearest_link_index_at_position(
+                &[coincident_link],
+                &coincident_positions,
+                &coincident_lane,
+                coincident_points[8],
+                1.0,
+                22.0,
+            ),
+            Some(0),
+            "distinct coincident endpoints remain a visible, selectable non-self relationship"
+        );
+
+        let (arrow_tip, arrow_tangent) =
+            super::connection_arrowhead(&loop_points, true, 1.0).unwrap();
+        assert!(loop_points.contains(&arrow_tip));
+        assert!(arrow_tangent.x.is_finite() && arrow_tangent.y.is_finite());
+        assert!((arrow_tangent.length() - 1.0).abs() < 0.001);
+
+        let mut entity_positions: std::collections::HashMap<Uuid, egui::Pos2> = case
+            .entities
+            .iter()
+            .enumerate()
+            .map(|(index, entity)| (entity.id, egui::pos2(1000.0 + index as f32 * 300.0, 1000.0)))
+            .collect();
+        entity_positions.insert(case.links[loop_index].from, loop_start);
+        let pointer = loop_points[12];
+        assert_eq!(
+            super::nearest_link_index_at_position(
+                &case.links,
+                &entity_positions,
+                &lanes,
+                pointer,
+                1.0,
+                22.0,
+            ),
+            Some(loop_index),
+            "pointer on the self-loop route selects its exact relationship record"
         );
     }
 
@@ -43114,7 +43292,8 @@ mod tests {
             } else {
                 (forward_start, forward_end)
             };
-            let mut points = super::connection_curve_points(start, end, lanes[index]);
+            let mut points =
+                super::connection_curve_points(start, end, lanes[index], link.from == link.to);
             if is_reversed {
                 points.reverse();
             }
@@ -43152,6 +43331,7 @@ mod tests {
                 entity_positions[&link.from],
                 entity_positions[&link.to],
                 lanes[index],
+                link.from == link.to,
             );
             let pointer = points[points.len() / 2];
             assert_eq!(
