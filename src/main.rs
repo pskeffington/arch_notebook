@@ -22832,6 +22832,17 @@ impl eframe::App for App {
                         let center=|e:&Entity|{let base=egui::pos2(rect.left()+e.x*rect.width(),rect.top()+e.y*rect.height());rect.center()+(base-rect.center())*chart_zoom+chart_pan};
                         let chart_prepare_started = Instant::now();
                         let link_lanes = link_lane_offsets(&self.case);
+                        let entity_positions: HashMap<Uuid, egui::Pos2> = self
+                            .case
+                            .entities
+                            .iter()
+                            .map(|entity| (entity.id, center(entity)))
+                            .collect();
+                        let route_lanes = geometric_link_lane_offsets(
+                            &self.case,
+                            &entity_positions,
+                            &link_lanes,
+                        );
                         let entity_indices: HashMap<Uuid, usize> = self
                             .case
                             .entities
@@ -22978,7 +22989,9 @@ impl eframe::App for App {
                             {
                                 let a = &self.case.entities[a_index];
                                 let b = &self.case.entities[b_index];
-                                let ca=center(a);let cb=center(b);let in_path=path_link_indices.contains(&link_index);let in_source=self.sql_source_focus.as_deref()==link.ingest_source.as_deref();let in_group=self.chart_focus_group.as_ref().is_some_and(|group|group.contains(&link.from)&&group.contains(&link.to));let in_time=timeline_range.is_none_or(|(start,end)|parse_iso_date_ordinal(&link.date).is_some_and(|date|(start..=end).contains(&date)));let col=if self.selected_link==Some(link_index){cyan}else if !in_time{egui::Color32::from_rgb(24,35,43)}else if in_path{egui::Color32::from_rgb(236,174,83)}else if in_source{egui::Color32::from_rgb(91,190,178)}else if in_group{egui::Color32::from_rgb(161,132,218)}else if has_source_focus||has_group_focus{egui::Color32::from_rgb(35,52,63)}else{chart_conditional_attribute_color(&link.attributes, &self.case.labels).map_or_else(||egui::Color32::from_rgb(72,104,120),|color|egui::Color32::from_rgb(color[0],color[1],color[2]))};
+                                let ca = entity_positions[&a.id];
+                                let cb = entity_positions[&b.id];
+                                let in_path=path_link_indices.contains(&link_index);let in_source=self.sql_source_focus.as_deref()==link.ingest_source.as_deref();let in_group=self.chart_focus_group.as_ref().is_some_and(|group|group.contains(&link.from)&&group.contains(&link.to));let in_time=timeline_range.is_none_or(|(start,end)|parse_iso_date_ordinal(&link.date).is_some_and(|date|(start..=end).contains(&date)));let col=if self.selected_link==Some(link_index){cyan}else if !in_time{egui::Color32::from_rgb(24,35,43)}else if in_path{egui::Color32::from_rgb(236,174,83)}else if in_source{egui::Color32::from_rgb(91,190,178)}else if in_group{egui::Color32::from_rgb(161,132,218)}else if has_source_focus||has_group_focus{egui::Color32::from_rgb(35,52,63)}else{chart_conditional_attribute_color(&link.attributes, &self.case.labels).map_or_else(||egui::Color32::from_rgb(72,104,120),|color|egui::Color32::from_rgb(color[0],color[1],color[2]))};
                                 let conditional_line_width = chart_conditional_attribute_line_width(
                                     &link.attributes,
                                     &self.case.labels,
@@ -22986,7 +22999,7 @@ impl eframe::App for App {
                                 let points = connection_curve_points(
                                     ca,
                                     cb,
-                                    link_lanes[link_index] * self.chart_zoom,
+                                    route_lanes[link_index] * self.chart_zoom,
                                     link.from == link.to,
                                 );
                                 for (segment_index, segment) in points.windows(2).enumerate() {
@@ -23052,7 +23065,7 @@ impl eframe::App for App {
                                 let mid = connection_label_position(
                                     &points,
                                     link.from == link.to,
-                                    link_lanes[link_index] * self.chart_zoom,
+                                    route_lanes[link_index] * self.chart_zoom,
                                     self.chart_zoom,
                                 );
                                 let label_rect = egui::Rect::from_center_size(
@@ -23523,6 +23536,17 @@ impl eframe::App for App {
                                 self.clear_chart_entity_selection();
                             } else {
                                 let lanes = link_lane_offsets(&self.case);
+                                let positions: HashMap<Uuid, egui::Pos2> = self
+                                    .case
+                                    .entities
+                                    .iter()
+                                    .map(|entity| (entity.id, center(entity)))
+                                    .collect();
+                                let route_lanes = geometric_link_lane_offsets(
+                                    &self.case,
+                                    &positions,
+                                    &lanes,
+                                );
                                 let mut nearby_links: Vec<(usize, f32)> = self
                                     .case
                                     .links
@@ -23537,10 +23561,12 @@ impl eframe::App for App {
                                             .case
                                             .entities
                                             .get(*entity_indices.get(&link.to)?)?;
+                                        let from_pos = positions[&from.id];
+                                        let to_pos = positions[&to.id];
                                         let points = connection_curve_points(
-                                            center(from),
-                                            center(to),
-                                            lanes[index] * self.chart_zoom,
+                                            from_pos,
+                                            to_pos,
+                                            route_lanes[index] * self.chart_zoom,
                                             link.from == link.to,
                                         );
                                         Some((index, polyline_distance(pos, &points)))
@@ -23748,7 +23774,7 @@ impl eframe::App for App {
                                     if let Some(index) = nearest_link_index_at_position(
                                         &self.case.links,
                                         &entity_positions,
-                                        &link_lanes,
+                                        &route_lanes,
                                         pos,
                                         self.chart_zoom,
                                         22.0 * self.chart_zoom,
@@ -27507,6 +27533,75 @@ fn link_lane_offsets(case: &CaseFile) -> Vec<f32> {
             } else {
                 -canonical_lane_offset
             };
+        }
+    }
+    offsets
+}
+
+fn geometric_link_lane_offsets(
+    case: &CaseFile,
+    entity_positions: &HashMap<Uuid, egui::Pos2>,
+    ordinary_lanes: &[f32],
+) -> Vec<f32> {
+    let coordinate_key = |value: f32| if value == 0.0 { 0 } else { value.to_bits() };
+    let point_key = |point: egui::Pos2| (coordinate_key(point.x), coordinate_key(point.y));
+    let mut groups: HashMap<((u32, u32), (u32, u32)), Vec<usize>> = HashMap::new();
+    for (index, link) in case.links.iter().enumerate() {
+        let (Some(start), Some(end)) = (
+            entity_positions.get(&link.from),
+            entity_positions.get(&link.to),
+        ) else {
+            continue;
+        };
+        let start_key = point_key(*start);
+        let end_key = point_key(*end);
+        let pair_key = if start_key <= end_key {
+            (start_key, end_key)
+        } else {
+            (end_key, start_key)
+        };
+        groups.entry(pair_key).or_default().push(index);
+    }
+
+    let mut offsets = ordinary_lanes.to_vec();
+    for ((first_point, second_point), indices) in &mut groups {
+        if indices.len() < 2 {
+            continue;
+        }
+        indices.sort_by(|left, right| {
+            let left = &case.links[*left];
+            let right = &case.links[*right];
+            left.from
+                .cmp(&right.from)
+                .then_with(|| left.to.cmp(&right.to))
+                .then_with(|| left.label.cmp(&right.label))
+                .then_with(|| left.date.cmp(&right.date))
+                .then_with(|| left.connection_id.cmp(&right.connection_id))
+                .then_with(|| left.source_reference.cmp(&right.source_reference))
+                .then_with(|| left.notes.cmp(&right.notes))
+                .then_with(|| left.confidence.cmp(&right.confidence))
+                .then_with(|| left.directed.cmp(&right.directed))
+                .then_with(|| left.attributes.cmp(&right.attributes))
+                .then_with(|| left.ingest_source.cmp(&right.ingest_source))
+        });
+        if first_point == second_point {
+            for (lane, index) in indices.iter().enumerate() {
+                let magnitude = (lane as f32 + 1.0) * 18.0;
+                offsets[*index] = if lane % 2 == 0 { magnitude } else { -magnitude };
+            }
+        } else {
+            for (lane, index) in indices.iter().enumerate() {
+                let canonical_lane = (lane as f32 - (indices.len() - 1) as f32 / 2.0) * 18.0;
+                let link = &case.links[*index];
+                let from_key = entity_positions
+                    .get(&link.from)
+                    .map(|point| point_key(*point));
+                offsets[*index] = if from_key == Some(*first_point) {
+                    canonical_lane
+                } else {
+                    -canonical_lane
+                };
+            }
         }
     }
     offsets
@@ -43245,12 +43340,13 @@ mod tests {
             .map(|(index, entity)| (entity.id, egui::pos2(1000.0 + index as f32 * 300.0, 1000.0)))
             .collect();
         entity_positions.insert(case.links[loop_index].from, loop_start);
+        let route_lanes = super::geometric_link_lane_offsets(&case, &entity_positions, &lanes);
         let pointer = loop_points[12];
         assert_eq!(
             super::nearest_link_index_at_position(
                 &case.links,
                 &entity_positions,
-                &lanes,
+                &route_lanes,
                 pointer,
                 1.0,
                 22.0,
@@ -43258,6 +43354,104 @@ mod tests {
             Some(loop_index),
             "pointer on the self-loop route selects its exact relationship record"
         );
+    }
+
+    #[test]
+    fn coincident_position_links_get_distinct_routes_and_exact_picking() {
+        let mut entities = (0..8)
+            .map(|index| layout_entity(&format!("Co-located {index}"), "PERSON", false))
+            .collect::<Vec<_>>();
+        for (index, entity) in entities.iter_mut().enumerate() {
+            entity.id = Uuid::from_u128(index as u128 + 1);
+        }
+        let link = |from, to, connection_id: &str| super::Link {
+            from,
+            to,
+            connection_id: connection_id.into(),
+            label: "CONTACT".into(),
+            date: String::new(),
+            confidence: 2,
+            directed: true,
+            notes: String::new(),
+            source_notes: String::new(),
+            source_reference: String::new(),
+            ingest_source: None,
+            attributes: Vec::new(),
+        };
+        let mut case = super::demo_case();
+        case.entities = entities;
+        case.links = vec![
+            link(Uuid::from_u128(1), Uuid::from_u128(2), "pair-a-forward"),
+            link(Uuid::from_u128(2), Uuid::from_u128(1), "pair-a-reverse"),
+            link(Uuid::from_u128(3), Uuid::from_u128(4), "pair-b-forward"),
+            link(Uuid::from_u128(4), Uuid::from_u128(3), "pair-b-reverse"),
+            link(Uuid::from_u128(5), Uuid::from_u128(5), "self"),
+            link(
+                Uuid::from_u128(5),
+                Uuid::from_u128(6),
+                "coincident-a-forward",
+            ),
+            link(
+                Uuid::from_u128(6),
+                Uuid::from_u128(5),
+                "coincident-a-reverse",
+            ),
+            link(
+                Uuid::from_u128(7),
+                Uuid::from_u128(8),
+                "coincident-b-forward",
+            ),
+            link(
+                Uuid::from_u128(8),
+                Uuid::from_u128(7),
+                "coincident-b-reverse",
+            ),
+        ];
+        let positions = std::collections::HashMap::from([
+            (Uuid::from_u128(1), egui::pos2(300.0, 300.0)),
+            (Uuid::from_u128(2), egui::pos2(600.0, 400.0)),
+            (Uuid::from_u128(3), egui::pos2(300.0, 300.0)),
+            (Uuid::from_u128(4), egui::pos2(600.0, 400.0)),
+            (Uuid::from_u128(5), egui::pos2(900.0, 500.0)),
+            (Uuid::from_u128(6), egui::pos2(900.0, 500.0)),
+            (Uuid::from_u128(7), egui::pos2(900.0, 500.0)),
+            (Uuid::from_u128(8), egui::pos2(900.0, 500.0)),
+        ]);
+        let lanes = super::link_lane_offsets(&case);
+        let route_lanes = super::geometric_link_lane_offsets(&case, &positions, &lanes);
+        let routes = case
+            .links
+            .iter()
+            .enumerate()
+            .map(|(index, link)| {
+                let start = positions[&link.from];
+                let end = positions[&link.to];
+                super::connection_curve_points(start, end, route_lanes[index], link.from == link.to)
+            })
+            .collect::<Vec<_>>();
+
+        for right in 0..routes.len() {
+            for left in 0..right {
+                assert_ne!(
+                    routes[left], routes[right],
+                    "co-located link routes {left} and {right} must not overlap"
+                );
+            }
+        }
+        for (index, route) in routes.iter().enumerate() {
+            assert_eq!(
+                super::nearest_link_index_at_position(
+                    &case.links,
+                    &positions,
+                    &route_lanes,
+                    route[8],
+                    1.0,
+                    0.5,
+                ),
+                Some(index),
+                "pointer on co-located route {index} selects that relationship record"
+            );
+        }
     }
 
     #[test]
@@ -43323,6 +43517,7 @@ mod tests {
             .collect();
         entity_positions.insert(first_link.from, egui::pos2(100.0, 100.0));
         entity_positions.insert(first_link.to, egui::pos2(300.0, 200.0));
+        let route_lanes = super::geometric_link_lane_offsets(&case, &entity_positions, &lanes);
         for (index, link) in case.links.iter().enumerate().filter(|(_, link)| {
             (link.from == first_link.from && link.to == first_link.to)
                 || (link.from == first_link.to && link.to == first_link.from)
@@ -43330,7 +43525,7 @@ mod tests {
             let points = super::connection_curve_points(
                 entity_positions[&link.from],
                 entity_positions[&link.to],
-                lanes[index],
+                route_lanes[index],
                 link.from == link.to,
             );
             let pointer = points[points.len() / 2];
@@ -43338,7 +43533,7 @@ mod tests {
                 super::nearest_link_index_at_position(
                     &case.links,
                     &entity_positions,
-                    &lanes,
+                    &route_lanes,
                     pointer,
                     1.0,
                     22.0,
