@@ -1,5 +1,24 @@
 # Local build acceptance record
 
+## Origin-centered contact groups and proxy ranking — 2026-11-26
+
+**Task / owner:** Combine selected-origin hop layers with contact groups, group-to-group record summaries, and direct cross-group proxy ranking; implementation session.
+**Repository / branch:** `/home/sysadmin/github/arch_notebook` / `codex/ui-00-chart-baseline`.
+**Baseline:** `941373e3b8fa537c7ee922c14ab0435e488a3009`.
+**Product source commit:** `6b59e32524c1ee487394ca1235cef4716d8937ae`.
+**Release binary SHA-256:** `bd80d18f428655b095484d2f84ddd29ce5c4d369b6169e77d6040766b11d6309`.
+**Changed paths:** `src/proximity.rs`, `src/main.rs`, `docs/notebook-workflows.md`, `docs/analyst-notebook-parity.md`.
+
+| Gate | Result | Evidence and limits |
+| --- | --- | --- |
+| Formatting, diff validation, full Rust suite | PASS | Formatting and diff checks exited 0; 50 tests passed, 0 failed. |
+| Locked offline compile and optimized release build | PASS | Both exited 0. |
+| GitHub Actions for source commit | PENDING | [Run 45909562127](https://github.com/pskeffington/arch_notebook/actions/runs/45909562127) was dispatched for the exact candidate SHA. |
+| Current-candidate native chart review | BLOCKED | Wayland launch failed with `NoCompositor`; no visual or pointer acceptance is claimed. |
+| IBM application compatibility | NOT TESTED | No IBM application or XSD was used. |
+
+See [origin-centered proximity groups evidence](evidence/vector-ui/PROXIMITY-GROUPS-linux-6b59e32.md) for the method, exact commands, fixture and limits. The group roll-up is in the Analysis pane; the chart continues to draw its original entity and relationship records.
+
 ## UI-01 chart entity-card picking — 2026-11-26
 
 **Task / owner:** Align entity picking and viewport transforms with the visible chart cards; implementation session.
