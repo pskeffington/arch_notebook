@@ -14002,7 +14002,7 @@ fn network_analysis_method_card_text(
          Dates: {} recognized by the chart timeline parser; {} blank; {} not recognized.\n\
          Components and articulation points: direction, relationship type, date, and confidence are ignored; self-links and records with missing endpoints are ignored; parallel records collapse to one neighboring entity for topology. Component analysis includes singleton entities, though the sidebar lists only groups with more than one entity.\n\
          Geodesic layers: direction, relationship type, date, and confidence are ignored; each traversable neighboring pair is one unweighted hop; self-links, missing endpoints, and parallel records do not add distance.\n\
-         Shortest path: direction is {}; date order is {}; active timeline range is {}; relationship type and confidence are ignored; every eligible relationship record costs one hop. When date order or a timeline range is applied, records without a timeline-recognized date are excluded.",
+         Shortest path: direction is {}; date order is {}; active timeline range is {}; relationship type and confidence are ignored; every eligible relationship record with both endpoints present costs one hop; records with a missing endpoint are ignored. When date order or a timeline range is applied, records without a timeline-recognized date are excluded.",
         card.entity_count,
         card.isolate_count,
         card.relationship_record_count,
@@ -14102,16 +14102,19 @@ fn analysis_packet_svg(
         let to = entities[entity_index[&link.to]];
         let (x1, y1) = point(from);
         let (x2, y2) = point(to);
-        let dx = x2 - x1;
-        let dy = y2 - y1;
-        let length = (dx * dx + dy * dy).sqrt().max(1.0);
         let key = pair_key(link);
         let lane = pair_lanes.entry(key).or_insert(0usize);
-        let offset =
-            ((*lane as f32 - (pair_counts[&key] as f32 - 1.0) / 2.0) * 7.0).clamp(-24.0, 24.0);
+        let offset = (*lane as f32 - (pair_counts[&key] as f32 - 1.0) / 2.0) * 7.0;
         *lane += 1;
-        let (sx, sy) = (x1 + offset * dy / length, y1 - offset * dx / length);
-        let (tx, ty) = (x2 + offset * dy / length, y2 - offset * dx / length);
+        let (pair_from, pair_to) = key;
+        let (pair_x1, pair_y1) = point(entities[entity_index[&pair_from]]);
+        let (pair_x2, pair_y2) = point(entities[entity_index[&pair_to]]);
+        let pair_dx = pair_x2 - pair_x1;
+        let pair_dy = pair_y2 - pair_y1;
+        let pair_length = (pair_dx * pair_dx + pair_dy * pair_dy).sqrt().max(1.0);
+        let normal = (pair_dy / pair_length, -pair_dx / pair_length);
+        let (sx, sy) = (x1 + offset * normal.0, y1 + offset * normal.1);
+        let (tx, ty) = (x2 + offset * normal.0, y2 + offset * normal.1);
         let label = if disclosure.relationship_labels {
             format!(" · {}", link.label)
         } else {
@@ -14129,13 +14132,18 @@ fn analysis_packet_svg(
             ""
         };
         let edge = if link.from == link.to {
-            let loop_direction = if x1 > WIDTH as f32 - 60.0 { -1.0 } else { 1.0 };
+            let loop_direction = if offset < 0.0 || (offset == 0.0 && x1 > WIDTH as f32 - 60.0) {
+                -1.0
+            } else {
+                1.0
+            };
+            let loop_radius = 30.0 + offset.abs();
             format!(
                 "<path d=\"M {x1:.2} {y1:.2} C {:.2} {:.2}, {:.2} {:.2}, {:.2} {:.2}\" stroke=\"#46545f\" stroke-width=\"1.5\" fill=\"none\"{marker} />",
-                x1 + 42.0 * loop_direction,
-                y1 - 36.0,
-                x1 + 42.0 * loop_direction,
-                y1 + 36.0,
+                x1 + loop_radius * loop_direction,
+                y1 - loop_radius * 0.85,
+                x1 + loop_radius * loop_direction,
+                y1 + loop_radius * 0.85,
                 x1 + 7.0 * loop_direction,
                 y1 + 7.0
             )
@@ -14221,7 +14229,7 @@ fn analysis_packet_report(
         methods = methods.replace("Relationship type", "relationship type");
     }
     format!(
-        "# Analyst finding packet\n\n{}\n\n> Simplified SVG overview of the full persisted chart. This export does not apply unsaved selection, search, or timeline filters. Stored chart positions are for layout only; visual distance is not a measure.\n\n> Privacy: topology and aggregate counts may still identify people even when labels are pseudonymous. Review locally before sharing.\n\n## Export options\n\n- Names: {}\n- Relationship labels: {}\n- IDs: {}\n- Evidence references: {}\n\n## Analysis method card\n\n{}\n\n## Analyst-authored fields\n\n### Question\n\n\n### Findings (software generated no findings)\n\n\n### Evidence selected/references\n\n\n### Limitations and alternative explanations\n\n\n### Audience and privacy review\n\n\n### Analyst / date / version\n\n\n",
+        "# Analyst finding packet\n\n{}\n\n> Simplified SVG overview of all persisted entities and relationship records; standalone chart labels are omitted. This export does not apply unsaved selection, search, or timeline filters. Stored chart positions are for layout only; visual distance is not a measure.\n\n> Privacy: topology and aggregate counts may still identify people even when labels are pseudonymous. Review locally before sharing.\n\n## Export options\n\n- Names: {}\n- Relationship labels: {}\n- IDs: {}\n- Evidence references: {}\n\n## Analysis method card\n\n{}\n\n## Analyst-authored fields\n\n### Question\n\n\n### Findings (software generated no findings)\n\n\n### Evidence selected/references\n\n\n### Limitations and alternative explanations\n\n\n### Audience and privacy review\n\n\n### Analyst / date / version\n\n\n",
         if disclosure.names {
             format!("Chart: {}", escape_markdown_inline(chart_title))
         } else {
@@ -17145,7 +17153,11 @@ fn shortest_path(
         return None;
     }
     let mut adjacency: HashMap<Uuid, Vec<(Uuid, Option<i64>, usize)>> = HashMap::new();
+    let entity_ids: HashSet<Uuid> = case.entities.iter().map(|entity| entity.id).collect();
     for (link_index, link) in case.links.iter().enumerate() {
+        if !entity_ids.contains(&link.from) || !entity_ids.contains(&link.to) {
+            continue;
+        }
         let date = if time_flow != PathTimeFlow::Any || timeline_range.is_some() {
             let Some(date) = parse_iso_date_ordinal(&link.date) else {
                 continue;
@@ -42848,6 +42860,7 @@ mod tests {
         assert!(copied.contains("direction is respected for directed records"));
         assert!(copied.contains("date order is forward date order"));
         assert!(copied.contains("active timeline range is applied"));
+        assert!(copied.contains("records with a missing endpoint are ignored"));
         assert!(
             copied.contains("2 recognized by the chart timeline parser; 1 blank; 2 not recognized")
         );
@@ -42867,6 +42880,45 @@ mod tests {
             serde_json::to_value(&case).expect("serialize unchanged fictional chart"),
             case_before_copy,
             "building and formatting the card must not mutate case data"
+        );
+    }
+
+    #[test]
+    fn shortest_path_ignores_relationships_with_missing_endpoints() {
+        let mut case = super::demo_case();
+        let entities = vec![
+            layout_entity("Start", "PERSON", false),
+            layout_entity("Goal", "ORGANIZATION", false),
+        ];
+        let start = entities[0].id;
+        let goal = entities[1].id;
+        let missing = Uuid::new_v4();
+        case.entities = entities;
+        let link = |from, to| super::Link {
+            from,
+            to,
+            connection_id: Uuid::new_v4().to_string(),
+            label: "CONTACTS".into(),
+            date: String::new(),
+            confidence: 2,
+            directed: true,
+            notes: String::new(),
+            source_notes: String::new(),
+            source_reference: String::new(),
+            ingest_source: None,
+            attributes: Vec::new(),
+        };
+        case.links = vec![link(start, missing), link(missing, goal)];
+
+        assert!(
+            super::shortest_path(&case, start, goal, false, super::PathTimeFlow::Any, None,)
+                .is_none()
+        );
+
+        case.links.push(link(start, goal));
+        assert_eq!(
+            super::shortest_path(&case, start, goal, false, super::PathTimeFlow::Any, None,),
+            Some((vec![start, goal], vec![2])),
         );
     }
 
@@ -43157,6 +43209,79 @@ mod tests {
         );
         assert!(report.contains("Findings (software generated no findings)"));
         assert!(report.contains("topology and aggregate counts may still identify people"));
+    }
+
+    #[test]
+    fn analysis_packet_routes_reversed_and_high_multiplicity_records_distinctly() {
+        let mut case = super::demo_case();
+        let mut first = layout_entity("First", "PERSON", false);
+        let mut second = layout_entity("Second", "ORGANIZATION", false);
+        first.x = 0.32;
+        first.y = 0.48;
+        second.x = 0.68;
+        second.y = 0.48;
+        let first_id = first.id;
+        let second_id = second.id;
+        case.entities = vec![first, second];
+        case.links = (0..13)
+            .map(|index| {
+                let reversed = index % 3 != 2;
+                super::Link {
+                    from: if reversed { second_id } else { first_id },
+                    to: if reversed { first_id } else { second_id },
+                    connection_id: format!("ROUTE-{index:02}"),
+                    label: "CONTACTS".into(),
+                    date: String::new(),
+                    confidence: 2,
+                    directed: index % 3 != 1,
+                    notes: String::new(),
+                    source_notes: String::new(),
+                    source_reference: String::new(),
+                    ingest_source: None,
+                    attributes: Vec::new(),
+                }
+            })
+            .collect();
+
+        let svg = super::analysis_packet_svg(
+            &case,
+            super::AnalysisPacketDisclosure {
+                ids: true,
+                ..Default::default()
+            },
+        )
+        .expect("render all parallel relationship records");
+        let edge_groups = svg
+            .lines()
+            .filter(|line| line.contains("data-record=") && line.contains("<line x1="))
+            .collect::<Vec<_>>();
+        assert_eq!(edge_groups.len(), 13);
+        for index in 0..13 {
+            assert!(svg.contains(&format!("data-record=\"ROUTE-{index:02}\"")));
+        }
+
+        let coordinate = |line: &str, key: &str| -> f32 {
+            let attribute = format!("{key}=\"");
+            let start = line.find(&attribute).expect("line coordinate attribute") + attribute.len();
+            let end = line[start..].find('"').expect("line coordinate terminator") + start;
+            line[start..end].parse().expect("numeric SVG coordinate")
+        };
+        let mut geometries = std::collections::HashSet::new();
+        for line in edge_groups {
+            let first = (coordinate(line, "x1"), coordinate(line, "y1"));
+            let second = (coordinate(line, "x2"), coordinate(line, "y2"));
+            let (start, end) = if first.0 < second.0 || (first.0 == second.0 && first.1 <= second.1)
+            {
+                (first, second)
+            } else {
+                (second, first)
+            };
+            geometries.insert(format!(
+                "{:.2},{:.2}|{:.2},{:.2}",
+                start.0, start.1, end.0, end.1
+            ));
+        }
+        assert_eq!(geometries.len(), 13, "each record must have its own lane");
     }
 
     #[test]

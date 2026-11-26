@@ -1,0 +1,68 @@
+{
+  "binary": "/tmp/arch-notebook-target/release/arch-notebook",
+  "binary_sha256": "261e6cf830bf06f6a6efc9f58791d4836b71859e4d9b5228f64e711b6672646d",
+  "case_copy_sha256": "56934f1677df742f5cd73c0db7ea448461089a8209bf760808dffb60089891a5",
+  "case_copy_unchanged": true,
+  "default_packet": {
+    "entities": 8,
+    "ok": true,
+    "options": {
+      "evidence_references": false,
+      "ids": false,
+      "names": false,
+      "relationship_labels": false
+    },
+    "output": "/tmp/arch-notebook-packet-acceptance-20261126-current/default-packet",
+    "relationships": 8,
+    "schema_version": 1,
+    "source_sha256": "56934f1677df742f5cd73c0db7ea448461089a8209bf760808dffb60089891a5"
+  },
+  "default_privacy": "Names, relationship labels, IDs, source references, and chart title omitted.",
+  "disclosed_packet": {
+    "entities": 8,
+    "ok": true,
+    "options": {
+      "evidence_references": true,
+      "ids": true,
+      "names": true,
+      "relationship_labels": true
+    },
+    "output": "/tmp/arch-notebook-packet-acceptance-20261126-current/disclosed-packet",
+    "relationships": 8,
+    "schema_version": 1,
+    "source_sha256": "56934f1677df742f5cd73c0db7ea448461089a8209bf760808dffb60089891a5"
+  },
+  "duplicate_json_created_no_output": true,
+  "duplicate_json_exit_code": 2,
+  "existing_destination_exit_code": 1,
+  "existing_destination_preserved": true,
+  "fixture": "/home/sysadmin/github/arch_notebook/fixtures/chart/correctness.case.json",
+  "fixture_sha256": "3170844fdc9db636dcb8dc9505075e486ec060790692bf6dc76cc9b32afe7f5f",
+  "fixture_unchanged": true,
+  "platform_scope": "Linux CLI only; non-Linux atomic publication currently reports unsupported.",
+  "result": "PASS",
+  "selected_chart_packet": {
+    "entities": 1,
+    "ok": true,
+    "options": {
+      "evidence_references": false,
+      "ids": false,
+      "names": true,
+      "relationship_labels": false
+    },
+    "output": "/tmp/arch-notebook-packet-acceptance-20261126-current/selected-chart-packet",
+    "relationships": 0,
+    "schema_version": 1,
+    "source_sha256": "56934f1677df742f5cd73c0db7ea448461089a8209bf760808dffb60089891a5"
+  },
+  "svg_direction_and_self_loop_markers": {
+    "directed_expected": 5,
+    "directed_rendered": 5,
+    "legend": "PASS",
+    "self_loops_expected": 1,
+    "self_loops_rendered": 1
+  },
+  "svg_relationship_records": 8,
+  "svg_xml_parse": "PASS",
+  "unix_private_permissions": "PASS"
+}
