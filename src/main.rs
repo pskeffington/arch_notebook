@@ -42437,8 +42437,10 @@ mod tests {
     use super::{
         AnalysisPacketDisclosure, App, AutomationJob, AutomationParameterOverrides,
         AutomationWorkerResult, CaseFile, ChartDocument, ConnectionFact, ConnectionSnapshot,
-        Entity, EntityRepresentation, Uuid, canonical_connection, compare_snapshots,
-        entity_type_layout_positions, export_analysis_packet_cli, grid_layout_dimensions,
+        Entity, EntityRepresentation, ImportFilterOperator, ImportTransformOperation,
+        ImportValueTransform, Uuid, apply_import_value_transforms, canonical_connection,
+        compare_snapshots, compile_import_value_transforms, entity_type_layout_positions,
+        export_analysis_packet_cli, grid_layout_dimensions, import_filter_matches,
     };
 
     fn layout_entity(name: &str, kind: &str, position_locked: bool) -> Entity {
@@ -42459,6 +42461,94 @@ mod tests {
             position_locked,
             color: [55, 128, 162],
         }
+    }
+
+    #[test]
+    fn delimited_import_transforms_values_before_applying_row_filters() {
+        let transforms = vec![ImportValueTransform {
+            column: "status".into(),
+            operation: ImportTransformOperation::ReplaceExact,
+            find: "PENDING".into(),
+            replace: "review".into(),
+        }];
+        let compiled = compile_import_value_transforms(["name", "status"], &transforms)
+            .expect("valid mapped transform");
+        let mut values = vec!["Analyst A".to_owned(), "PENDING".to_owned()];
+        apply_import_value_transforms(&mut values, &compiled).expect("valid row values");
+        assert_eq!(values[1], "review");
+        assert!(import_filter_matches(
+            &values[1],
+            ImportFilterOperator::Equals,
+            "review"
+        ));
+        assert!(!import_filter_matches(
+            &values[1],
+            ImportFilterOperator::Equals,
+            "PENDING"
+        ));
+    }
+
+    #[test]
+    fn delimited_import_transform_pipeline_is_ordered_and_filter_operators_are_explicit() {
+        let transforms = vec![
+            ImportValueTransform {
+                column: "category".into(),
+                operation: ImportTransformOperation::Replace,
+                find: "Legacy".into(),
+                replace: "Current".into(),
+            },
+            ImportValueTransform {
+                column: "category".into(),
+                operation: ImportTransformOperation::Uppercase,
+                ..ImportValueTransform::default()
+            },
+        ];
+        let compiled = compile_import_value_transforms(["category"], &transforms)
+            .expect("both transforms resolve to the same header");
+        let mut values = vec!["Legacy network".to_owned()];
+        apply_import_value_transforms(&mut values, &compiled).expect("valid row values");
+        assert_eq!(values[0], "CURRENT NETWORK");
+        for (operator, expected, result) in [
+            (ImportFilterOperator::Equals, "CURRENT NETWORK", true),
+            (ImportFilterOperator::Contains, "NETWORK", true),
+            (ImportFilterOperator::IsEmpty, "ignored", false),
+            (ImportFilterOperator::IsNotEmpty, "ignored", true),
+        ] {
+            assert_eq!(
+                import_filter_matches(&values[0], operator, expected),
+                result
+            );
+        }
+        assert!(import_filter_matches(
+            "  ",
+            ImportFilterOperator::IsEmpty,
+            ""
+        ));
+    }
+
+    #[test]
+    fn delimited_import_rejects_incomplete_or_unknown_transform_columns() {
+        let missing_column = vec![ImportValueTransform {
+            operation: ImportTransformOperation::Lowercase,
+            find: "not-empty".into(),
+            ..ImportValueTransform::default()
+        }];
+        assert!(compile_import_value_transforms(["status"], &missing_column).is_err());
+
+        let unknown_column = vec![ImportValueTransform {
+            column: "missing".into(),
+            operation: ImportTransformOperation::Uppercase,
+            ..ImportValueTransform::default()
+        }];
+        assert!(compile_import_value_transforms(["status"], &unknown_column).is_err());
+
+        let replacement_without_search = vec![ImportValueTransform {
+            column: "status".into(),
+            operation: ImportTransformOperation::Replace,
+            replace: "ready".into(),
+            ..ImportValueTransform::default()
+        }];
+        assert!(compile_import_value_transforms(["status"], &replacement_without_search).is_err());
     }
 
     fn sql_lookup_snapshot(
