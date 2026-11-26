@@ -1,7 +1,7 @@
 # UI-00 reversed parallel link route regression
 
 - **Task / owner:** Verify chart lane identity for reversed parallel relationship records / Arch Notebook maintainer
-- **Source commit:** `40b0a728be450c6ff53bb2c89c22c9ade998884f`
+- **Source commit:** `df23448ea19abf96e497dab1d887356d5b09b38e`
 - **Branch:** `codex/ui-00-chart-baseline`
 - **Scope:** Correct a fixture regression that compared route-relative signed lane offsets without accounting for reversed endpoints. The regression now compares sampled rendered curves after normalizing path direction. Production route generation was not changed.
 - **Fixture:** `fixtures/chart/correctness.case.json`, SHA-256 `3170844fdc9db636dcb8dc9505075e486ec060790692bf6dc76cc9b32afe7f5f`.
