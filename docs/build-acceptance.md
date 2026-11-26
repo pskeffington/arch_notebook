@@ -98,6 +98,26 @@ These modified and untracked paths were present during acceptance. The worktree 
 
 No build or test command was run for this documentation-only reconciliation. Next action is to repeat the UI-00 sequence in a stable native desktop session; retain the IBM validation and live scheduler dispatch gates separately.
 
+## Feature-branch increment: aspect-aware entity type layout
+
+**Task / owner:** Improve analyst-facing vector organization; implementation session.
+**Repository / branch:** `/home/sysadmin/github/arch_notebook` / `codex/ui-00-chart-baseline`.
+**Baseline:** `0e54d8d70378a1a9f47f1268f679e381d105e997`.
+**Source commit:** `a09b49c` (`feat: adapt entity clusters to chart canvas`).
+**Changed paths:** `src/main.rs`, `docs/notebook-workflows.md`, `README.md`.
+**Scope:** Place entity-type clusters in a canvas-aspect-aware grid, center sparse cluster rows, preserve deterministic type/name ordering, and leave pinned entity positions unchanged.
+
+| Gate | Result | Evidence and limits |
+| --- | --- | --- |
+| Formatting and diff validation | PASS | `cargo fmt --all -- --check` and `git diff --check` exited 0. |
+| Rust unit tests | PASS | Offline `cargo test` exited 0; 20 passed, 0 failed, 0 ignored, including three entity-type layout regressions. |
+| Offline integration check and release build | PASS | `cargo check --locked --offline` and optimized `cargo build --release --locked --offline` exited 0. |
+| Installed release binary, launcher, and art synchronization | PASS | Installed executable matched release binary SHA-256 `54d57b05cd9ebb66de4b60274fb4062e06a96705f4a68f80eabb7649e249bdb7`; desktop entries validate and match; installed SVG/PNG match repository assets. |
+| Native chart inspection | BLOCKED | Wayland display access is denied in this session; layout appearance, responsiveness, and input remain unverified. UI-00 remains open. |
+| IBM interoperability | NOT IN SCOPE / STILL BLOCKED | This feature does not establish IBM ANX schema or application compatibility. |
+
+See [UI-ENTITY-TYPE-LAYOUT-02 evidence](evidence/vector-ui/UI-ENTITY-TYPE-LAYOUT-02-linux.md) for exact commands, hashes, and limitations. The change is pushed on the feature branch; proceed with native UI-00 interaction review when a compositor session is available.
+
 ## Feature-branch increment: reusable chart templates
 
 **Task / owner:** Continue Analyst's Notebook parity, especially adaptability; orchestrator-owned implementation.
