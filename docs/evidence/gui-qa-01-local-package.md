@@ -8,8 +8,8 @@
 
 ## Candidate artifact
 
-- Package: `/tmp/arch-notebook-gui-qa-final5/arch-notebook-gui-qa-b50269b99b61.tar.gz`
-- SHA-256: `3d719c3cda098c3bf184fdabf84d6420d3709f766c9a529d5f30276408164a57`
+- Package: `/tmp/arch-notebook-gui-qa-final6/arch-notebook-gui-qa-8c08da9285c6.tar.gz`
+- SHA-256: `1d7c305d9c5deecdaa0d1736358957c4152ca068dc65adc781b56a661d5d6b3b`
 - Sidecar verification: `sha256sum -c ...tar.gz.sha256` — **PASS**
 - Included application: `arch-notebook 0.1.0`
 - Fixture: synthetic only, 8 entities and 8 relationships
@@ -25,7 +25,6 @@
 | Qwen privacy self-test | PASS | Offline self-test; no network request |
 | Rust test suite | PASS | `cargo test --locked --offline`; 34 passed, 0 failed |
 | Release build and package integrity | PASS | Locked offline release build; binary, fixture, version, and QA-tool digests verified |
-| Bubblewrap network namespace | BLOCKED | `bwrap: loopback: Failed to create NETLINK_ROUTE socket: Operation not permitted` |
 | Isolated network sandbox | BLOCKED | Bubblewrap cannot configure its network namespace (`NETLINK_ROUTE` permission denied). |
 | GUI launch with host network, Wayland | BLOCKED | `./run.sh --allow-app-network --startup-seconds 2`; Wayland socket reported `NoCompositor`; report: `/tmp/arch-notebook-gui-qa-run-20261126-041136-2/run-report.json` |
 | GUI launch with host network, X11 | BLOCKED | `./run.sh --allow-app-network --display-backend x11 --startup-seconds 2`; XOpenDisplay failed; report: `/tmp/arch-notebook-gui-qa-run-20261126-041246-2/run-report.json` |
