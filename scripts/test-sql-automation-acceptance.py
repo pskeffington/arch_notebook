@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import csv
 import hashlib
 import json
@@ -20,6 +21,140 @@ def sha256(path: Path) -> str:
         for block in iter(lambda: source.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def exercise_batch_resume(binary: Path, source_sql: Path, work: Path, job_template: dict) -> dict:
+    """Prove a partial batch can resume without repeating saved successes."""
+    case_path = work / "resume.case.json"
+    database = work / "resume.sqlite"
+    connection = sqlite3.connect(database)
+    try:
+        connection.executescript(source_sql.read_text(encoding="utf-8"))
+        connection.commit()
+    finally:
+        connection.close()
+    first_job = copy.deepcopy(job_template)
+    first_job.update(
+        id="f5fdc4fd-b23a-4b61-87f1-90a0e13ced01",
+        name="Resume baseline capture",
+        database_path=str(database),
+        enabled=True,
+    )
+    second_job = copy.deepcopy(job_template)
+    second_job.update(
+        id="f5fdc4fd-b23a-4b61-87f1-90a0e13ced02",
+        name="Resume delayed capture",
+        database_path=str(database),
+        series="synthetic-recovery",
+        query=job_template["query"].replace(
+            "connection_observations", "recovery_observations"
+        ),
+        enabled=True,
+    )
+    source_case = {
+        "format_version": 19,
+        "title": "FICTIONAL SQL BATCH RESUME ACCEPTANCE",
+        "description": "Synthetic recovery case; no operational data.",
+        "entities": [],
+        "links": [],
+        "automation_jobs": [first_job, second_job],
+    }
+    case_path.write_text(json.dumps(source_case, indent=2) + "\n", encoding="utf-8")
+    commands: list[dict] = []
+
+    def run(label: str, *arguments: str, expected_exit: int = 0) -> dict:
+        process = subprocess.run(
+            [str(binary), *arguments], text=True, capture_output=True, check=False
+        )
+        record = {
+            "label": label,
+            "exit_code": process.returncode,
+            "expected_exit_code": expected_exit,
+            "stderr": process.stderr,
+        }
+        commands.append(record)
+        if process.returncode != expected_exit:
+            raise RuntimeError(
+                f"{label} exited {process.returncode}; expected {expected_exit}: {process.stderr}"
+            )
+        try:
+            return json.loads(process.stdout)
+        except json.JSONDecodeError as error:
+            raise RuntimeError(f"{label} did not return JSON: {error}") from error
+
+    failed_batch = run(
+        "partial_batch_failure",
+        "--run-enabled-jobs",
+        str(case_path),
+        "--json",
+        expected_exit=1,
+    )
+    batch_id = failed_batch.get("batch_id")
+    if not batch_id or failed_batch.get("passed") != 1 or failed_batch.get("failed") != 1:
+        raise RuntimeError(f"expected one pass and one failure in partial batch: {failed_batch}")
+    failed_case = json.loads(case_path.read_text(encoding="utf-8"))
+    checkpoints = failed_case["automation_batches"][-1]["completed_jobs"]
+    if len(checkpoints) != 1 or checkpoints[0].get("success") is not True:
+        raise RuntimeError(f"expected only the first job to be checkpointed: {checkpoints}")
+    run_ids_before = [record["id"] for record in failed_case["automation_runs"]]
+
+    connection = sqlite3.connect(database)
+    try:
+        connection.execute(
+            "CREATE VIEW recovery_observations AS "
+            "SELECT * FROM connection_observations"
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    resumed = run(
+        "resume_partial_batch",
+        "--run-enabled-jobs",
+        str(case_path),
+        "--resume-batch",
+        batch_id,
+        "--json",
+    )
+    if not resumed.get("ok") or resumed.get("passed") != 2 or resumed.get("skipped") != 1:
+        raise RuntimeError(f"resumed batch did not skip one success and pass both jobs: {resumed}")
+    if len(resumed.get("outcomes", [])) != 1 or len(resumed.get("skipped_jobs", [])) != 1:
+        raise RuntimeError(f"resume did not report one execution and one skip: {resumed}")
+    if resumed["skipped_jobs"][0].get("prior_status") != "PASS":
+        raise RuntimeError("resume did not preserve the prior successful checkpoint")
+    resumed_case = json.loads(case_path.read_text(encoding="utf-8"))
+    if len(resumed_case["automation_runs"]) != len(run_ids_before) + 1:
+        raise RuntimeError("resume reran the successful job or failed to record the repaired job")
+    if resumed_case["automation_runs"][0]["id"] != run_ids_before[0]:
+        raise RuntimeError("resume changed the original successful run identity")
+
+    case_hash_before_mismatch = sha256(case_path)
+    changed_configuration = run(
+        "resume_configuration_mismatch",
+        "--run-enabled-jobs",
+        str(case_path),
+        "--resume-batch",
+        batch_id,
+        "--param",
+        "snapshot_id=text:changed",
+        "--json",
+        expected_exit=1,
+    )
+    if "configuration" not in json.dumps(changed_configuration).lower() and "configuration" not in commands[-1]["stderr"].lower():
+        raise RuntimeError("configuration mismatch was rejected without a useful diagnostic")
+    if sha256(case_path) != case_hash_before_mismatch:
+        raise RuntimeError("rejected resume configuration changed the case file")
+
+    return {
+        "result": "PASS",
+        "batch_id": batch_id,
+        "initial_checkpoints": len(checkpoints),
+        "runs_before_resume": len(run_ids_before),
+        "runs_after_resume": len(resumed_case["automation_runs"]),
+        "resume_skipped_successful_jobs": resumed.get("skipped"),
+        "configuration_mismatch_preserved_case": True,
+        "commands": commands,
+    }
 
 
 def main() -> int:
@@ -618,6 +753,10 @@ def main() -> int:
     if adaptation_history_after_repair.get("total") != 1:
         raise RuntimeError("successful repair removed the historical schema-adaptation failure")
 
+    resume_acceptance = exercise_batch_resume(
+        binary, source_sql, work, jobs[0]
+    )
+
     report = {
         "schema_version": 1,
         "result": "PASS",
@@ -660,6 +799,7 @@ def main() -> int:
             "case_sha256_after_failure": case_after_adaptation_failure,
             "case_sha256_after_repair": sha256(adaptation_case_path),
         },
+        "batch_resume": resume_acceptance,
         "csv_and_tsv_values_match": True,
         "source_unchanged_during_chart_exchange": True,
         "case_unchanged_during_chart_export": True,
