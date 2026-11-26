@@ -13,7 +13,7 @@
 | --- | --- | --- |
 | Formatting, diff validation, full Rust suite | PASS | Formatting and diff checks exited 0; 50 tests passed, 0 failed. |
 | Locked offline compile and optimized release build | PASS | Both exited 0. |
-| GitHub Actions for source commit | PENDING | [Run 45909562127](https://github.com/pskeffington/arch_notebook/actions/runs/45909562127) was dispatched for the exact candidate SHA. |
+| GitHub Actions for source commit | PASS | [Run 45909562127](https://github.com/pskeffington/arch_notebook/actions/runs/45909562127) completed successfully for the exact candidate SHA; Linux test/fixture, both Linux architectures, both macOS architectures, and Arch package jobs passed. Release attachment was skipped because no release was published. |
 | Current-candidate native chart review | BLOCKED | Wayland launch failed with `NoCompositor`; no visual or pointer acceptance is claimed. |
 | IBM application compatibility | NOT TESTED | No IBM application or XSD was used. |
 
