@@ -137,7 +137,14 @@ fn sql_schema_adaptation_reference(error: &str) -> Option<String> {
     .into_iter()
     .find_map(|marker| {
         let start = lowercase.find(marker)? + marker.len();
-        let reference = error.get(start..)?.trim();
+        let reference = error.get(start..)?;
+        let reference_lowercase = reference.to_ascii_lowercase();
+        let context_start = [" in select ", " at offset "]
+            .into_iter()
+            .filter_map(|context| reference_lowercase.find(context))
+            .min()
+            .unwrap_or(reference.len());
+        let reference = reference.get(..context_start)?.trim();
         (!reference.is_empty()).then(|| reference.to_owned())
     })
 }
@@ -41332,6 +41339,23 @@ mod tests {
                 .all(|point| point.x.is_finite() && point.y.is_finite())
         );
         assert_ne!(center[8], upper_lane[8]);
+    }
+
+    #[test]
+    fn schema_adaptation_reference_excludes_wrapped_query_context() {
+        let error = "SQL INGEST FAILED · no such column: event_date in SELECT event_date FROM connection_observations at offset 589";
+        assert_eq!(
+            super::sql_schema_adaptation_kind(error),
+            Some("missing_column")
+        );
+        assert_eq!(
+            super::sql_schema_adaptation_reference(error).as_deref(),
+            Some("event_date")
+        );
+        assert_eq!(
+            super::sql_schema_adaptation_reference("no such table: connection_observations"),
+            Some("connection_observations".to_owned())
+        );
     }
 
     #[test]

@@ -464,6 +464,144 @@ def main() -> int:
     if sha256(case_path) != source_case_hash_before_chart_export:
         raise RuntimeError("chart CSV/TSV export changed the source case")
 
+    # Exercise schema adaptation end to end against the disposable source. The
+    # application must diagnose the stale query and preserve the failed run;
+    # query repair remains an explicit analyst action.
+    schema_editor = sqlite3.connect(database)
+    try:
+        schema_editor.execute(
+            "ALTER TABLE connection_observations RENAME COLUMN event_date TO observed_date"
+        )
+        schema_editor.commit()
+    finally:
+        schema_editor.close()
+    adaptation_case_path = work / "schema-adaptation.case.json"
+    adaptation_case_path.write_bytes(failure_case_path.read_bytes())
+    adaptation_database_hash = sha256(database)
+    inspected_schema = run(
+        "adapted_schema_inspection", "--inspect-sqlite", str(database), "--json"
+    )
+    inspected_columns = {
+        column["name"]
+        for item in inspected_schema.get("objects", [])
+        if item.get("name") == "connection_observations"
+        for column in item.get("columns", [])
+    }
+    if "observed_date" not in inspected_columns or "event_date" in inspected_columns:
+        raise RuntimeError(f"SQLite inspection did not expose the changed column: {inspected_schema}")
+
+    case_before_adaptation_failure = sha256(adaptation_case_path)
+    adaptation_failure = run(
+        "schema_adaptation_failure",
+        "--run-job",
+        str(adaptation_case_path),
+        "Synthetic connection capture",
+        "--json",
+        expected_exit=1,
+    )
+    if sha256(database) != adaptation_database_hash:
+        raise RuntimeError("schema-adaptation failure changed the read-only SQLite source")
+    adaptation_outcomes = adaptation_failure.get("outcomes", [])
+    if (
+        adaptation_failure.get("ok")
+        or adaptation_failure.get("saved") is not True
+        or len(adaptation_outcomes) != 1
+    ):
+        raise RuntimeError(f"schema-adaptation failure was not retained: {adaptation_failure}")
+    adaptation_outcome = adaptation_outcomes[0]
+    if adaptation_outcome.get("status") != "FAIL":
+        raise RuntimeError(f"schema-adaptation outcome did not report FAIL: {adaptation_outcome}")
+    adaptation = adaptation_outcome.get("schema_adaptation") or {}
+    if adaptation.get("kind") != "missing_column" or adaptation.get("reference") != "event_date":
+        raise RuntimeError(f"schema-adaptation diagnosis was not precise: {adaptation}")
+    diagnosis = adaptation_outcome.get("schema_diagnosis") or {}
+    if any(
+        diagnosis.get(key) != expected
+        for key, expected in {
+            "baseline_available": True,
+            "schema_changed": True,
+            "query_changed": False,
+            "parameters_changed": False,
+        }.items()
+    ):
+        raise RuntimeError(f"schema-adaptation comparison was unexpected: {diagnosis}")
+    adapted_failed_case = json.loads(adaptation_case_path.read_text(encoding="utf-8"))
+    adapted_failed_runs = adapted_failed_case.get("automation_runs", [])
+    if (
+        len(adapted_failed_runs) != 4
+        or adapted_failed_runs[-1].get("success") is not False
+        or "no such column: event_date" not in adapted_failed_runs[-1].get("message", "")
+        or adapted_failed_runs[-1].get("schema_diagnosis", {}).get("schema_changed") is not True
+    ):
+        raise RuntimeError("schema-adaptation failure record was not saved to the case")
+    case_after_adaptation_failure = sha256(adaptation_case_path)
+    if case_after_adaptation_failure == case_before_adaptation_failure:
+        raise RuntimeError("schema-adaptation failure did not update the case history")
+    adaptation_history = run(
+        "schema_adaptation_history",
+        "--list-runs",
+        str(adaptation_case_path),
+        "--schema-adaptation-needed",
+        "--json",
+    )
+    if adaptation_history.get("total") != 1 or len(adaptation_history.get("runs", [])) != 1:
+        raise RuntimeError(f"schema-adaptation failure was not filterable in history: {adaptation_history}")
+
+    repaired_case = json.loads(adaptation_case_path.read_text(encoding="utf-8"))
+    repaired_job = repaired_case["automation_jobs"][0]
+    stale_expression = "event_date AS date"
+    if repaired_job["query"].count(stale_expression) != 1:
+        raise RuntimeError("expected one stale event_date projection for reviewed repair")
+    repaired_job["query"] = repaired_job["query"].replace(
+        stale_expression, "observed_date AS date"
+    )
+    adaptation_case_path.write_text(
+        json.dumps(repaired_case, indent=2) + "\n", encoding="utf-8"
+    )
+    case_before_query_review = sha256(adaptation_case_path)
+    query_review = run(
+        "analyst_reviewed_query_validation",
+        "--validate-job",
+        str(adaptation_case_path),
+        "Synthetic connection capture",
+        "--query-only",
+        "--json",
+    )
+    if not query_review.get("ok") or query_review.get("saved") is not False:
+        raise RuntimeError(f"reviewed query did not validate without saving: {query_review}")
+    if sha256(adaptation_case_path) != case_before_query_review:
+        raise RuntimeError("read-only reviewed-query validation changed the case file")
+    reviewed_capture = run(
+        "analyst_reviewed_query_capture",
+        "--run-job",
+        str(adaptation_case_path),
+        "Synthetic connection capture",
+        "--json",
+    )
+    if not reviewed_capture.get("ok") or reviewed_capture.get("saved") is not True:
+        raise RuntimeError(f"reviewed query capture did not pass: {reviewed_capture}")
+    if sha256(database) != adaptation_database_hash:
+        raise RuntimeError("reviewed query capture changed the read-only SQLite source")
+    repaired_saved_case = json.loads(adaptation_case_path.read_text(encoding="utf-8"))
+    repaired_runs = repaired_saved_case.get("automation_runs", [])
+    repaired_snapshots = repaired_saved_case.get("snapshots", [])
+    if (
+        len(repaired_runs) != 5
+        or repaired_runs[-1].get("success") is not True
+        or len(repaired_snapshots) != 4
+        or len(repaired_snapshots[-1].get("connections", [])) != 4
+    ):
+        raise RuntimeError("reviewed query did not retain its successful four-record capture")
+    adaptation_history_after_repair = run(
+        "schema_adaptation_history_after_repair",
+        "--list-runs",
+        str(adaptation_case_path),
+        "--schema-adaptation-needed",
+        "--json",
+    )
+    if adaptation_history_after_repair.get("total") != 1:
+        raise RuntimeError("successful repair removed the historical schema-adaptation failure")
+
     report = {
         "schema_version": 1,
         "result": "PASS",
@@ -492,6 +630,19 @@ def main() -> int:
         "failure_capture_snapshot_id": failed_outcome.get("snapshot_id"),
         "failure_run_history_retained": True,
         "chart_csv_tsv_roundtrips": chart_roundtrips,
+        "schema_adaptation": {
+            "inspected_observed_date": "observed_date" in inspected_columns,
+            "failed_run_saved": True,
+            "diagnosis": diagnosis,
+            "reference": adaptation.get("reference"),
+            "history_retained_after_repair": True,
+            "reviewed_query_validated_without_case_write": True,
+            "reviewed_capture_connections": len(repaired_snapshots[-1]["connections"]),
+            "database_sha256": adaptation_database_hash,
+            "case_sha256_before_failure": case_before_adaptation_failure,
+            "case_sha256_after_failure": case_after_adaptation_failure,
+            "case_sha256_after_repair": sha256(adaptation_case_path),
+        },
         "csv_and_tsv_values_match": True,
         "source_unchanged_during_chart_exchange": True,
         "case_unchanged_during_chart_export": True,
