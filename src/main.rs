@@ -149,6 +149,14 @@ fn sql_schema_adaptation_reference(error: &str) -> Option<String> {
     })
 }
 
+fn sql_schema_adaptation_details(error: &str) -> Option<SqlSchemaAdaptation> {
+    Some(SqlSchemaAdaptation {
+        kind: sql_schema_adaptation_kind(error)?.to_owned(),
+        reference: sql_schema_adaptation_reference(error),
+        hint: sql_schema_adaptation_hint(error).map(str::to_owned),
+    })
+}
+
 fn install_automation_schedule_command(
     case_path: &Path,
     schedule: &str,
@@ -1125,6 +1133,8 @@ struct AutomationRun {
     message: String,
     #[serde(default)]
     schema_diagnosis: Option<SqlSchemaDiagnosis>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    schema_adaptation: Option<SqlSchemaAdaptation>,
     #[serde(default)]
     analyst_note: String,
     #[serde(default)]
@@ -1146,6 +1156,36 @@ struct SqlSchemaDiagnosis {
     query_changed: Option<bool>,
     parameters_changed: Option<bool>,
     summary: String,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct SqlSchemaAdaptation {
+    kind: String,
+    #[serde(default)]
+    reference: Option<String>,
+    #[serde(default)]
+    hint: Option<String>,
+}
+
+fn automation_run_schema_adaptation_kind(run: &AutomationRun) -> Option<&str> {
+    run.schema_adaptation
+        .as_ref()
+        .map(|adaptation| adaptation.kind.as_str())
+        .or_else(|| sql_schema_adaptation_kind(&run.message))
+}
+
+fn automation_run_schema_adaptation_reference(run: &AutomationRun) -> Option<String> {
+    run.schema_adaptation
+        .as_ref()
+        .and_then(|adaptation| adaptation.reference.clone())
+        .or_else(|| sql_schema_adaptation_reference(&run.message))
+}
+
+fn automation_run_schema_adaptation_hint(run: &AutomationRun) -> Option<&str> {
+    run.schema_adaptation
+        .as_ref()
+        .and_then(|adaptation| adaptation.hint.as_deref())
+        .or_else(|| sql_schema_adaptation_hint(&run.message))
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -8766,11 +8806,11 @@ impl App {
             .iter()
             .find(|run| run.id == run_id)
             .and_then(|run| {
-                let kind = sql_schema_adaptation_kind(&run.message)?;
+                let kind = automation_run_schema_adaptation_kind(run)?;
                 Some((
                     Some(run_id),
                     kind.to_owned(),
-                    sql_schema_adaptation_reference(&run.message),
+                    automation_run_schema_adaptation_reference(run),
                 ))
             });
         if self.load_automation_run_into_editor(run_id) {
@@ -10157,6 +10197,7 @@ impl App {
                 })
                 .unwrap_or_default()
         };
+        let schema_adaptation = sql_schema_adaptation_details(&message);
         self.case.automation_runs.push(AutomationRun {
             id: Uuid::new_v4(),
             batch_id: None,
@@ -10189,6 +10230,7 @@ impl App {
             success,
             message,
             schema_diagnosis: None,
+            schema_adaptation,
             analyst_note: String::new(),
             regressions_reviewed: None,
             snapshot_index,
@@ -15138,7 +15180,7 @@ fn automation_run_matches_filter(
     (trigger_filter == "all" || run.trigger.eq_ignore_ascii_case(trigger_filter))
         && (!failures_only || !run.success)
         && (!schema_adaptation_only
-            || (!run.success && sql_schema_adaptation_kind(&run.message).is_some()))
+            || (!run.success && automation_run_schema_adaptation_kind(run).is_some()))
         && (!schema_stability_only
             || (run.require_unchanged_schema
                 && !run.success
@@ -16329,12 +16371,15 @@ fn automation_outcome_json(
         "changed": schema_comparison.flatten(),
         "passed": schema_stability_pass,
     });
-    let schema_adaptation_kind = sql_schema_adaptation_kind(message);
+    let schema_adaptation_details = run_id
+        .and_then(|id| case.automation_runs.iter().find(|run| run.id == id))
+        .and_then(|run| run.schema_adaptation.clone())
+        .or_else(|| sql_schema_adaptation_details(message));
     let schema_adaptation = serde_json::json!({
-        "required": schema_adaptation_kind.is_some(),
-        "kind": schema_adaptation_kind,
-        "reference": sql_schema_adaptation_reference(message),
-        "hint": sql_schema_adaptation_hint(message),
+        "required": schema_adaptation_details.is_some(),
+        "kind": schema_adaptation_details.as_ref().map(|adaptation| adaptation.kind.as_str()),
+        "reference": schema_adaptation_details.as_ref().and_then(|adaptation| adaptation.reference.as_deref()),
+        "hint": schema_adaptation_details.as_ref().and_then(|adaptation| adaptation.hint.as_deref()),
     });
     let schema_diagnosis = run_id
         .and_then(|id| case.automation_runs.iter().find(|run| run.id == id))
@@ -19110,7 +19155,7 @@ impl eframe::App for App {
                                                     latest_run.map(|run| format!(" · {}", run.message)).unwrap_or_default()
                                                 ));
                                                 if let Some(run) = latest_run
-                                                    && let Some(hint) = sql_schema_adaptation_hint(&run.message)
+                                                    && let Some(hint) = automation_run_schema_adaptation_hint(run)
                                                 {
                                                     ui.label(egui::RichText::new(format!("SCHEMA REPAIR · {hint}")).small().color(egui::Color32::from_rgb(238, 174, 83)));
                                                 }
@@ -19701,6 +19746,7 @@ impl eframe::App for App {
                                                 run.success,
                                                 run.finished_at.clone(),
                                                 run.message.clone(),
+                                                automation_run_schema_adaptation_kind(run).is_some(),
                                                 run.duration_ms,
                                                 !run.success && !automation_run_was_reviewed(run),
                                                 snapshot
@@ -19714,7 +19760,7 @@ impl eframe::App for App {
                                         });
                                     let latest_run_id = latest_run.as_ref().map(|run| run.0);
                                     let latest_run_needs_schema_adaptation = latest_run.as_ref()
-                                        .is_some_and(|run| !run.1 && sql_schema_adaptation_kind(&run.3).is_some());
+                                        .is_some_and(|run| !run.1 && run.4);
                                     let latest_snapshot_index = self
                                         .case
                                         .automation_runs
@@ -19871,7 +19917,7 @@ impl eframe::App for App {
                                         }
                                         if ui.small_button("Delete").clicked(){action=Some(("delete".into(),job.id));}
                                     });
-                                    if let Some((_, success, finished_at, message, duration_ms, unreviewed_failure, quality, connection_count, skipped_rows)) = latest_run {
+                                    if let Some((_, success, finished_at, message, _schema_adaptation_needed, duration_ms, unreviewed_failure, quality, connection_count, skipped_rows)) = latest_run {
                                         let has_skipped_rows = skipped_rows.is_some_and(|count| count > 0);
                                         let result = if !success {
                                             "FAIL"
@@ -20266,7 +20312,7 @@ impl eframe::App for App {
                                                     run.sqlite_lock_retries
                                                 ));
                                             }
-                                            if let Some(kind) = sql_schema_adaptation_kind(&run.message) {
+                                            if let Some(kind) = automation_run_schema_adaptation_kind(&run) {
                                                 egui::Frame::new()
                                                     .fill(egui::Color32::from_rgb(48, 39, 30))
                                                     .inner_margin(egui::Margin::symmetric(8, 5))
@@ -20275,10 +20321,10 @@ impl eframe::App for App {
                                                             "SCHEMA ADAPTATION NEEDED · {}",
                                                             kind.replace('_', " ").to_ascii_uppercase()
                                                         )).strong().color(egui::Color32::from_rgb(238, 174, 83)));
-                                                        if let Some(reference) = sql_schema_adaptation_reference(&run.message) {
+                                                        if let Some(reference) = automation_run_schema_adaptation_reference(&run) {
                                                             ui.label(format!("Missing schema reference: {reference}"));
                                                         }
-                                                        ui.label(sql_schema_adaptation_hint(&run.message).unwrap_or_default());
+                                                        ui.label(automation_run_schema_adaptation_hint(&run).unwrap_or_default());
                                                     });
                                             }
                                             ui.label(&run.message);
@@ -20572,13 +20618,13 @@ impl eframe::App for App {
                                                 replay_run = Some(run.id);
                                             }
                                             if run.configuration_recorded
-                                                && ui.small_button(if sql_schema_adaptation_kind(&run.message).is_some() {
+                                                && ui.small_button(if automation_run_schema_adaptation_kind(&run).is_some() {
                                                     "Load configuration to repair SQL"
                                                 } else {
                                                     "Load configuration into editor"
                                                 }).clicked()
                                             {
-                                                if sql_schema_adaptation_kind(&run.message).is_some() {
+                                                if automation_run_schema_adaptation_kind(&run).is_some() {
                                                     repair_run = Some(run.id);
                                                 } else {
                                                     load_run = Some(run.id);
@@ -36595,7 +36641,7 @@ fn write_automation_runs_csv_atomically(
             .map_err(|error| error.to_string())?;
 
         for run in runs {
-            let schema_adaptation_kind = sql_schema_adaptation_kind(&run.message);
+            let schema_adaptation_kind = automation_run_schema_adaptation_kind(run);
             let snapshot_index = run
                 .snapshot_id
                 .and_then(|id| case.snapshots.iter().position(|snapshot| snapshot.id == id))
@@ -36672,7 +36718,7 @@ fn write_automation_runs_csv_atomically(
                     run.success.to_string(),
                     (!run.success && schema_adaptation_kind.is_some()).to_string(),
                     schema_adaptation_kind.unwrap_or_default().to_owned(),
-                    sql_schema_adaptation_reference(&run.message).unwrap_or_default(),
+                    automation_run_schema_adaptation_reference(run).unwrap_or_default(),
                     schema_diagnosis_json,
                     run.started_at.clone(),
                     run.finished_at.clone(),
@@ -37686,7 +37732,7 @@ fn list_automation_jobs_cli(
                         .rev()
                         .find(|run| run.job_id == job.id)
                         .is_some_and(|run| {
-                            !run.success && sql_schema_adaptation_kind(&run.message).is_some()
+                            !run.success && automation_run_schema_adaptation_kind(run).is_some()
                         }))
         })
         .map(|job| {
@@ -37697,7 +37743,7 @@ fn list_automation_jobs_cli(
                 .find(|run| run.job_id == job.id)
                 .map(|run| {
                     let schema_adaptation_kind = (!run.success)
-                        .then(|| sql_schema_adaptation_kind(&run.message))
+                        .then(|| automation_run_schema_adaptation_kind(run))
                         .flatten();
                     serde_json::json!({
                         "id": run.id,
@@ -37716,9 +37762,9 @@ fn list_automation_jobs_cli(
                             "required": schema_adaptation_kind.is_some(),
                             "kind": schema_adaptation_kind,
                             "reference": schema_adaptation_kind
-                                .and_then(|_| sql_schema_adaptation_reference(&run.message)),
+                                .and_then(|_| automation_run_schema_adaptation_reference(run)),
                             "hint": schema_adaptation_kind
-                                .and_then(|_| sql_schema_adaptation_hint(&run.message)),
+                                .and_then(|_| automation_run_schema_adaptation_hint(run)),
                         },
                     })
                 });
@@ -38924,7 +38970,7 @@ fn export_automation_runs_cli(
             }) && batch_filter.is_none_or(|filter| run.batch_id == Some(filter))
                 && trigger_filter.is_none_or(|filter| run.trigger.eq_ignore_ascii_case(filter))
                 && (!schema_adaptation_needed
-                    || (!run.success && sql_schema_adaptation_kind(&run.message).is_some()))
+                    || (!run.success && automation_run_schema_adaptation_kind(run).is_some()))
                 && (!schema_stability_failed
                     || (run.require_unchanged_schema
                         && !run.success
@@ -39060,7 +39106,7 @@ fn list_automation_runs_cli(
             }) && batch_filter.is_none_or(|filter| run.batch_id == Some(filter))
                 && trigger_filter.is_none_or(|filter| run.trigger.eq_ignore_ascii_case(filter))
                 && (!schema_adaptation_needed
-                    || (!run.success && sql_schema_adaptation_kind(&run.message).is_some()))
+                    || (!run.success && automation_run_schema_adaptation_kind(run).is_some()))
                 && (!schema_stability_failed
                     || (run.require_unchanged_schema
                         && !run.success
@@ -39288,7 +39334,7 @@ fn list_automation_batches_cli(case_path: &str, json_output: bool) -> Result<(),
                     });
                     let schema_adaptation_kind = latest_run
                         .filter(|run| !run.success)
-                        .and_then(|run| sql_schema_adaptation_kind(&run.message));
+                        .and_then(automation_run_schema_adaptation_kind);
                     serde_json::json!({
                         "job_id": selection.job_id,
                         "job": selection.job_name,
@@ -39302,10 +39348,10 @@ fn list_automation_batches_cli(case_path: &str, json_output: bool) -> Result<(),
                             "kind": schema_adaptation_kind,
                             "reference": latest_run
                                 .filter(|run| !run.success)
-                                .and_then(|run| sql_schema_adaptation_reference(&run.message)),
+                                .and_then(automation_run_schema_adaptation_reference),
                             "hint": latest_run
                                 .filter(|run| !run.success)
-                                .and_then(|run| sql_schema_adaptation_hint(&run.message)),
+                                .and_then(automation_run_schema_adaptation_hint),
                         },
                     })
                 })
@@ -41355,6 +41401,37 @@ mod tests {
         assert_eq!(
             super::sql_schema_adaptation_reference("no such table: connection_observations"),
             Some("connection_observations".to_owned())
+        );
+        let details = super::sql_schema_adaptation_details(error).unwrap();
+        assert_eq!(details.kind, "missing_column");
+        assert_eq!(details.reference.as_deref(), Some("event_date"));
+        assert_eq!(
+            details.hint.as_deref(),
+            Some(
+                "the source schema may have changed; inspect the SQLite schema, rebuild or edit the query, then validate it before saving"
+            )
+        );
+    }
+
+    #[test]
+    fn legacy_automation_runs_derive_schema_adaptation_from_message() {
+        let run: super::AutomationRun = serde_json::from_value(serde_json::json!({
+            "job_id": Uuid::nil(),
+            "job_name": "Legacy SQL job",
+            "started_at": "2026-01-01T00:00:00Z",
+            "finished_at": "2026-01-01T00:00:01Z",
+            "success": false,
+            "message": "SQL INGEST FAILED · no such column: old_event_date in SELECT old_event_date FROM observations at offset 12"
+        }))
+        .unwrap();
+        assert!(run.schema_adaptation.is_none());
+        assert_eq!(
+            super::automation_run_schema_adaptation_kind(&run),
+            Some("missing_column")
+        );
+        assert_eq!(
+            super::automation_run_schema_adaptation_reference(&run).as_deref(),
+            Some("old_event_date")
         );
     }
 

@@ -527,13 +527,23 @@ def main() -> int:
         raise RuntimeError(f"schema-adaptation comparison was unexpected: {diagnosis}")
     adapted_failed_case = json.loads(adaptation_case_path.read_text(encoding="utf-8"))
     adapted_failed_runs = adapted_failed_case.get("automation_runs", [])
+    persisted_adaptation = (
+        adapted_failed_runs[-1].get("schema_adaptation")
+        if adapted_failed_runs
+        else None
+    )
     if (
         len(adapted_failed_runs) != 4
         or adapted_failed_runs[-1].get("success") is not False
+        or not persisted_adaptation
+        or persisted_adaptation.get("kind") != "missing_column"
+        or persisted_adaptation.get("reference") != "event_date"
         or "no such column: event_date" not in adapted_failed_runs[-1].get("message", "")
         or adapted_failed_runs[-1].get("schema_diagnosis", {}).get("schema_changed") is not True
     ):
-        raise RuntimeError("schema-adaptation failure record was not saved to the case")
+        raise RuntimeError(
+            "schema-adaptation failure record or structured diagnosis was not saved to the case"
+        )
     case_after_adaptation_failure = sha256(adaptation_case_path)
     if case_after_adaptation_failure == case_before_adaptation_failure:
         raise RuntimeError("schema-adaptation failure did not update the case history")
@@ -546,6 +556,12 @@ def main() -> int:
     )
     if adaptation_history.get("total") != 1 or len(adaptation_history.get("runs", [])) != 1:
         raise RuntimeError(f"schema-adaptation failure was not filterable in history: {adaptation_history}")
+    history_adaptation = adaptation_history["runs"][0].get("schema_adaptation") or {}
+    if (
+        history_adaptation.get("kind") != "missing_column"
+        or history_adaptation.get("reference") != "event_date"
+    ):
+        raise RuntimeError(f"run history did not preserve the structured diagnosis: {history_adaptation}")
 
     repaired_case = json.loads(adaptation_case_path.read_text(encoding="utf-8"))
     repaired_job = repaired_case["automation_jobs"][0]
@@ -633,6 +649,7 @@ def main() -> int:
         "schema_adaptation": {
             "inspected_observed_date": "observed_date" in inspected_columns,
             "failed_run_saved": True,
+            "structured_diagnosis_persisted": persisted_adaptation,
             "diagnosis": diagnosis,
             "reference": adaptation.get("reference"),
             "history_retained_after_repair": True,
