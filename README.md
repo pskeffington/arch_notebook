@@ -22,7 +22,7 @@ Designed for local, repeatable investigations, it stores case files, snapshots, 
 
 Named chart tabs retain their own viewports. The searchable Quick open palette (Ctrl/Command+K) jumps to analysis workspaces and common chart actions. Analysts can apply saved CSV/TSV import designs, open a saved case from the Linux launcher, and import approved downstream document handoffs into a separate evidence chart.
 
-Network analysis includes weakly connected groups, articulation entities (network bridges), connectivity rankings and shortest paths constrained by direction, timeline range or chronological order. Saved paths retain investigation criteria and recompute against the current case rather than preserving stale routes.
+Network analysis includes weakly connected groups, articulation entities (network bridges), connectivity rankings, shortest paths constrained by direction, timeline range or chronological order, and geodesic hop layers around a selected entity. Each graph view states how link direction and weights affect its result; ordinary entity/link data does not imply an algebraic group operation or Cayley graph. Saved paths retain investigation criteria and recompute against the current case rather than preserving stale routes.
 
 ## Development status — 2026-11-25
 
@@ -41,7 +41,7 @@ Version 0.1.0 is under active development. The [2026-11-23 implementation baseli
 | Interactive host acceptance and external IBM import validation | Pending evidence |
 | Published release and macOS notarization | Pending owner approval / signing evidence |
 
-Recent work added index and SQL-definition inspection, schema drift reporting in SQL Review and automation, KML placemark import, chart-import exports of selected historical captures, and ANX internal round-trip acceptance that preserves supported record IDs, repeated links, positions, labels, and whitespace. The importer rejects DTD-bearing files before modifying a case. SQL automation acceptance now includes joined header-shaped data with 7,121 records, composite identities, nullable attributes, and a two-snapshot comparison; see the [SQL scale acceptance evidence](docs/evidence/sql-automation/SQL-SCALE-01-joined-header-linux-620e733.md). See also [ANX acceptance evidence](docs/evidence/anx/ANX-ROUNDTRIP-02-xxe-linux-1014ba5.md), [SQL ingestion and interchange](docs/sql-ingestion.md), and the [Analyst's Notebook compatibility map](docs/analyst-notebook-parity.md) for details. SQLite schema_version is a drift signal, not a complete schema fingerprint. Validate CSV/TSV and ANX files in IBM's application before claiming external interoperability.
+Recent work added index and SQL-definition inspection, schema drift reporting in SQL Review and automation, KML placemark import, chart-import exports of selected historical captures, and ANX internal round-trip acceptance that preserves supported record IDs, repeated links, positions, labels, and whitespace. Desktop ANX XML parsing now runs on a background worker and rejects results if the active chart changed before parsing completed; CLI imports remain synchronous for automation. The importer rejects DTD-bearing files before modifying a case. SQL automation acceptance now includes joined header-shaped data with 7,121 records, composite identities, nullable attributes, and a two-snapshot comparison; see the [SQL scale acceptance evidence](docs/evidence/sql-automation/SQL-SCALE-01-joined-header-linux-620e733.md). See also [ANX acceptance evidence](docs/evidence/anx/ANX-ROUNDTRIP-02-xxe-linux-1014ba5.md), [SQL ingestion and interchange](docs/sql-ingestion.md), and the [Analyst's Notebook compatibility map](docs/analyst-notebook-parity.md) for details. SQLite schema_version is a drift signal, not a complete schema fingerprint. Validate CSV/TSV and ANX files in IBM's application before claiming external interoperability.
 
 **Linux host progress (2026-11-25):** The operator reports that automatic builds appear to be working on the Linux box. This is a preliminary host observation, separate from CI success; the host architecture, build logs, installed version and runtime/scheduler acceptance remain to be recorded.
 
@@ -128,6 +128,7 @@ See [Build and deployment](docs/build-and-deploy.md) for installation, schedulin
 - [SQL snapshot ingestion](docs/sql-ingestion.md)
 - [Automated SQL ingestion](docs/automation.md)
 - [Notebook workflows](docs/notebook-workflows.md)
+- [Social network graphing and delivery review](docs/research/social-network-graphing-and-delivery-review.md)
 - [Analyst's Notebook compatibility map](docs/analyst-notebook-parity.md)
 - [Local build acceptance record](docs/build-acceptance.md)
 - [Build and deployment](docs/build-and-deploy.md)

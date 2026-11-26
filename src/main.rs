@@ -2208,6 +2208,7 @@ struct App {
     chart_focus_group: Option<HashSet<Uuid>>,
     network_groups: Option<std::sync::Arc<Vec<Vec<Uuid>>>>,
     network_bridges: Option<std::sync::Arc<Vec<(Uuid, usize)>>>,
+    network_geodesic_layers: Option<(Uuid, Vec<Vec<Uuid>>)>,
     chart_navigator_dragging: bool,
     new_link_from: Option<Uuid>,
     new_link_to: Option<Uuid>,
@@ -2226,6 +2227,8 @@ struct App {
     import_inspection_worker: Option<Receiver<Result<DelimitedImportInspection, String>>>,
     import_inspection_cancel: Option<Arc<AtomicBool>>,
     import_inspection_progress: Option<Arc<std::sync::atomic::AtomicUsize>>,
+    background_imports_enabled: bool,
+    anx_import_worker: Option<Receiver<(Uuid, Result<InterchangeImportPayload, String>)>>,
     import_column_mapping: ImportColumnMapping,
     import_spec_name: String,
     import_design_package_path: String,
@@ -2846,6 +2849,7 @@ impl Default for App {
             chart_focus_group: None,
             network_groups: None,
             network_bridges: None,
+            network_geodesic_layers: None,
             chart_navigator_dragging: false,
             new_link_from: None,
             new_link_to: None,
@@ -2864,6 +2868,8 @@ impl Default for App {
             import_inspection_worker: None,
             import_inspection_cancel: None,
             import_inspection_progress: None,
+            background_imports_enabled: true,
+            anx_import_worker: None,
             import_column_mapping: ImportColumnMapping::default(),
             import_spec_name: String::new(),
             import_design_package_path: String::new(),
@@ -3620,6 +3626,7 @@ impl App {
         self.import_inspection_worker = None;
         self.import_inspection_cancel = None;
         self.import_inspection_progress = None;
+        self.anx_import_worker = None;
         self.import_column_mapping = ImportColumnMapping::default();
         self.import_spec_name.clear();
         self.selected_import_spec = None;
@@ -3826,6 +3833,7 @@ impl App {
     fn invalidate_network_groups(&mut self) {
         self.network_groups = None;
         self.network_bridges = None;
+        self.network_geodesic_layers = None;
         self.chart_focus_group = None;
         self.clear_path_result();
     }
@@ -3864,6 +3872,7 @@ impl App {
             chart_focus_group: None,
             network_groups: None,
             network_bridges: None,
+            network_geodesic_layers: None,
             chart_navigator_dragging: false,
             new_link_from: None,
             new_link_to: None,
@@ -3882,6 +3891,8 @@ impl App {
             import_inspection_worker: None,
             import_inspection_cancel: None,
             import_inspection_progress: None,
+            background_imports_enabled: false,
+            anx_import_worker: None,
             import_column_mapping: ImportColumnMapping::default(),
             import_spec_name: String::new(),
             import_design_package_path: String::new(),
@@ -4338,6 +4349,7 @@ impl App {
                 self.reset_chart_creation_drafts();
                 self.reset_case_transient_analysis();
                 self.network_groups = None;
+                self.network_geodesic_layers = None;
                 self.case_path = requested_path.clone();
                 self.case_path_input = requested_path;
                 self.disk_case_json = Some(disk_case_json);
@@ -4401,15 +4413,31 @@ impl App {
     }
 
     fn import_anx(&mut self) {
+        if self.anx_import_worker.is_some() {
+            return;
+        }
         let source_path = self.import_path.trim().to_owned();
-        let payload = match anx_import_payload(&source_path) {
-            Ok(payload) => payload,
-            Err(error) => {
-                self.status = format!("ANX IMPORT FAILED · {error}");
-                return;
+        let active_chart_id = self.case.active_chart_id;
+        if !self.background_imports_enabled {
+            let payload = match anx_import_payload(&source_path) {
+                Ok(payload) => payload,
+                Err(error) => {
+                    self.status = format!("ANX IMPORT FAILED · {error}");
+                    return;
+                }
+            };
+            self.import_interchange_payload(payload, "ANX");
+            return;
+        }
+        match spawn_anx_import_worker(source_path, active_chart_id) {
+            Ok(receiver) => {
+                self.anx_import_worker = Some(receiver);
+                self.status = "READING AND VALIDATING ANX XML IN BACKGROUND".into();
             }
-        };
-        self.import_interchange_payload(payload, "ANX");
+            Err(error) => {
+                self.status = format!("ANX IMPORT FAILED · COULD NOT START WORKER · {error}");
+            }
+        }
     }
 
     fn import_document_packets(&mut self) {
@@ -12252,6 +12280,7 @@ impl App {
         self.reset_chart_creation_drafts();
         self.reset_case_transient_analysis();
         self.network_groups = None;
+        self.network_geodesic_layers = None;
         self.chart_focus_group = None;
         self.sql_snapshot_source = None;
         self.sql_snapshot_index = None;
@@ -13787,6 +13816,69 @@ fn connected_components(case: &CaseFile) -> Vec<Vec<Uuid>> {
             .then_with(|| a[0].cmp(&b[0]))
     });
     groups
+}
+
+fn network_geodesic_layers(case: &CaseFile, origin: Uuid) -> Vec<Vec<Uuid>> {
+    let names: HashMap<Uuid, String> = case
+        .entities
+        .iter()
+        .map(|entity| (entity.id, entity.name.to_lowercase()))
+        .collect();
+    if !names.contains_key(&origin) {
+        return Vec::new();
+    }
+
+    let mut adjacency: HashMap<Uuid, Vec<Uuid>> = case
+        .entities
+        .iter()
+        .map(|entity| (entity.id, Vec::new()))
+        .collect();
+    for link in &case.links {
+        if link.from == link.to
+            || !adjacency.contains_key(&link.from)
+            || !adjacency.contains_key(&link.to)
+        {
+            continue;
+        }
+        adjacency.entry(link.from).or_default().push(link.to);
+        adjacency.entry(link.to).or_default().push(link.from);
+    }
+    for neighbors in adjacency.values_mut() {
+        neighbors.sort_unstable();
+        neighbors.dedup();
+    }
+
+    let mut distances = HashMap::from([(origin, 0usize)]);
+    let mut queue = VecDeque::from([origin]);
+    let mut max_distance = 0;
+    while let Some(current) = queue.pop_front() {
+        let distance = distances[&current];
+        for neighbor in adjacency.get(&current).into_iter().flatten() {
+            if distances.contains_key(neighbor) {
+                continue;
+            }
+            let next_distance = distance + 1;
+            distances.insert(*neighbor, next_distance);
+            max_distance = max_distance.max(next_distance);
+            queue.push_back(*neighbor);
+        }
+    }
+
+    let mut layers = vec![Vec::new(); max_distance];
+    for (entity, distance) in distances {
+        if distance > 0 {
+            layers[distance - 1].push(entity);
+        }
+    }
+    for layer in &mut layers {
+        layer.sort_by(|first, second| {
+            names
+                .get(first)
+                .cmp(&names.get(second))
+                .then_with(|| first.cmp(second))
+        });
+    }
+    layers
 }
 
 fn linked_entities_within_depth(
@@ -16771,6 +16863,31 @@ impl eframe::App for App {
                 }
             }
         }
+        if let Some(anx_import_state) = self.anx_import_worker.as_ref().map(Receiver::try_recv) {
+            match anx_import_state {
+                Ok((target_chart_id, Ok(payload))) => {
+                    self.anx_import_worker = None;
+                    if self.case.active_chart_id == target_chart_id {
+                        self.import_interchange_payload(payload, "ANX");
+                    } else {
+                        self.status =
+                            "ANX IMPORT DISCARDED · ACTIVE CHART CHANGED DURING INSPECTION".into();
+                    }
+                }
+                Ok((_, Err(error))) => {
+                    self.anx_import_worker = None;
+                    self.status = format!("ANX IMPORT FAILED · {error}");
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.anx_import_worker = None;
+                    self.status =
+                        "ANX IMPORT FAILED · BACKGROUND WORKER STOPPED UNEXPECTEDLY".into();
+                }
+                Err(mpsc::TryRecvError::Empty) => {
+                    ctx.request_repaint_after(Duration::from_millis(250));
+                }
+            }
+        }
         if let Some(lookup_state) = self
             .sql_entity_source_worker
             .as_ref()
@@ -17836,6 +17953,8 @@ impl eframe::App for App {
                             ui.close_menu();
                         }
                     });
+                    let import_busy = self.import_inspection_worker.is_some()
+                        || self.anx_import_worker.is_some();
                     if self.import_inspection_worker.is_some() {
                         let scanned = self.import_inspection_progress.as_ref().map_or(0, |progress| {
                             progress.load(Ordering::Relaxed)
@@ -17847,17 +17966,20 @@ impl eframe::App for App {
                             }
                         }
                     }
+                    if self.anx_import_worker.is_some() {
+                        ui.label("Reading and validating ANX XML in background…");
+                    }
                     ui.menu_button("Import…", |ui| {
                         ui.label("Input file");
                         ui.add_enabled(
-                            self.import_inspection_worker.is_none(),
+                            !import_busy,
                             egui::TextEdit::singleline(&mut self.import_path)
                                 .desired_width(300.0)
                                 .hint_text("CSV, GraphML, KML, ANX, or approved handoff JSONL path"),
                         );
                         if ui
                             .add_enabled(
-                                self.import_inspection_worker.is_none(),
+                                !import_busy,
                                 egui::Button::new("Import CSV/TSV"),
                             )
                             .clicked()
@@ -17865,21 +17987,33 @@ impl eframe::App for App {
                             self.inspect_delimited_import();
                             ui.close_menu();
                         }
-                        if ui.button("Import GraphML").clicked() {
+                        if ui
+                            .add_enabled(!import_busy, egui::Button::new("Import GraphML"))
+                            .clicked()
+                        {
                             self.import_graphml();
                             ui.close_menu();
                         }
-                        if ui.button("Import KML").clicked() {
+                        if ui
+                            .add_enabled(!import_busy, egui::Button::new("Import KML"))
+                            .clicked()
+                        {
                             self.import_kml();
                             ui.close_menu();
                         }
-                        if ui.button("Import Analyst's Notebook Exchange (ANX)").clicked() {
+                        if ui
+                            .add_enabled(
+                                !import_busy,
+                                egui::Button::new("Import Analyst's Notebook Exchange (ANX)"),
+                            )
+                            .clicked()
+                        {
                             self.import_anx();
                             ui.close_menu();
                         }
                         if ui
                             .add_enabled(
-                                self.import_inspection_worker.is_none(),
+                                !import_busy,
                                 egui::Button::new("Import approved handoffs"),
                             )
                             .on_hover_text(
@@ -17890,9 +18024,12 @@ impl eframe::App for App {
                             self.import_document_packets();
                             ui.close_menu();
                         }
-                        ui.checkbox(
-                            &mut self.import_into_new_chart,
-                            "Import into new chart",
+                        ui.add_enabled(
+                            !import_busy,
+                            egui::Checkbox::new(
+                                &mut self.import_into_new_chart,
+                                "Import into new chart",
+                            ),
                         )
                         .on_hover_text(
                             "Create a separate chart for the next CSV/TSV, GraphML, KML, or ANX import instead of merging into the active chart.",
@@ -24337,6 +24474,71 @@ impl eframe::App for App {
                             self.show_timeline = false;
                         }
                         ui.add_space(16.0);
+                        ui.label(egui::RichText::new("GEODESIC LAYERS").size(9.0).strong().color(cyan));
+                        ui.label(egui::RichText::new(
+                            "Shortest-path hop distance from a selected entity. Directions and link weights are ignored.",
+                        ).small().color(muted));
+                        let geodesic_origin = self.selected;
+                        if let Some(origin) = geodesic_origin {
+                            let origin_name = self
+                                .case
+                                .entities
+                                .iter()
+                                .find(|entity| entity.id == origin)
+                                .map(|entity| entity.name.as_str())
+                                .unwrap_or("(missing entity)");
+                            ui.label(egui::RichText::new(format!("Current chart selection · {origin_name}")).small().color(muted));
+                            if ui.button("Measure hop layers").clicked() {
+                                self.network_geodesic_layers =
+                                    Some((origin, network_geodesic_layers(&self.case, origin)));
+                            }
+                        } else {
+                            ui.label(egui::RichText::new("Select an entity on the chart to choose a center.").small().color(muted));
+                        }
+                        if let Some((origin, layers)) = self.network_geodesic_layers.clone() {
+                            if let Some(center) = self.case.entities.iter().find(|entity| entity.id == origin) {
+                                let reached_count: usize = layers.iter().map(Vec::len).sum();
+                                ui.label(egui::RichText::new(format!(
+                                    "Computed from {} · {} reachable entities across {} hop layers",
+                                    center.name,
+                                    reached_count,
+                                    layers.len(),
+                                )).small().color(muted));
+                                for (index, layer) in layers.iter().enumerate() {
+                                    let names = layer
+                                        .iter()
+                                        .take(3)
+                                        .filter_map(|id| self.case.entities.iter().find(|entity| entity.id == *id).map(|entity| entity.name.as_str()))
+                                        .collect::<Vec<_>>()
+                                        .join(" · ");
+                                    ui.horizontal(|ui| {
+                                        ui.label(format!("{} hop · {} entities", index + 1, layer.len()));
+                                        if ui.small_button("Show layer").clicked() {
+                                            let mut fit_entities = Vec::with_capacity(layer.len() + 1);
+                                            fit_entities.push(origin);
+                                            fit_entities.extend(layer.iter().copied());
+                                            self.chart_fit_entities = Some(fit_entities);
+                                            self.chart_fit_path = None;
+                                            self.chart_focus_group = Some(layer.iter().copied().collect());
+                                            self.chart_focus = None;
+                                            self.chart_focus_link = None;
+                                            self.clear_path_result();
+                                            self.sql_source_focus = None;
+                                            self.selected = layer.first().copied();
+                                            self.selected_link = None;
+                                            self.page = WorkspacePage::Chart;
+                                            self.show_timeline = false;
+                                        }
+                                    });
+                                    ui.label(egui::RichText::new(if layer.len() > 3 {
+                                        format!("{names} · +{}", layer.len() - 3)
+                                    } else {
+                                        names
+                                    }).small().color(muted));
+                                }
+                            }
+                        }
+                        ui.add_space(16.0);
                         ui.label(egui::RichText::new("NETWORK GROUPS").size(9.0).strong().color(cyan));
                         if network_groups.is_none() {
                             ui.label(egui::RichText::new("Find weakly connected groups across all links.").small().color(muted));
@@ -30038,6 +30240,21 @@ fn anx_import_payload(path: &str) -> Result<InterchangeImportPayload, String> {
         );
     }
     interchange_import_payload(document, path, "anx")
+}
+
+fn spawn_anx_import_worker(
+    source_path: String,
+    target_chart_id: Uuid,
+) -> Result<Receiver<(Uuid, Result<InterchangeImportPayload, String>)>, String> {
+    let (sender, receiver) = mpsc::channel();
+    thread::Builder::new()
+        .name("arch-notebook-anx-import".into())
+        .spawn(move || {
+            let result = anx_import_payload(&source_path);
+            let _ = sender.send((target_chart_id, result));
+        })
+        .map_err(|error| format!("could not start worker: {error}"))?;
+    Ok(receiver)
 }
 
 fn graphml_import_payload(path: &str) -> Result<InterchangeImportPayload, String> {
@@ -41722,6 +41939,43 @@ mod tests {
     }
 
     #[test]
+    fn geodesic_layers_are_undirected_and_ignore_parallel_and_disconnected_links() {
+        let entities = vec![
+            layout_entity("Center", "PERSON", false),
+            layout_entity("First hop", "PERSON", false),
+            layout_entity("Second hop", "LOCATION", false),
+            layout_entity("Island", "ORGANIZATION", false),
+            layout_entity("Island neighbor", "PERSON", false),
+        ];
+        let link = |from, to, directed| super::Link {
+            from,
+            to,
+            connection_id: Uuid::new_v4().to_string(),
+            label: "ASSOCIATED WITH".into(),
+            date: String::new(),
+            confidence: 2,
+            directed,
+            notes: String::new(),
+            source_notes: String::new(),
+            source_reference: String::new(),
+            ingest_source: None,
+            attributes: Vec::new(),
+        };
+        let mut case = super::demo_case();
+        case.entities = entities.clone();
+        case.links = vec![
+            link(entities[0].id, entities[1].id, true),
+            link(entities[0].id, entities[1].id, false),
+            link(entities[1].id, entities[2].id, true),
+            link(entities[0].id, entities[0].id, true),
+            link(entities[3].id, entities[4].id, true),
+        ];
+        let layers = super::network_geodesic_layers(&case, entities[0].id);
+        assert_eq!(layers, vec![vec![entities[1].id], vec![entities[2].id]]);
+        assert!(super::network_geodesic_layers(&case, Uuid::new_v4()).is_empty());
+    }
+
+    #[test]
     fn alphabetical_grid_tracks_the_chart_canvas_aspect() {
         let (narrow_columns, narrow_rows) = grid_layout_dimensions(20, 0.75);
         let (wide_columns, wide_rows) = grid_layout_dimensions(20, 2.5);
@@ -41995,6 +42249,22 @@ mod tests {
             edges[1].data["ingest_source"],
             repeated[1].data["ingest_source"]
         );
+    }
+
+    #[test]
+    fn anx_import_worker_reports_parse_errors_with_its_target_chart() {
+        let target_chart_id = Uuid::new_v4();
+        let missing_path = std::env::temp_dir()
+            .join(format!("arch-notebook-missing-{}.anx", Uuid::new_v4()))
+            .to_string_lossy()
+            .into_owned();
+        let receiver = super::spawn_anx_import_worker(missing_path, target_chart_id)
+            .expect("background ANX worker starts");
+        let (received_chart_id, result) = receiver
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("background worker returns a result");
+        assert_eq!(received_chart_id, target_chart_id);
+        assert!(result.is_err());
     }
 
     #[test]
