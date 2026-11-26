@@ -1,5 +1,19 @@
 # Local build acceptance record
 
+## Chart viewport navigation — 2026-11-26
+
+**Task / owner:** Improve analyst recovery from an over-zoomed chart; implementation session.
+**Repository / branch:** `/home/sysadmin/github/arch_notebook` / `codex/ui-00-chart-baseline`.
+**Source baseline:** `a356e0d06f9443aa3cb2f463392ebce8e7a16a18`.
+
+| Gate | Result | Evidence and limits |
+| --- | --- | --- |
+| Fit chart access | PASS, source/test | Added **Fit chart** to Quick open search and `Ctrl/Command+0`; **View…** lists the shortcut. Quick-command search regression passed. |
+| Rust suite and build | PASS | Focused command search: 1 passed; full suite: 34 passed; offline `cargo check` and optimized release build exited 0. |
+| Current-candidate native interaction and Qwen review | BLOCKED | X display access failed, and the local Ollama endpoint refused inference requests. No current-candidate rendering, shortcut input, or Qwen review is claimed. |
+
+Detailed evidence: [UI-NAV-FIT-01](evidence/vector-ui/UI-NAV-FIT-01-linux.md). The previous 1440×900 screenshot is contextual only; repeat visual and keyboard acceptance in an input-capable desktop session.
+
 ## Current-release SQL automation recheck — 2026-11-26
 
 **Task / owner:** Revalidate SQL capture, recovery, scale and scheduler runners on the pushed route-geometry candidate; implementation session.

@@ -2677,6 +2677,7 @@ enum DataMode {
 #[derive(Clone, Copy)]
 enum QuickCommand {
     Chart,
+    FitChart,
     Timeline,
     Connections,
     SqlReview,
@@ -3324,6 +3325,25 @@ impl App {
         self.drag_entity_origins.clear();
         self.selected_chart_label = None;
         self.chart_label_drag_origin = None;
+    }
+
+    fn fit_all_entities(&mut self) {
+        let entity_ids: Vec<Uuid> = self.case.entities.iter().map(|entity| entity.id).collect();
+        let entity_count = entity_ids.len();
+        self.chart_fit_entities = Some(entity_ids);
+        self.chart_fit_path = None;
+        self.chart_focus = None;
+        self.chart_focus_link = None;
+        self.chart_focus_group = None;
+        self.sql_source_focus = None;
+        self.clear_path_result();
+        self.page = WorkspacePage::Chart;
+        self.show_timeline = false;
+        self.status = if entity_count == 0 {
+            "CHART IS EMPTY".into()
+        } else {
+            format!("CHART VIEW FIT · {entity_count} ENTITIES")
+        };
     }
 
     fn select_chart_label(&mut self, label_id: Uuid) {
@@ -17904,6 +17924,7 @@ impl eframe::App for App {
             sources_shortcut,
             automation_shortcut,
             sql_review_shortcut,
+            fit_chart_shortcut,
             new_chart_shortcut,
             next_chart_shortcut,
             previous_chart_shortcut,
@@ -17930,6 +17951,7 @@ impl eframe::App for App {
                 input.modifiers.command && input.key_pressed(egui::Key::Num7),
                 input.modifiers.command && input.key_pressed(egui::Key::Num5),
                 input.modifiers.command && input.key_pressed(egui::Key::Num4),
+                input.modifiers.command && input.key_pressed(egui::Key::Num0),
                 input.modifiers.command
                     && !input.modifiers.shift
                     && input.key_pressed(egui::Key::N),
@@ -18010,6 +18032,9 @@ impl eframe::App for App {
             self.page = WorkspacePage::Data;
             self.show_timeline = false;
             self.data_mode = DataMode::SqlRegressions;
+        }
+        if fit_chart_shortcut && !ctx.wants_keyboard_input() {
+            self.fit_all_entities();
         }
         if new_chart_shortcut && !ctx.wants_keyboard_input() {
             self.create_chart(false);
@@ -18598,19 +18623,11 @@ impl eframe::App for App {
                             if ui
                                 .add_enabled(
                                     !self.case.entities.is_empty(),
-                                    egui::Button::new("Fit all entities"),
+                                    egui::Button::new("Fit all entities · Ctrl/Command+0"),
                                 )
                                 .clicked()
                             {
-                                self.chart_fit_entities = Some(
-                                    self.case.entities.iter().map(|entity| entity.id).collect(),
-                                );
-                                self.chart_fit_path = None;
-                                self.chart_focus = None;
-                                self.chart_focus_link = None;
-                                self.chart_focus_group = None;
-                                self.sql_source_focus = None;
-                                self.clear_path_result();
+                                self.fit_all_entities();
                                 ui.close_menu();
                             }
                             ui.horizontal(|ui| {
@@ -27320,6 +27337,11 @@ impl eframe::App for App {
         if self.command_palette_open {
             let commands = [
                 ("Chart", "canvas network", QuickCommand::Chart),
+                (
+                    "Fit chart",
+                    "fit all entities reset zoom frame chart viewport",
+                    QuickCommand::FitChart,
+                ),
                 ("Timeline", "events date range", QuickCommand::Timeline),
                 (
                     "Connections",
@@ -27409,6 +27431,7 @@ impl eframe::App for App {
                             self.page = WorkspacePage::Chart;
                             self.show_timeline = false;
                         }
+                        QuickCommand::FitChart => self.fit_all_entities(),
                         QuickCommand::Timeline => {
                             self.page = WorkspacePage::Chart;
                             self.show_timeline = true;
@@ -43147,6 +43170,16 @@ mod tests {
             "CAPTURE",
             "Automation",
             "SQL jobs scheduled captures"
+        ));
+        assert!(super::quick_command_matches(
+            "fit",
+            "Fit chart",
+            "fit all entities reset zoom frame chart viewport"
+        ));
+        assert!(super::quick_command_matches(
+            "viewport",
+            "Fit chart",
+            "fit all entities reset zoom frame chart viewport"
         ));
         assert!(super::quick_command_matches("", "Chart", "canvas"));
         assert!(!super::quick_command_matches(
