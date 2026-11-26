@@ -1,3 +1,5 @@
+mod community;
+
 use eframe::egui;
 use quick_xml::{
     Reader as XmlReader, escape::resolve_predefined_entity, events::Event as XmlEvent,
@@ -881,6 +883,24 @@ struct NetworkAnalysisMethodCard {
     timeline_recognized_date_count: usize,
     blank_date_count: usize,
     unrecognized_date_count: usize,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct CommunityAnalysis {
+    groups: Vec<Vec<Uuid>>,
+    interactions: Vec<CommunityInteraction>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct CommunityInteraction {
+    first_community: usize,
+    second_community: usize,
+    relationship_record_count: usize,
+    first_to_second_record_count: usize,
+    second_to_first_record_count: usize,
+    undirected_record_count: usize,
+    distinct_endpoint_pair_count: usize,
+    link_indices: Vec<usize>,
 }
 
 struct ConnectionGroup {
@@ -2222,6 +2242,8 @@ struct App {
     chart_fit_path: Option<Vec<Uuid>>,
     chart_focus_group: Option<HashSet<Uuid>>,
     network_groups: Option<std::sync::Arc<Vec<Vec<Uuid>>>>,
+    community_analysis: Option<std::sync::Arc<CommunityAnalysis>>,
+    selected_community_interaction: Option<(usize, usize)>,
     network_bridges: Option<std::sync::Arc<Vec<(Uuid, usize)>>>,
     network_geodesic_layers: Option<(Uuid, Vec<Vec<Uuid>>)>,
     analysis_method_card: Option<(Uuid, NetworkAnalysisMethodCard)>,
@@ -2865,6 +2887,8 @@ impl Default for App {
             chart_fit_path: None,
             chart_focus_group: None,
             network_groups: None,
+            community_analysis: None,
+            selected_community_interaction: None,
             network_bridges: None,
             network_geodesic_layers: None,
             analysis_method_card: None,
@@ -3869,6 +3893,8 @@ impl App {
 
     fn invalidate_network_groups(&mut self) {
         self.network_groups = None;
+        self.community_analysis = None;
+        self.selected_community_interaction = None;
         self.network_bridges = None;
         self.network_geodesic_layers = None;
         self.analysis_method_card = None;
@@ -3909,6 +3935,8 @@ impl App {
             chart_fit_path: None,
             chart_focus_group: None,
             network_groups: None,
+            community_analysis: None,
+            selected_community_interaction: None,
             network_bridges: None,
             network_geodesic_layers: None,
             analysis_method_card: None,
@@ -4388,6 +4416,8 @@ impl App {
                 self.reset_chart_creation_drafts();
                 self.reset_case_transient_analysis();
                 self.network_groups = None;
+                self.community_analysis = None;
+                self.selected_community_interaction = None;
                 self.network_geodesic_layers = None;
                 self.analysis_method_card = None;
                 self.case_path = requested_path.clone();
@@ -12320,6 +12350,8 @@ impl App {
         self.reset_chart_creation_drafts();
         self.reset_case_transient_analysis();
         self.network_groups = None;
+        self.community_analysis = None;
+        self.selected_community_interaction = None;
         self.network_geodesic_layers = None;
         self.analysis_method_card = None;
         self.chart_focus_group = None;
@@ -13859,6 +13891,93 @@ fn connected_components(case: &CaseFile) -> Vec<Vec<Uuid>> {
     groups
 }
 
+fn detected_community_analysis(case: &CaseFile) -> CommunityAnalysis {
+    let groups = community::detected_communities(
+        case.entities
+            .iter()
+            .map(|entity| (entity.id, entity.name.as_str())),
+        case.links.iter().map(|link| (link.from, link.to)),
+    );
+    let community_by_entity: HashMap<Uuid, usize> = groups
+        .iter()
+        .enumerate()
+        .flat_map(|(community, members)| {
+            members
+                .iter()
+                .copied()
+                .map(move |entity| (entity, community))
+        })
+        .collect();
+    let mut interactions: HashMap<(usize, usize), CommunityInteraction> = HashMap::new();
+    let mut endpoint_pairs: HashMap<(usize, usize), HashSet<(Uuid, Uuid)>> = HashMap::new();
+
+    for (link_index, link) in case.links.iter().enumerate() {
+        let (Some(&from_community), Some(&to_community)) = (
+            community_by_entity.get(&link.from),
+            community_by_entity.get(&link.to),
+        ) else {
+            continue;
+        };
+        if from_community == to_community {
+            continue;
+        }
+
+        let (first_community, second_community) = if from_community < to_community {
+            (from_community, to_community)
+        } else {
+            (to_community, from_community)
+        };
+        let interaction = interactions
+            .entry((first_community, second_community))
+            .or_insert_with(|| CommunityInteraction {
+                first_community,
+                second_community,
+                ..Default::default()
+            });
+        interaction.relationship_record_count += 1;
+        if link.directed {
+            if from_community == first_community {
+                interaction.first_to_second_record_count += 1;
+            } else {
+                interaction.second_to_first_record_count += 1;
+            }
+        } else {
+            interaction.undirected_record_count += 1;
+        }
+        interaction.link_indices.push(link_index);
+        let endpoint_pair = if link.from < link.to {
+            (link.from, link.to)
+        } else {
+            (link.to, link.from)
+        };
+        endpoint_pairs
+            .entry((first_community, second_community))
+            .or_default()
+            .insert(endpoint_pair);
+    }
+
+    let mut interactions: Vec<CommunityInteraction> = interactions
+        .into_iter()
+        .map(|(pair, mut interaction)| {
+            interaction.distinct_endpoint_pair_count =
+                endpoint_pairs.get(&pair).map_or(0, HashSet::len);
+            interaction.link_indices.sort_unstable();
+            interaction
+        })
+        .collect();
+    interactions.sort_by(|first, second| {
+        second
+            .relationship_record_count
+            .cmp(&first.relationship_record_count)
+            .then_with(|| first.first_community.cmp(&second.first_community))
+            .then_with(|| first.second_community.cmp(&second.second_community))
+    });
+    CommunityAnalysis {
+        groups,
+        interactions,
+    }
+}
+
 fn network_geodesic_layers(case: &CaseFile, origin: Uuid) -> Vec<Vec<Uuid>> {
     let names: HashMap<Uuid, String> = case
         .entities
@@ -14001,6 +14120,7 @@ fn network_analysis_method_card_text(
          Endpoint pairs: {} unique unordered pairs with both endpoints present (direction ignored; self-pairs included); {} additional complete-endpoint records on repeated pairs; {} records have at least one endpoint missing from the chart.\n\
          Dates: {} recognized by the chart timeline parser; {} blank; {} not recognized.\n\
          Components and articulation points: direction, relationship type, date, and confidence are ignored; self-links and records with missing endpoints are ignored; parallel records collapse to one neighboring entity for topology. Component analysis includes singleton entities, though the sidebar lists only groups with more than one entity.\n\
+         Detected communities: deterministic, single-level greedy modularity local moves at resolution 1 with at most 50 sweeps and UUID-ordered traversal; undirected unweighted unique pairs; direction, relationship type, date, and confidence ignored; self-links and missing endpoints ignored; isolates remain singleton. This is an exploratory structural partition, not verified real-world group membership.\n\
          Geodesic layers: direction, relationship type, date, and confidence are ignored; each traversable neighboring pair is one unweighted hop; self-links, missing endpoints, and parallel records do not add distance.\n\
          Shortest path: direction is {}; date order is {}; active timeline range is {}; relationship type and confidence are ignored; every eligible relationship record with both endpoints present costs one hop; records with a missing endpoint are ignored. When date order or a timeline range is applied, records without a timeline-recognized date are excluded.",
         card.entity_count,
@@ -18095,6 +18215,7 @@ impl eframe::App for App {
 
         let connected_counts = connected_entity_counts(&self.case);
         let network_groups = self.network_groups.clone();
+        let community_analysis = self.community_analysis.clone();
         let network_bridges = self.network_bridges.clone();
         let analysis_method_card = self.analysis_method_card.clone();
         let bg = egui::Color32::from_rgb(12, 19, 27);
@@ -25210,6 +25331,125 @@ impl eframe::App for App {
                             ui.label(egui::RichText::new(if group.len() > 3 { format!("{names} · +{}", group.len() - 3) } else { names }).small().color(muted));
                         }
                         ui.add_space(16.0);
+                        ui.label(egui::RichText::new("DETECTED COMMUNITIES").size(9.0).strong().color(cyan));
+                        ui.label(egui::RichText::new(
+                            "All entities and records in the active chart · display selections and timeline filters do not change this exploratory partition. It does not identify real-world groups.",
+                        ).small().color(muted));
+                        if community_analysis.is_none()
+                            && ui.button("Detect communities and summarize cross-group links").clicked()
+                        {
+                            self.community_analysis =
+                                Some(std::sync::Arc::new(detected_community_analysis(&self.case)));
+                        }
+                        if let Some(analysis) = community_analysis.as_deref() {
+                            let isolate_count = analysis.groups.iter().filter(|group| group.len() == 1).count();
+                            ui.horizontal(|ui| {
+                                ui.label(egui::RichText::new(format!(
+                                    "{} total communities · {} isolates retained as singletons",
+                                    analysis.groups.len(), isolate_count,
+                                )).small().color(muted));
+                                if ui.small_button("Refresh").clicked() {
+                                    self.community_analysis =
+                                        Some(std::sync::Arc::new(detected_community_analysis(&self.case)));
+                                    self.selected_community_interaction = None;
+                                }
+                            });
+                            ui.label(egui::RichText::new("Communities · scroll to browse all").small().color(muted));
+                            egui::ScrollArea::vertical()
+                                .id_salt("detected_communities_list")
+                                .max_height(145.0)
+                                .show_rows(ui, 27.0, analysis.groups.len(), |ui, rows| {
+                                    for index in rows {
+                                        let group = &analysis.groups[index];
+                                        let group_ids = group.clone();
+                                        ui.horizontal(|ui| {
+                                            let member_names = group.iter().take(3)
+                                                .filter_map(|id| self.case.entities.iter().find(|entity| entity.id == *id).map(|entity| entity.name.as_str()))
+                                                .collect::<Vec<_>>().join(" · ");
+                                            ui.label(format!("Community {:02} · {} entities", index + 1, group.len()))
+                                                .on_hover_text(member_names);
+                                            if ui.small_button("Show").clicked() {
+                                                self.chart_fit_entities = Some(group_ids.clone());
+                                                self.chart_fit_path = None;
+                                                self.chart_focus_group = Some(group_ids.iter().copied().collect());
+                                                self.chart_focus = None;
+                                                self.chart_focus_link = None;
+                                                self.clear_path_result();
+                                                self.selected = group_ids.first().copied();
+                                                self.selected_link = None;
+                                                self.sql_source_focus = None;
+                                                self.page = WorkspacePage::Chart;
+                                                self.show_timeline = false;
+                                            }
+                                        });
+                                    }
+                                });
+                            if analysis.interactions.is_empty() {
+                                ui.label(egui::RichText::new("No recorded relationships cross detected communities.").small().color(muted));
+                            } else {
+                                ui.label(egui::RichText::new(format!("CROSS-COMMUNITY RECORDS · {} group pairs · select any row to inspect exact records", analysis.interactions.len())).size(9.0).strong().color(cyan));
+                                egui::ScrollArea::vertical()
+                                    .id_salt("community_interactions_list")
+                                    .max_height(175.0)
+                                    .show_rows(ui, 35.0, analysis.interactions.len(), |ui, rows| {
+                                        for row in rows {
+                                            let interaction = &analysis.interactions[row];
+                                            let first_number = interaction.first_community + 1;
+                                            let second_number = interaction.second_community + 1;
+                                            let key = (interaction.first_community, interaction.second_community);
+                                            let selected = self.selected_community_interaction == Some(key);
+                                            let label = format!(
+                                                "Community {first_number} ↔ {second_number} · {} records / {} pairs · →{} ←{} ↔{}",
+                                                interaction.relationship_record_count,
+                                                interaction.distinct_endpoint_pair_count,
+                                                interaction.first_to_second_record_count,
+                                                interaction.second_to_first_record_count,
+                                                interaction.undirected_record_count,
+                                            );
+                                            if ui.selectable_label(selected, label).clicked() {
+                                                self.selected_community_interaction = Some(key);
+                                            }
+                                        }
+                                    });
+                                if let Some(key) = self.selected_community_interaction
+                                    && let Some(interaction) = analysis.interactions.iter().find(|interaction| (interaction.first_community, interaction.second_community) == key)
+                                {
+                                    ui.label(egui::RichText::new(format!(
+                                        "Records for Community {} ↔ {} · scroll to inspect all {}",
+                                        key.0 + 1, key.1 + 1, interaction.link_indices.len(),
+                                    )).small().color(muted));
+                                    egui::ScrollArea::vertical()
+                                        .id_salt("community_interaction_records")
+                                        .max_height(145.0)
+                                        .show_rows(ui, 24.0, interaction.link_indices.len(), |ui, rows| {
+                                            for row in rows {
+                                                let Some(link_index) = interaction.link_indices.get(row).copied() else { continue };
+                                                let Some((from, to, label, directed)) = self.case.links.get(link_index)
+                                                    .map(|link| (link.from, link.to, link.label.clone(), link.directed)) else { continue };
+                                                let from_name = self.case.entities.iter().find(|entity| entity.id == from).map(|entity| entity.name.as_str()).unwrap_or("(missing entity)");
+                                                let to_name = self.case.entities.iter().find(|entity| entity.id == to).map(|entity| entity.name.as_str()).unwrap_or("(missing entity)");
+                                                if ui.small_button(format!("Inspect · {from_name} {} {to_name} · {label}", if directed { "→" } else { "—" })).clicked() {
+                                                    self.selected = Some(from);
+                                                    self.selected_link = Some(link_index);
+                                                    self.chart_focus = None;
+                                                    self.chart_focus_link = None;
+                                                    self.chart_focus_group = None;
+                                                    self.chart_fit_entities = Some(vec![from, to]);
+                                                    self.chart_fit_path = None;
+                                                    self.clear_path_result();
+                                                    self.sql_source_focus = None;
+                                                    self.page = WorkspacePage::Chart;
+                                                    self.show_timeline = false;
+                                                }
+                                            }
+                                        });
+                                }
+                            }
+                            ui.label(egui::RichText::new(
+                                "Method: deterministic greedy modularity local moves · resolution 1 · maximum 50 sweeps · UUID-ordered traversal. Ties collapse to unique pairs; direction/date/type/confidence are ignored; self-links and missing endpoints are excluded. Results are an exploratory partition, not verified social groups.",
+                            ).small().color(muted));
+                        }
+                        ui.add_space(16.0);
                         ui.label(egui::RichText::new("NETWORK BRIDGES").size(9.0).strong().color(cyan));
                         if network_bridges.is_none() {
                             ui.label(egui::RichText::new("Find entities whose removal would split their connected group.").small().color(muted));
@@ -26413,6 +26653,8 @@ impl eframe::App for App {
                         if path_criteria_changed {
                             self.clear_path_result();
                             self.analysis_method_card = None;
+                            self.community_analysis = None;
+                            self.selected_community_interaction = None;
                         }
                         if let Some(counterpart_id) = focus_linked_entity {
                             self.select_chart_entity(counterpart_id, false);
@@ -42884,6 +43126,75 @@ mod tests {
     }
 
     #[test]
+    fn detected_community_interactions_separate_record_pair_and_direction_counts() {
+        let mut case = super::demo_case();
+        case.entities = (0..8)
+            .map(|index| {
+                let name = if index < 4 {
+                    format!("A{index}")
+                } else {
+                    format!("B{index}")
+                };
+                layout_entity(&name, "PERSON", false)
+            })
+            .collect();
+        let ids: Vec<Uuid> = case.entities.iter().map(|entity| entity.id).collect();
+        case.links.clear();
+        let make_link = |from, to, directed| super::Link {
+            from,
+            to,
+            connection_id: Uuid::new_v4().to_string(),
+            label: "CONTACTS".into(),
+            date: String::new(),
+            confidence: 2,
+            directed,
+            notes: String::new(),
+            source_notes: String::new(),
+            source_reference: String::new(),
+            ingest_source: None,
+            attributes: Vec::new(),
+        };
+        for (start, end) in [(0, 4), (4, 8)] {
+            for left in start..end {
+                for right in left + 1..end {
+                    case.links.push(make_link(ids[left], ids[right], false));
+                }
+            }
+        }
+        case.links.extend([
+            make_link(ids[3], ids[4], true),
+            make_link(ids[4], ids[3], true),
+            make_link(ids[3], ids[4], true),
+            make_link(ids[2], ids[5], false),
+            make_link(ids[1], ids[6], true),
+            make_link(ids[2], Uuid::new_v4(), true),
+            make_link(ids[1], ids[1], true),
+        ]);
+
+        let analysis = super::detected_community_analysis(&case);
+        assert_eq!(
+            analysis.groups.iter().map(Vec::len).collect::<Vec<_>>(),
+            [4, 4]
+        );
+        assert_eq!(analysis.interactions.len(), 1);
+        let interaction = &analysis.interactions[0];
+        assert_eq!(interaction.relationship_record_count, 5);
+        assert_eq!(interaction.distinct_endpoint_pair_count, 3);
+        if analysis.groups[interaction.first_community].contains(&ids[0]) {
+            assert_eq!(interaction.first_to_second_record_count, 3);
+            assert_eq!(interaction.second_to_first_record_count, 1);
+        } else {
+            assert_eq!(interaction.first_to_second_record_count, 1);
+            assert_eq!(interaction.second_to_first_record_count, 3);
+        }
+        assert_eq!(interaction.undirected_record_count, 1);
+        assert_eq!(interaction.link_indices, [12, 13, 14, 15, 16]);
+        assert_eq!(analysis.groups[interaction.first_community].len(), 4);
+        assert_eq!(analysis.groups[interaction.second_community].len(), 4);
+        assert_ne!(interaction.first_community, interaction.second_community);
+    }
+
+    #[test]
     fn shortest_path_ignores_relationships_with_missing_endpoints() {
         let mut case = super::demo_case();
         let entities = vec![
@@ -43630,10 +43941,15 @@ mod tests {
                 ..Default::default()
             },
         ));
+        app.community_analysis = Some(std::sync::Arc::new(super::CommunityAnalysis {
+            groups: vec![vec![Uuid::new_v4()]],
+            interactions: Vec::new(),
+        }));
 
         app.invalidate_network_groups();
 
         assert!(app.analysis_method_card.is_none());
+        assert!(app.community_analysis.is_none());
     }
 
     #[test]
