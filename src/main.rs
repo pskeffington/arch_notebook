@@ -14272,9 +14272,12 @@ fn export_analysis_packet_cli(
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&stage, fs::Permissions::from_mode(0o700)).map_err(|error| {
-            format!("cannot restrict packet staging directory permissions: {error}")
-        })?;
+        if let Err(error) = fs::set_permissions(&stage, fs::Permissions::from_mode(0o700)) {
+            let _ = fs::remove_dir_all(&stage);
+            return Err(format!(
+                "cannot restrict packet staging directory permissions: {error}"
+            ));
+        }
     }
     let result = (|| -> Result<(), String> {
         #[cfg(unix)]
