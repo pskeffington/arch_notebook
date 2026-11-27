@@ -26243,6 +26243,26 @@ impl eframe::App for App {
                             ui.label(egui::RichText::new(
                                 "SAMPLED CONTACT TOPOLOGY · up to 48 groups balanced across hop layers; browse the full virtualized index below for every group.",
                             ).small().strong().color(cyan));
+                            let sampled_group_count = analysis.map_group_indices.len();
+                            let sampled_contact_count = analysis.map_interaction_indices.len();
+                            let omitted_contact_count = analysis
+                                .interactions
+                                .len()
+                                .saturating_sub(sampled_contact_count);
+                            let sampled_contact_records: usize = analysis
+                                .map_interaction_indices
+                                .iter()
+                                .map(|index| analysis.interactions[*index].relationship_record_count)
+                                .sum();
+                            let omitted_contact_records = analysis
+                                .cross_group_relationship_record_count
+                                .saturating_sub(sampled_contact_records);
+                            ui.label(egui::RichText::new(format!(
+                                "Showing {sampled_group_count} of {} groups · {sampled_contact_count} of {} contact pairs · {sampled_contact_records} of {} relationship records ({omitted_contact_count} pairs / {omitted_contact_records} records omitted). Omitted contacts remain in the complete index.",
+                                analysis.groups.len(),
+                                analysis.interactions.len(),
+                                analysis.cross_group_relationship_record_count,
+                            )).small().color(muted));
                             let visible_groups_by_column = &analysis.map_groups_by_column;
                             let map_width = 148.0 + analysis.map_hops.len().saturating_sub(1) as f32 * 148.0;
                             let max_rows = visible_groups_by_column.iter().map(Vec::len).max().unwrap_or_default();
@@ -45311,6 +45331,25 @@ mod tests {
         );
         assert!(
             find_headless_text_rect(&visible_contact_map, "SAMPLED CONTACT TOPOLOGY").is_some()
+        );
+        let map_analysis = &app.network_proximity_analysis.as_ref().unwrap().1;
+        let mapped_records: usize = map_analysis
+            .map_interaction_indices
+            .iter()
+            .map(|index| map_analysis.interactions[*index].relationship_record_count)
+            .sum();
+        let coverage_label = format!(
+            "Showing {} of {} groups · {} of {} contact pairs · {} of {} relationship records",
+            map_analysis.map_group_indices.len(),
+            map_analysis.groups.len(),
+            map_analysis.map_interaction_indices.len(),
+            map_analysis.interactions.len(),
+            mapped_records,
+            map_analysis.cross_group_relationship_record_count,
+        );
+        assert!(
+            find_headless_text_rect(&visible_contact_map, &coverage_label).is_some(),
+            "sampled map should describe its coverage: {coverage_label}"
         );
         assert!(find_headless_text_rect(&visible_contact_map, "Network summary").is_some());
         assert!(find_headless_text_rect(&visible_contact_map, "Hop 1").is_some());
