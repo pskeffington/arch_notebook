@@ -19,6 +19,7 @@ pub(super) struct Analysis {
     pub map_groups_by_column: Vec<Vec<usize>>,
     pub map_group_indices: Vec<usize>,
     pub map_interaction_indices: Vec<usize>,
+    pub expanded_map_interaction_indices: Vec<Vec<usize>>,
     pub reachable_entity_count: usize,
     pub unreachable_entity_count: usize,
 }
@@ -73,6 +74,17 @@ fn sample_group_map(
     let mut groups_by_hop = vec![Vec::new(); hop_count];
     for (group_index, group) in groups.iter().enumerate() {
         groups_by_hop[group.hop_distance].push(group_index);
+    }
+    for group_indices in &mut groups_by_hop {
+        group_indices.sort_by(|first_index, second_index| {
+            let first = &groups[*first_index];
+            let second = &groups[*second_index];
+            second
+                .contains_cross_group_proxy
+                .cmp(&first.contains_cross_group_proxy)
+                .then_with(|| second.members.len().cmp(&first.members.len()))
+                .then_with(|| first_index.cmp(second_index))
+        });
     }
 
     let mut visible_groups_by_column = vec![Vec::new(); displayed_hops.len()];
@@ -320,7 +332,7 @@ where
             .iter()
             .any(|member| proxy_entities.contains(member));
     }
-    let (map_hops, map_groups_by_column) = sample_group_map(&groups, 120, 40);
+    let (map_hops, map_groups_by_column) = sample_group_map(&groups, 48, 40);
     let map_group_indices: Vec<usize> = map_groups_by_column.iter().flatten().copied().collect();
     let map_group_set: HashSet<usize> = map_group_indices.iter().copied().collect();
     let map_interaction_indices = interactions
@@ -332,6 +344,11 @@ where
             .then_some(index)
         })
         .collect();
+    let mut expanded_map_interaction_indices = vec![Vec::new(); groups.len()];
+    for (interaction_index, interaction) in interactions.iter().enumerate() {
+        expanded_map_interaction_indices[interaction.first_group].push(interaction_index);
+        expanded_map_interaction_indices[interaction.second_group].push(interaction_index);
+    }
     let cross_group_relationship_record_count = interactions
         .iter()
         .map(|interaction| interaction.relationship_record_count)
@@ -347,6 +364,7 @@ where
         map_groups_by_column,
         map_group_indices,
         map_interaction_indices,
+        expanded_map_interaction_indices,
         reachable_entity_count: distances.len(),
         unreachable_entity_count: entity_count.saturating_sub(distances.len()),
     }
@@ -354,6 +372,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::collections::{HashMap, HashSet};
+
     use super::analyze;
     use super::{ContactGroup, sample_group_map};
     use uuid::Uuid;
@@ -478,6 +498,87 @@ mod tests {
         assert_eq!(one_column, vec![vec![0, 1, 2]]);
         assert!(sample_group_map(&groups, 0, 3).1.is_empty());
         assert!(sample_group_map(&groups, 3, 0).0.is_empty());
+    }
+
+    #[test]
+    #[ignore = "requires the locally retained Clinton case; see PROXIMITY-MAP-CLINTON-01"]
+    fn clinton_case_topology_sampling_stays_bounded_and_covers_hops() {
+        let case_path = std::env::var("ARCH_NOTEBOOK_CLINTON_CASE_PATH")
+            .expect("set ARCH_NOTEBOOK_CLINTON_CASE_PATH to the retained local case JSON");
+        let case: crate::CaseFile = serde_json::from_str(
+            &std::fs::read_to_string(case_path).expect("read retained local case"),
+        )
+        .expect("parse retained local case");
+        assert_eq!(case.entities.len(), 2_813);
+        assert_eq!(case.links.len(), 6_173);
+
+        let mut neighbors: HashMap<Uuid, HashSet<Uuid>> = case
+            .entities
+            .iter()
+            .map(|entity| (entity.id, HashSet::new()))
+            .collect();
+        for link in &case.links {
+            if link.from != link.to
+                && neighbors.contains_key(&link.from)
+                && neighbors.contains_key(&link.to)
+            {
+                neighbors.get_mut(&link.from).unwrap().insert(link.to);
+                neighbors.get_mut(&link.to).unwrap().insert(link.from);
+            }
+        }
+        let origin = neighbors
+            .iter()
+            .max_by(
+                |(first_id, first_neighbors), (second_id, second_neighbors)| {
+                    first_neighbors
+                        .len()
+                        .cmp(&second_neighbors.len())
+                        .then_with(|| first_id.cmp(second_id))
+                },
+            )
+            .map(|(id, _)| *id)
+            .expect("case contains entities");
+        let analysis = analyze(
+            case.entities
+                .iter()
+                .map(|entity| (entity.id, entity.name.as_str())),
+            case.links
+                .iter()
+                .map(|link| (link.from, link.to, link.directed)),
+            origin,
+        );
+        assert_eq!(analysis.reachable_entity_count, 2_128);
+        assert_eq!(analysis.layers.len(), 9);
+        assert_eq!(analysis.map_hops.len(), 10);
+        assert_eq!(analysis.map_group_indices.len(), 48);
+        assert!(
+            analysis
+                .map_groups_by_column
+                .iter()
+                .all(|column| !column.is_empty())
+        );
+        assert!(
+            analysis
+                .map_interaction_indices
+                .iter()
+                .all(|interaction_index| {
+                    let interaction = &analysis.interactions[*interaction_index];
+                    analysis
+                        .map_group_indices
+                        .contains(&interaction.first_group)
+                        && analysis
+                            .map_group_indices
+                            .contains(&interaction.second_group)
+                })
+        );
+        assert_eq!(
+            analysis
+                .expanded_map_interaction_indices
+                .iter()
+                .map(Vec::len)
+                .sum::<usize>(),
+            analysis.interactions.len() * 2
+        );
     }
 
     #[test]

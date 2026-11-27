@@ -2,6 +2,23 @@
 
 ## Current topology renderer verification — 2026-11-27
 
+### Current bounded group topology candidate
+
+**Repository / branch / baseline:** `/home/sysadmin/github/arch_notebook` / `codex/ui-00-chart-baseline` / `ff106a669320c1e5e2325a39bd407da736a15ef5`.
+**Candidate binary SHA-256:** `a84eb32ae53a51f1d17bdab7e8d905d280318aa8105dd50fc8c91a6f1ffa7bb9`.
+
+| Gate | Result | Evidence |
+| --- | --- | --- |
+| Full offline Rust suite | PASS | 69 passed, 0 failed, 2 ignored. |
+| Retained Clinton topology sampling regression | PASS | Bounded 48-group sample spans all 10 hop columns; full expanded-contact index validated against all analyzed groups. |
+| Clinton SQL replay and redacted packet | PASS | 6,173 records, 0 skipped, 0 deltas; all 2,813 entities rendered, zero labels outside SVG viewport; read-only input hashes unchanged. |
+| Debug build, formatting, diff validation | PASS | Locked offline build, `cargo fmt --all -- --check`, and `git diff --check` passed. |
+| Release build | NOT VERIFIED | Offline release compilation stopped progressing in the application crate and was interrupted; no release result is claimed. |
+| Native Clinton graph review / Qwen / human content review | NOT TESTED / NOT RUN | See [PROXIMITY-MAP-CLINTON-01](evidence/vector-ui/PROXIMITY-MAP-CLINTON-01-linux.md) for scope and limits. |
+| Exact-head CI | PENDING | Run after push for the committed candidate. |
+
+See [PROXIMITY-MAP-CLINTON-01](evidence/vector-ui/PROXIMITY-MAP-CLINTON-01-linux.md) for exact commands and topology-specific assertions.
+
 **Repository / branch / source:** `/home/sysadmin/github/arch_notebook` / `codex/ui-00-chart-baseline` / `a9f56cced2ec12c2f0f787520942939a7603b006`.
 **Candidate:** current-source Linux debug application, SHA-256 `74c900167f450e28f391506d043bfb17fe177382afe19d6f8fdd16bcab24e606`.
 
