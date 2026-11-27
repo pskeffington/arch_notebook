@@ -6,7 +6,7 @@ The sampled map now draws the selected group with a clear outer ring and the sel
 
 ## Topology tie routing — 2026-11-27
 
-Sampled contact ties now follow deterministic curved routes; reciprocal direction arrows are offset and tangent-aligned, foreground nodes mask route ends, and pointer picking follows the painted segments. Per-frame route geometry is reused between painting and picking. An independent topology spot-check passes. The 71-test suite, retained Clinton topology UI/sampling checks, locked offline check/debug build, and format checks pass. Exact-head CI could not be dispatched because the GitHub API connection failed; native review and dense-map frame cost remain unverified. See [PROXIMITY-MAP-EDGE-ROUTING-01](evidence/vector-ui/PROXIMITY-MAP-EDGE-ROUTING-01.md).
+Sampled contact ties now follow deterministic curved routes; reciprocal direction arrows are offset and tangent-aligned, foreground nodes mask route ends, and pointer picking follows the painted segments. Per-frame route geometry is reused between painting and picking. An independent topology spot-check passes. The 71-test suite, retained Clinton topology UI/sampling checks, locked offline check/debug build, and format checks pass. Exact-head CI [46082650685](https://github.com/pskeffington/arch_notebook/actions/runs/46082650685) passed all six Linux, Arch, and macOS jobs for `58efaac`. Native review and dense-map frame cost remain unverified. See [PROXIMITY-MAP-EDGE-ROUTING-01](evidence/vector-ui/PROXIMITY-MAP-EDGE-ROUTING-01.md).
 
 ## Topology pointer-target geometry — 2026-11-27
 
