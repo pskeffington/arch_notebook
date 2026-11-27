@@ -3,15 +3,15 @@
 ## Current synchronized branch verification — 2026-11-26
 
 **Repository / branch:** `/home/sysadmin/github/arch_notebook` / `codex/ui-00-chart-baseline`.
-**Source commit:** `4c132cf3d2b5f4bee0bd1f9625f1dfa66fd57f52`.
-**Release binary SHA-256:** `1a7331856c8498fa72cad1148a3a31c11a20d1a29b967226d9ee517334879392`.
+**Source commit:** `d0ce0c77e9fcee445536d0f55aceebf70e5fbd84` (adds a headless viewport paint-submission regression to the `e27ad5e` product candidate).
+**Release binary SHA-256:** `4a373a10ace60f738232247d44f5eee16e0d289b6d755788e8e9c2255cb436d0`.
 
 | Gate | Result | Evidence |
 | --- | --- | --- |
-| Offline Rust suite, check and formatting | PASS | 55 tests pass; `cargo check --locked --offline`, formatting, and diff validation exit 0. |
+| Offline Rust suite, check and formatting | PASS | 57 tests pass, including `headless_chart_paint_culls_offscreen_relationship_segments`; `cargo check --locked --offline`, formatting, and diff validation exit 0. |
 | Debug and release builds | PASS | Locked offline builds exit 0. |
-| Remote CI for exact source commit | NOT RUN | GitHub Actions branch history has no run for `4c132cf`; the commit check-runs endpoint returned zero checks. Local acceptance is recorded separately. |
-| Current-user desktop/launcher install | PASS, scoped | Installed binary matches the release artifact. Menu entry and Desktop shortcut validate and compare byte-for-byte; MIME registration, automation helper, SVG and PNG match. See [LOCAL-INSTALL-03](evidence/deployment/LOCAL-INSTALL-03-linux.md). |
+| Remote CI for exact source commit | NOT RUN | GitHub check-runs endpoint for `e27ad5e` returned zero checks. The paint-submission test commit `d0ce0c7` has not yet been checked remotely. Local acceptance is recorded separately. |
+| Current-user desktop/launcher install | PASS, scoped | Installed binary matches the release artifact. Menu entry and Desktop shortcut validate and compare byte-for-byte; MIME registration, automation helper, SVG and PNG match. See [LOCAL-INSTALL-04](evidence/deployment/LOCAL-INSTALL-04-linux.md). |
 | Native window interaction and visual review | NOT RUN | `wayland-info` returns `failed to create display: Operation not permitted`; install checks do not establish a rendered or interactive window. |
 | IBM ANX/XSD/application validation | NOT TESTED | The IBM schema and application were unavailable; internal interoperability checks do not replace vendor validation. |
 
