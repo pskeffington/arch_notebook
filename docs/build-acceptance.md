@@ -1,5 +1,21 @@
 # Local build acceptance record
 
+## Current topology renderer verification — 2026-11-27
+
+**Repository / branch / source:** `/home/sysadmin/github/arch_notebook` / `codex/ui-00-chart-baseline` / `a9f56cced2ec12c2f0f787520942939a7603b006`.
+**Candidate:** current-source Linux debug application, SHA-256 `74c900167f450e28f391506d043bfb17fe177382afe19d6f8fdd16bcab24e606`.
+
+| Gate | Result | Evidence |
+| --- | --- | --- |
+| Offline Rust suite | PASS | `CARGO_TARGET_DIR=/tmp/arch-notebook-target cargo test --locked --offline` exited 0; 69 passed, 0 failed, 1 opt-in benchmark ignored. |
+| Current-source Linux debug build | PASS | `CARGO_BUILD_JOBS=1 CARGO_TARGET_DIR=/tmp/arch-notebook-current-target cargo build --locked --offline` exited 0. |
+| Formatting and diff validation | PASS | `cargo fmt --all -- --check` and `git diff --check` exited 0. |
+| Native initial render on synthetic chart | PASS, render-only | Current candidate rendered all 30 entity cards inside the chart viewport with dense Auto relationship text suppressed; [G4-DENSE-LABEL-03](evidence/vector-ui/G4-DENSE-LABEL-03-current-topology-render-20261127.md). |
+| Native interaction, Clinton visual review, renderer performance, IBM application parity | NOT TESTED | No native input/performance measurements, real corpus capture, or IBM application/schema validation in this run. |
+| Exact-head cross-platform CI | NOT VERIFIED | The topology test commit has no CI evidence recorded here. |
+
+The native screenshot resolves the left-edge clipping observed in the prior candidate, for this synthetic startup view only. It does not close G3/G4 native interaction or broader UI-00 acceptance.
+
 ## Analysis pane filter readability — 2026-11-27
 
 **Task / owner:** Improve chart-analysis navigation at the default pane width; implementation session.
@@ -30,11 +46,11 @@ The JSON and human-readable success summaries no longer echo the caller-supplied
 
 ## Conditional formatting in chart templates — 2026-11-27
 
-Chart templates now carry up to 96 conditional attribute-formatting rules and apply them through bounded, visible template-owned legend blocks. The full suite (63 passed, 1 opt-in benchmark ignored), locked check/debug/release builds, and current-user launcher/icon sync pass. The complete template-ownership follow-up passed exact-head cross-platform CI in [run 45988117371](https://github.com/pskeffington/arch_notebook/actions/runs/45988117371). A native render smoke exists for a fictional sparse chart, but template-generated legend placement/interaction and the real Clinton chart view remain untested; the smoke also showed left-edge card clipping. See [CHART-TEMPLATE-CONDITIONAL-RULES-01](evidence/vector-ui/CHART-TEMPLATE-CONDITIONAL-RULES-01-linux.md) and [G4-DENSE-LABEL-02](evidence/vector-ui/G4-DENSE-LABEL-02-native-render-20261127.md).
+Chart templates now carry up to 96 conditional attribute-formatting rules and apply them through bounded, visible template-owned legend blocks. The full suite (63 passed, 1 opt-in benchmark ignored), locked check/debug/release builds, and current-user launcher/icon sync pass. The complete template-ownership follow-up passed exact-head cross-platform CI in [run 45988117371](https://github.com/pskeffington/arch_notebook/actions/runs/45988117371). The prior native capture showed left-edge clipping; a current-source synthetic startup render shows all 30 cards inside the viewport, while template-generated legend interaction and the real Clinton chart view remain untested. See [CHART-TEMPLATE-CONDITIONAL-RULES-01](evidence/vector-ui/CHART-TEMPLATE-CONDITIONAL-RULES-01-linux.md), [prior G4 render](evidence/vector-ui/G4-DENSE-LABEL-02-native-render-20261127.md), and [current G4 render](evidence/vector-ui/G4-DENSE-LABEL-03-current-topology-render-20261127.md).
 
 ## Current-user Linux Desktop shortcut — 2026-11-27
 
-The Linux per-user installer now creates an executable Desktop shortcut byte-identical to the application-menu entry. An isolated temporary-HOME smoke passes for executable, desktop files, icons, SQL helper and MIME definition; the current-user release and icon assets are synchronized. Exact-head cross-platform CI passed in [run 45988117371](https://github.com/pskeffington/arch_notebook/actions/runs/45988117371), including the installer smoke and current application candidate. Native launch remains blocked by the unavailable compositor. See [LOCAL-INSTALL-08](evidence/deployment/LOCAL-INSTALL-08-linux.md).
+The Linux per-user installer now creates an executable Desktop shortcut byte-identical to the application-menu entry. An isolated temporary-HOME smoke passes for executable, desktop files, icons, SQL helper and MIME definition; the current-user release and icon assets are synchronized. Exact-head cross-platform CI passed in [run 45988117371](https://github.com/pskeffington/arch_notebook/actions/runs/45988117371), including the installer smoke and current application candidate. A later current-source debug candidate launched and rendered a synthetic chart, but native interaction and launcher-to-current-source synchronization remain unverified. See [LOCAL-INSTALL-08](evidence/deployment/LOCAL-INSTALL-08-linux.md) and [current topology render](evidence/vector-ui/G4-DENSE-LABEL-03-current-topology-render-20261127.md).
 
 
 ## SQL automation and scale recheck — 2026-11-27
