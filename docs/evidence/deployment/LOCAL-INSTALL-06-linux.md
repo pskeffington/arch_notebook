@@ -16,6 +16,7 @@
 | Desktop entry | **PASS** | `desktop-file-validate /home/sysadmin/.local/share/applications/arch-notebook.desktop` exited 0. |
 | Case MIME association | **PASS** | `gio mime application/vnd.arch-notebook.case+json` lists `arch-notebook.desktop` as default. |
 | Native candidate launch/render | **BLOCKED** | `/home/sysadmin/.local/bin/arch-notebook /tmp/arch-notebook-review-sparse30.case.json` exited 1 with `WaylandError(Connection(NoCompositor))`; no candidate window rendered. |
+| X11 fallback launch | **BLOCKED** | `env -u WAYLAND_DISPLAY timeout 10s /home/sysadmin/.local/bin/arch-notebook /tmp/arch-notebook-review-sparse30.case.json` returned 124. A subsequent full-desktop capture showed no Arch Notebook window. |
 | Pointer and keyboard interaction | **NOT TESTED** | No candidate window was available. |
 
 The product executable and launcher now point to the same candidate as the headless dense-label regression. The review chart is fictional and stored under `/tmp`. The original app screenshot predates this candidate and does not count as its native render evidence. This local installation is not a published release or proof of interactive acceptance.

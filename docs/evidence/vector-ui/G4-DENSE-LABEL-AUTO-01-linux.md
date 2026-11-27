@@ -27,6 +27,7 @@ Relationship labels and their attribute callouts now have session-scoped **Auto*
 | Current-user candidate install | **PASS**; `/home/sysadmin/.local/bin/arch-notebook` hash matches the release binary, `--version --json` and `desktop-file-validate` passed, and the case MIME default resolves to `arch-notebook.desktop` |
 | Fictional sparse-30 review fixture | **PASS**; generator reported 30 entities and 90 records, SHA-256 `bf88b5df8c2c8e259e41a52486d8f09a12f6a6665d3a60892c802d8c06fa872d` |
 | Updated candidate native launch | **BLOCKED**; `/home/sysadmin/.local/bin/arch-notebook /tmp/arch-notebook-review-sparse30.case.json` exited 1 with `WaylandError(Connection(NoCompositor))` |
+| X11 fallback launch attempt | **BLOCKED**; `env -u WAYLAND_DISPLAY timeout 10s /home/sysadmin/.local/bin/arch-notebook /tmp/arch-notebook-review-sparse30.case.json` returned 124, and the subsequent full-desktop capture showed no Arch Notebook window |
 | Updated candidate pointer/visual review | **NOT TESTED**; launch failed before a window appeared. The earlier desktop capture shows the old running app only |
 | GPU, compositor, presentation, frame-rate, and input-to-display measurements | **NOT MEASURED** |
 
