@@ -12,10 +12,11 @@
 | Full offline Rust suite | PASS | 69 passed, 0 failed, 2 ignored. |
 | Retained Clinton topology sampling regression | PASS | Bounded 48-group sample spans all 10 hop columns; full expanded-contact index validated against all analyzed groups. |
 | Clinton SQL replay and redacted packet | PASS | 6,173 records, 0 skipped, 0 deltas; all 2,813 entities rendered, zero labels outside SVG viewport; read-only input hashes unchanged. |
+| Production topology UI on real Clinton corpus | PASS, headless | At 1440×900, the production Analysis pane renders the 48-group sample across 10 hop columns and navigates to a selected group with all group rows indexed; focused test passes. |
 | Debug build, formatting, diff validation | PASS | Locked offline build, `cargo fmt --all -- --check`, and `git diff --check` passed. |
 | Release build | NOT VERIFIED | Offline release compilation stopped progressing in the application crate and was interrupted; no release result is claimed. |
-| Native Clinton graph review / Qwen / human content review | NOT TESTED / NOT RUN | See [PROXIMITY-MAP-CLINTON-01](evidence/vector-ui/PROXIMITY-MAP-CLINTON-01-linux.md) for scope and limits. |
-| Exact-head CI | PENDING | Workflow run [46072141894](https://github.com/pskeffington/arch_notebook/actions/runs/46072141894) is running for source `8e796bc8794e4865a3ec509703ae7ca3d8b581f4`. |
+| Native Clinton graph review / Qwen / human content review | BLOCKED / NOT RUN | X11 and Wayland access are denied in this session; semantic reviews were outside the structural UI regression. See [PROXIMITY-MAP-CLINTON-01](evidence/vector-ui/PROXIMITY-MAP-CLINTON-01-linux.md) and [PROXIMITY-MAP-CLINTON-UI-01](evidence/vector-ui/PROXIMITY-MAP-CLINTON-UI-01-linux.md). |
+| Exact-head CI for product implementation | PASS | Workflow run [46072141894](https://github.com/pskeffington/arch_notebook/actions/runs/46072141894) for product source `8e796bc8794e4865a3ec509703ae7ca3d8b581f4` passed Linux tests, Linux x86_64, Linux ARM64, Arch package, macOS Intel, and macOS Apple Silicon. The additional opt-in corpus UI regression and its evidence/docs are a later follow-up and are not covered by that run. |
 
 See [PROXIMITY-MAP-CLINTON-01](evidence/vector-ui/PROXIMITY-MAP-CLINTON-01-linux.md) for exact commands and topology-specific assertions.
 

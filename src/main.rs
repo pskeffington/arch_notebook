@@ -45535,6 +45535,136 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires the locally retained Clinton case; see PROXIMITY-MAP-CLINTON-UI-01"]
+    fn clinton_case_topology_map_renders_at_real_corpus_scale() {
+        let case_path = std::env::var("ARCH_NOTEBOOK_CLINTON_CASE_PATH")
+            .expect("set ARCH_NOTEBOOK_CLINTON_CASE_PATH to the retained local case JSON");
+        let case: CaseFile = serde_json::from_str(
+            &std::fs::read_to_string(case_path).expect("read retained local case"),
+        )
+        .expect("parse retained local case");
+        let entity_ids: std::collections::HashSet<_> =
+            case.entities.iter().map(|entity| entity.id).collect();
+        let mut neighbors: std::collections::HashMap<_, std::collections::HashSet<_>> = case
+            .entities
+            .iter()
+            .map(|entity| (entity.id, std::collections::HashSet::new()))
+            .collect();
+        for link in &case.links {
+            if link.from != link.to
+                && entity_ids.contains(&link.from)
+                && entity_ids.contains(&link.to)
+            {
+                neighbors.get_mut(&link.from).unwrap().insert(link.to);
+                neighbors.get_mut(&link.to).unwrap().insert(link.from);
+            }
+        }
+        let origin = neighbors
+            .iter()
+            .max_by(
+                |(first_id, first_neighbors), (second_id, second_neighbors)| {
+                    first_neighbors
+                        .len()
+                        .cmp(&second_neighbors.len())
+                        .then_with(|| first_id.cmp(second_id))
+                },
+            )
+            .map(|(id, _)| *id)
+            .expect("case contains entities");
+        let mut app = App::automation_context(case, "/tmp/clinton-topology-headless.case.json");
+        app.selected = Some(origin);
+        let context = egui::Context::default();
+        let mut frame = eframe::Frame::_new_kittest();
+        let mut time = 0.0;
+        let action = render_headless_app_frame(&context, &mut app, &mut frame, time, Vec::new());
+        let measure = find_headless_text_point(&action, "Measure hop layers")
+            .expect("geodesic action is visible");
+        time += 1.0 / 60.0;
+        let _ = render_headless_app_frame_at(
+            &context,
+            &mut app,
+            &mut frame,
+            time,
+            vec![
+                egui::Event::PointerMoved(measure),
+                egui::Event::PointerButton {
+                    pos: measure,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::default(),
+                },
+            ],
+            egui::vec2(1440.0, 900.0),
+        );
+        time += 1.0 / 60.0;
+        let _ = render_headless_app_frame_at(
+            &context,
+            &mut app,
+            &mut frame,
+            time,
+            vec![egui::Event::PointerButton {
+                pos: measure,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::default(),
+            }],
+            egui::vec2(1440.0, 900.0),
+        );
+        let analysis = &app.network_proximity_analysis.as_ref().unwrap().1;
+        assert_eq!(app.case.entities.len(), 2_813);
+        assert_eq!(app.case.links.len(), 6_173);
+        assert_eq!(analysis.map_group_indices.len(), 48);
+        assert_eq!(analysis.map_hops.len(), 10);
+        assert_eq!(analysis.reachable_entity_count, 2_128);
+        let first_group = analysis
+            .map_group_indices
+            .iter()
+            .copied()
+            .find(|group_index| !analysis.expanded_map_interaction_indices[*group_index].is_empty())
+            .expect("sampled topology contains a group contact");
+        let mut scroll_time = time + 1.0 / 60.0;
+        let visible_map = scroll_headless_until_text_at(
+            &context,
+            &mut app,
+            &mut frame,
+            &mut scroll_time,
+            "SAMPLED CONTACT TOPOLOGY",
+            egui::pos2(1_370.0, 780.0),
+        );
+        assert!(find_headless_text_rect(&visible_map, "GROUP CONTACT TOPOLOGY").is_some());
+        app.selected_proximity_group = Some(first_group);
+        let shapes = render_headless_app_frame_at(
+            &context,
+            &mut app,
+            &mut frame,
+            scroll_time + 1.0 / 60.0,
+            Vec::new(),
+            egui::vec2(1440.0, 900.0),
+        );
+        assert!(find_headless_text_rect(&shapes, "SAMPLED CONTACT TOPOLOGY").is_some());
+        assert!(find_headless_text_rect(&shapes, "GROUP CONTACT TOPOLOGY").is_some());
+        assert!(
+            find_headless_text_rect(&shapes, &format!("GROUP G{} CONTACTS", first_group + 1))
+                .is_some()
+        );
+        assert_eq!(
+            app.network_proximity_analysis
+                .as_ref()
+                .unwrap()
+                .1
+                .groups
+                .len(),
+            app.network_proximity_analysis
+                .as_ref()
+                .unwrap()
+                .1
+                .expanded_map_interaction_indices
+                .len(),
+            "full virtualized group index must retain every contact group"
+        );
+    }
+
+    #[test]
     fn headless_chart_paint_culls_offscreen_relationship_labels() {
         fn count_relationship_labels(shapes: &[egui::epaint::ClippedShape]) -> usize {
             fn count(shape: &egui::epaint::Shape) -> usize {
