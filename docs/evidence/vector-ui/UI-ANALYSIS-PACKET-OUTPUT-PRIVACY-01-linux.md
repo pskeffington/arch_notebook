@@ -22,6 +22,7 @@ Successful `--export-analysis-packet ... --json` output now reports the stable o
 | Locked release build | **PASS** | `CARGO_BUILD_JOBS=1 CARGO_TARGET_DIR=/tmp/arch-notebook-target cargo build --locked --offline --release` exited 0. |
 | Packet acceptance harness | **PASS** | `python3 scripts/test-analysis-packet-acceptance.py --binary /tmp/arch-notebook-target/release/arch-notebook --fixture fixtures/chart/correctness.case.json --work-dir /tmp/arch-notebook-packet-redacted-output-20261127` exited 0. Its assertions confirm the destination path is absent from both JSON and human-readable stdout, default redaction, selected-chart packet scope, fixture immutability, SVG XML/direction/self-loop markers, no-overwrite and failure handling, and private output permissions. |
 | Python harness syntax | **PASS** | `python3 -m py_compile scripts/test-analysis-packet-acceptance.py` exited 0. |
+| Exact-head GitHub Actions | **PASS** | [Run 45970460460](https://github.com/pskeffington/arch_notebook/actions/runs/45970460460) completed successfully for `a10536543445f15be083239a7bc2c2572e3e5074`. Linux tests/fixture determinism, Linux x86_64/ARM64, macOS Intel/Apple Silicon, and Arch package jobs passed; release attachment was skipped. |
 | Cross-platform publication behavior | **NOT TESTED** | The packet acceptance harness's atomic publication path is Linux-only. No macOS or Windows CLI runtime claim is made here. |
 
 This change limits success-output path exposure. It does not change packet contents, disclosure controls, or file-publication semantics.
