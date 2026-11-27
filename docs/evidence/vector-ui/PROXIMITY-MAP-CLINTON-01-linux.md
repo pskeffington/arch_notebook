@@ -2,7 +2,7 @@
 
 - **Task / owner:** Clean up the hop-group topology overview and preserve full group/contact navigation; implementation session.
 - **Repository / branch / baseline:** `arch_notebook` / `codex/ui-00-chart-baseline` / `ff106a669320c1e5e2325a39bd407da736a15ef5`.
-- **Candidate source:** recorded after commit in the build acceptance record.
+- **Candidate source:** `8e796bc8794e4865a3ec509703ae7ca3d8b581f4`.
 - **Candidate binary:** Linux debug, SHA-256 `a84eb32ae53a51f1d17bdab7e8d905d280318aa8105dd50fc8c91a6f1ffa7bb9`.
 
 ## Change
@@ -22,6 +22,6 @@ The hop-group summary now uses one compact row per layer instead of repeating ev
 | Formatting and diff validation | PASS | `cargo fmt --all -- --check` and `git diff --check` exited 0. |
 | Native Clinton topology visual review | NOT TESTED | The local display could not be opened from this session. Headless UI and corpus-data regressions do not establish native appearance, pointer feel, contrast, or render performance. |
 | Qwen and human content review | NOT RUN | This is a structural topology/rendering check; it makes no semantic claims about the corpus. PDF extraction completeness is not established by this run. |
-| Exact-head CI | PENDING | Dispatch and record the workflow for the committed candidate. |
+| Exact-head CI | PENDING | Workflow run [46072141894](https://github.com/pskeffington/arch_notebook/actions/runs/46072141894) is running for the exact candidate source SHA. |
 
 The selection of a highest-degree origin is a deterministic structural fixture, not a semantic finding about an individual. No corpus names, entity IDs, relationship rows, or private input paths are added to this evidence.

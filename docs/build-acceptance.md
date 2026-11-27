@@ -15,7 +15,7 @@
 | Debug build, formatting, diff validation | PASS | Locked offline build, `cargo fmt --all -- --check`, and `git diff --check` passed. |
 | Release build | NOT VERIFIED | Offline release compilation stopped progressing in the application crate and was interrupted; no release result is claimed. |
 | Native Clinton graph review / Qwen / human content review | NOT TESTED / NOT RUN | See [PROXIMITY-MAP-CLINTON-01](evidence/vector-ui/PROXIMITY-MAP-CLINTON-01-linux.md) for scope and limits. |
-| Exact-head CI | PENDING | Run after push for the committed candidate. |
+| Exact-head CI | PENDING | Workflow run [46072141894](https://github.com/pskeffington/arch_notebook/actions/runs/46072141894) is running for source `8e796bc8794e4865a3ec509703ae7ca3d8b581f4`. |
 
 See [PROXIMITY-MAP-CLINTON-01](evidence/vector-ui/PROXIMITY-MAP-CLINTON-01-linux.md) for exact commands and topology-specific assertions.
 
