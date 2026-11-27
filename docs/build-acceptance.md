@@ -1,5 +1,19 @@
 # Local build acceptance record
 
+## Current synchronized branch verification — 2026-11-26
+
+**Repository / branch:** `/home/sysadmin/github/arch_notebook` / `codex/ui-00-chart-baseline`.
+**Source commit:** `e86814675eaee96ed6f20caff94d6d5b79b9a2c5`.
+
+| Gate | Result | Evidence |
+| --- | --- | --- |
+| Offline Rust suite and source check | PASS | 54 tests, formatting, diff validation, and offline `cargo check` pass for the graph-layout comparison change. |
+| Release build and G0/G3 layout comparison | PASS, CPU only | Release build and 12 paired sparse/hub/disconnected/dense cases at 1,000–10,000 entities; [G3 release evidence](evidence/vector-ui/G3-connectivity-vs-force-release-20261126.md). Native arrange/restore remains unverified. |
+| Current-release SQL automation and scale | PASS, synthetic | Current release passes capture, recovery, schema adaptation, CSV/TSV exchange, and 7,121-record joined-header scale checks; [SQL-AUTO-06](evidence/sql-automation/SQL-AUTO-06-current-release-linux.md). Live scheduling and native Automation UI remain unverified. |
+| Local desktop/launcher installation | PASS, scoped | Binary, menu/desktop entries, MIME default, icons, and automation helper synchronized to the current build; [LOCAL-INSTALL-02](evidence/deployment/LOCAL-INSTALL-02-linux.md). Native window launch was not tested because the display is unavailable. |
+| Independent review of the new Arrange/Restore test | NOT VERIFIED | This continuation performed implementation-owner review only; no separate reviewer handoff is checked in. |
+| IBM ANX/XSD/application validation | NOT TESTED | The IBM schema and application were unavailable; internal interoperability tests are not a substitute. |
+
 ## Current-user desktop and launcher installation — 2026-11-26
 
 **Task / owner:** Install the proximity-analysis candidate on this machine and synchronize its executable, application-menu entry, desktop shortcut, and icon art; implementation session.

@@ -1,0 +1,28 @@
+{
+  "baseline_capture_duration_ms": 83,
+  "captured_relationship_records": 7121,
+  "case_persisted_atomically": true,
+  "compared_snapshot_confidence_decline": true,
+  "connections_with_non_null_thread": 6105,
+  "current_capture_duration_ms": 135,
+  "distinct_composite_record_ids": 7121,
+  "endpoint_entities": 1500,
+  "entities_with_non_null_department": 1200,
+  "nullable_attributes_handled": true,
+  "query_only_preflight": "PASS",
+  "repeated_endpoint_pairs": 4121,
+  "result": "PASS",
+  "schema_version": 1,
+  "skipped_rows": 0,
+  "snapshot_ids": [
+    "2ad211df-83bb-425a-9b03-6bddaa4db976",
+    "0382dc50-de1f-4ebf-a2c1-49eb946543e6"
+  ],
+  "snapshots": 2,
+  "source_rows": 7121,
+  "source_sha256_after_harness_mutation": "37fe6a12f6e1d44d692f0fa21b539beb09cff57d51b8c84e9afb9709d7b47fb8",
+  "source_sha256_before_harness_mutation": "54f6ec697d50b4340d0b78cfbb48b3c6acab659631cc4d42d1946f66ad3058e6",
+  "sqlite_source_unchanged_during_each_capture": true,
+  "work_dir": "/tmp/arch-notebook-sql-scale-e868146-20261126",
+  "workload": "fictional joined email headers; no bodies"
+}
