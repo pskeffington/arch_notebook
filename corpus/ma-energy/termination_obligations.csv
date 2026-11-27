@@ -1,0 +1,10 @@
+connection_id,source,target,relationship,amount_usd,date,round_or_docket,source_url,evidence_status
+1,Commonwealth Wind,Eversource,TERMINATION_PAYMENT_OBLIGATION,25900800,2023-08-23,22-70/22-71/22-72,https://www.mass.gov/doc/dpu-annual-report-2023-0/download,regulatory_schedule_not_cash_confirmation
+2,Commonwealth Wind,National Grid,TERMINATION_PAYMENT_OBLIGATION,21619200,2023-08-23,22-70/22-71/22-72,https://www.mass.gov/doc/dpu-annual-report-2023-0/download,regulatory_schedule_not_cash_confirmation
+3,Commonwealth Wind,Unitil,TERMINATION_PAYMENT_OBLIGATION,480000,2023-08-23,22-70/22-71/22-72,https://www.mass.gov/doc/dpu-annual-report-2023-0/download,regulatory_schedule_not_cash_confirmation
+4,SouthCoast Wind,Eversource,TERMINATION_PAYMENT_OBLIGATION,12032350,2023-09-29,round2,https://www.mass.gov/doc/dpu-annual-report-2023-0/download,regulatory_schedule_not_cash_confirmation
+5,SouthCoast Wind,National Grid,TERMINATION_PAYMENT_OBLIGATION,10189850,2023-09-29,round2,https://www.mass.gov/doc/dpu-annual-report-2023-0/download,regulatory_schedule_not_cash_confirmation
+6,SouthCoast Wind,Unitil,TERMINATION_PAYMENT_OBLIGATION,217800,2023-09-29,round2,https://www.mass.gov/doc/dpu-annual-report-2023-0/download,regulatory_schedule_not_cash_confirmation
+7,SouthCoast Wind,Eversource,TERMINATION_PAYMENT_OBLIGATION,11678700,2023-09-29,round3,https://www.mass.gov/doc/dpu-annual-report-2023-0/download,regulatory_schedule_not_cash_confirmation
+8,SouthCoast Wind,National Grid,TERMINATION_PAYMENT_OBLIGATION,9890100,2023-09-29,round3,https://www.mass.gov/doc/dpu-annual-report-2023-0/download,regulatory_schedule_not_cash_confirmation
+9,SouthCoast Wind,Unitil,TERMINATION_PAYMENT_OBLIGATION,211200,2023-09-29,round3,https://www.mass.gov/doc/dpu-annual-report-2023-0/download,regulatory_schedule_not_cash_confirmation
