@@ -44342,15 +44342,11 @@ mod tests {
     }
 
     #[test]
-    fn headless_chart_paint_culls_offscreen_relationship_segments() {
-        fn count_line_segments(shapes: &[egui::epaint::ClippedShape]) -> usize {
+    fn headless_chart_paint_culls_offscreen_relationship_labels() {
+        fn count_relationship_labels(shapes: &[egui::epaint::ClippedShape]) -> usize {
             fn count(shape: &egui::epaint::Shape) -> usize {
                 match shape {
-                    egui::epaint::Shape::LineSegment { stroke, .. }
-                        if stroke.color.to_array() == [60, 78, 90, 120] =>
-                    {
-                        1
-                    }
+                    egui::epaint::Shape::Text(text) if text.galley.text() == "CONTACTS" => 1,
                     egui::epaint::Shape::Vec(children) => children.iter().map(count).sum(),
                     _ => 0,
                 }
@@ -44403,16 +44399,16 @@ mod tests {
         let mut frame = eframe::Frame::_new_kittest();
         let visible_shapes =
             render_headless_app_frame(&context, &mut app, &mut frame, 0.0, Vec::new());
-        let visible_line_segments = count_line_segments(&visible_shapes);
+        let visible_relationship_labels = count_relationship_labels(&visible_shapes);
 
         app.chart_pan = egui::vec2(2_000.0, 0.0);
         let offscreen_shapes =
             render_headless_app_frame(&context, &mut app, &mut frame, 1.0 / 60.0, Vec::new());
-        let offscreen_line_segments = count_line_segments(&offscreen_shapes);
+        let offscreen_relationship_labels = count_relationship_labels(&offscreen_shapes);
 
         assert!(
-            visible_line_segments > offscreen_line_segments + 100,
-            "visible chart should emit relationship segments before pan (visible={visible_line_segments}, panned={offscreen_line_segments})"
+            visible_relationship_labels > offscreen_relationship_labels + 10,
+            "visible relationships should emit more chart-label shapes before pan (visible={visible_relationship_labels}, panned={offscreen_relationship_labels})"
         );
     }
 

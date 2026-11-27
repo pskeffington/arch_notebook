@@ -8,7 +8,7 @@
 
 | Gate | Result | Evidence |
 | --- | --- | --- |
-| Offline Rust suite, check and formatting | PASS | 57 tests pass, including `headless_chart_paint_culls_offscreen_relationship_segments`; `cargo check --locked --offline`, formatting, and diff validation exit 0. |
+| Offline Rust suite, check and formatting | PASS | 57 tests pass, including `headless_chart_paint_culls_offscreen_relationship_labels`; `cargo check --locked --offline`, formatting, and diff validation exit 0. |
 | Debug and release builds | PASS | Locked offline builds exit 0. |
 | Remote CI for exact source commit | NOT RUN | GitHub check-runs endpoint for `e27ad5e` returned zero checks. The paint-submission test commit `d0ce0c7` has not yet been checked remotely. Local acceptance is recorded separately. |
 | Current-user desktop/launcher install | PASS, scoped | Installed binary matches the release artifact. Menu entry and Desktop shortcut validate and compare byte-for-byte; MIME registration, automation helper, SVG and PNG match. See [LOCAL-INSTALL-04](evidence/deployment/LOCAL-INSTALL-04-linux.md). |
