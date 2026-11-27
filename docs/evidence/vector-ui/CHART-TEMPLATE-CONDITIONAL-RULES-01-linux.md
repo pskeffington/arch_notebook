@@ -3,7 +3,7 @@
 - **Task / owner:** Carry conditional attribute formatting with case-local chart templates; implementation session.
 - **Repository / branch:** `/home/sysadmin/github/arch_notebook` / `codex/ui-00-chart-baseline`.
 - **Baseline:** `82df134b114cfab7ffdb992da1a63fddb3f2ddef`.
-- **Source candidate:** pending commit.
+- **Source candidate:** `f43da45`.
 - **Scope:** Persist, apply, reapply, and remove bounded chart-template conditional rules while preserving legacy case readability and local legends.
 - **Release and installed binary SHA-256:** `7f789d8fa53fb2fac444e2189767ffd266e3f49c537b2058d6175356fdf176c8`.
 

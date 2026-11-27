@@ -2,7 +2,8 @@
 
 - **Task / owner:** Install the current Arch Notebook candidate and keep its Desktop launcher aligned with the application menu; implementation session.
 - **Repository / branch:** `/home/sysadmin/github/arch_notebook` / `codex/ui-00-chart-baseline`.
-- **Source candidate:** pending commit.
+- **Installer source candidate:** `1dd1c76b986701fc989b114f306e9dab745c860f`.
+- **Installed application source candidate:** `f43da45eed456ffd1aa955c1393e9e553a574502`.
 - **Host:** Linux x86_64; current user only.
 - **Release and installed executable SHA-256:** `7f789d8fa53fb2fac444e2189767ffd266e3f49c537b2058d6175356fdf176c8`.
 - **Isolated installer report:** [LOCAL-INSTALL-08 JSON](artifacts/LOCAL-INSTALL-08-linux.json).
