@@ -26228,9 +26228,9 @@ impl eframe::App for App {
                                 "SAMPLED CONTACT TOPOLOGY · up to 48 groups balanced across hop layers; browse the full virtualized index below for every group.",
                             ).small().strong().color(cyan));
                             let visible_groups_by_column = &analysis.map_groups_by_column;
-                            let map_width = 128.0 + analysis.map_hops.len().saturating_sub(1) as f32 * 128.0;
+                            let map_width = 148.0 + analysis.map_hops.len().saturating_sub(1) as f32 * 148.0;
                             let max_rows = visible_groups_by_column.iter().map(Vec::len).max().unwrap_or_default();
-                            let map_height = 56.0 + max_rows as f32 * 52.0;
+                            let map_height = 72.0 + max_rows as f32 * 58.0;
                             egui::ScrollArea::both()
                                 .id_salt(("proximity_sampled_contact_map", analysis_origin))
                                 .max_height(190.0)
@@ -26242,9 +26242,9 @@ impl eframe::App for App {
                                     let painter = ui.painter_at(map_rect);
                                     let mut positions = HashMap::with_capacity(analysis.map_group_indices.len());
                                     for (column, group_indices) in visible_groups_by_column.iter().enumerate() {
-                                        let x = map_rect.left() + 64.0 + column as f32 * 128.0;
+                                        let x = map_rect.left() + 74.0 + column as f32 * 148.0;
                                         painter.text(
-                                            egui::pos2(x, map_rect.top() + 8.0),
+                                                egui::pos2(x, map_rect.top() + 12.0),
                                             egui::Align2::CENTER_CENTER,
                                             format!("HOP {}", analysis.map_hops[column]),
                                             egui::FontId::proportional(9.0),
@@ -26253,7 +26253,7 @@ impl eframe::App for App {
                                         for (row, group_index) in group_indices.iter().copied().enumerate() {
                                             positions.insert(
                                                 group_index,
-                                                egui::pos2(x, map_rect.top() + 38.0 + row as f32 * 52.0),
+                                                egui::pos2(x, map_rect.top() + 50.0 + row as f32 * 58.0),
                                             );
                                         }
                                     }
@@ -26267,33 +26267,45 @@ impl eframe::App for App {
                                                 && positions.contains_key(&interaction.second_group)
                                         })
                                         .collect();
+                                    let mut edge_lanes = HashMap::<(usize, usize), usize>::new();
                                     for interaction_index in &visible_interactions {
                                         let interaction = &analysis.interactions[*interaction_index];
                                         let first = positions[&interaction.first_group];
                                         let second = positions[&interaction.second_group];
+                                        let lane = edge_lanes
+                                            .entry((interaction.first_group, interaction.second_group))
+                                            .or_default();
+                                        let lane_offset = (*lane as f32 - 1.0) * 5.0;
+                                        *lane += 1;
+                                        let delta = second - first;
+                                        let length = delta.length();
+                                        let normal = if length > f32::EPSILON {
+                                            egui::vec2(-delta.y / length, delta.x / length)
+                                        } else {
+                                            egui::Vec2::ZERO
+                                        };
+                                        let edge_start = first + normal * lane_offset;
+                                        let edge_end = second + normal * lane_offset;
                                         painter.line_segment(
-                                            [first, second],
+                                            [edge_start, edge_end],
                                             egui::Stroke::new(
                                                 (1.0_f32 + (interaction.relationship_record_count as f32).log2()).clamp(1.0, 4.0),
                                                 egui::Color32::from_rgb(66, 111, 129),
                                             ),
                                         );
-                                        let delta = second - first;
-                                        let length = delta.length();
                                         if length > f32::EPSILON {
                                             let direction = delta / length;
-                                            let normal = egui::vec2(-direction.y, direction.x);
                                             let direction_color = egui::Color32::from_rgb(84, 194, 205);
                                             if interaction.first_to_second_record_count > 0 {
-                                                let offset = if interaction.second_to_first_record_count > 0 { normal * 2.0 } else { egui::Vec2::ZERO };
-                                                let start = first + direction * 12.0 + offset;
-                                                let end = second - direction * 12.0 + offset;
+                                                let offset = if interaction.second_to_first_record_count > 0 { 2.0 } else { 0.0 };
+                                                let start = edge_start + direction * 25.0 + normal * offset;
+                                                let end = edge_end - direction * 25.0 + normal * offset;
                                                 painter.arrow(start, end - start, egui::Stroke::new(1.2_f32, direction_color));
                                             }
                                             if interaction.second_to_first_record_count > 0 {
-                                                let offset = if interaction.first_to_second_record_count > 0 { normal * -2.0 } else { egui::Vec2::ZERO };
-                                                let start = second - direction * 12.0 + offset;
-                                                let end = first + direction * 12.0 + offset;
+                                                let offset = if interaction.first_to_second_record_count > 0 { -2.0 } else { 0.0 };
+                                                let start = edge_end - direction * 25.0 + normal * offset;
+                                                let end = edge_start + direction * 25.0 + normal * offset;
                                                 painter.arrow(start, end - start, egui::Stroke::new(1.2_f32, direction_color));
                                             }
                                         }
@@ -26307,13 +26319,15 @@ impl eframe::App for App {
                                         } else {
                                             egui::Color32::from_rgb(58, 111, 130)
                                         };
-                                        painter.circle_filled(center, 10.0, color);
+                                        let radius = (15.0 + (group.members.len() as f32).log2() * 2.0).clamp(15.0, 23.0);
+                                        painter.circle_filled(center, radius, color);
                                         if group.contains_cross_group_proxy {
-                                            painter.circle_stroke(center, 13.0, egui::Stroke::new(1.2_f32, egui::Color32::from_rgb(235, 190, 94)));
+                                            painter.circle_stroke(center, radius + 3.0, egui::Stroke::new(1.5_f32, egui::Color32::from_rgb(235, 190, 94)));
                                         }
-                                        painter.text(center, egui::Align2::CENTER_CENTER, format!("G{}", group_index + 1), egui::FontId::proportional(8.0), egui::Color32::WHITE);
+                                        painter.text(center + egui::vec2(0.0, -3.0), egui::Align2::CENTER_CENTER, format!("G{}", group_index + 1), egui::FontId::proportional(9.0), egui::Color32::WHITE);
+                                        painter.text(center + egui::vec2(0.0, 9.0), egui::Align2::CENTER_CENTER, group.members.len().to_string(), egui::FontId::proportional(8.0), egui::Color32::WHITE);
                                         let response = ui.interact(
-                                            egui::Rect::from_center_size(center, egui::vec2(24.0, 24.0)),
+                                            egui::Rect::from_center_size(center, egui::vec2(radius * 2.0 + 8.0, radius * 2.0 + 8.0)),
                                             ui.make_persistent_id(("proximity_sampled_group", analysis_origin, group_index)),
                                             egui::Sense::click(),
                                         ).on_hover_text(format!(
@@ -26439,6 +26453,7 @@ impl eframe::App for App {
                             ui.horizontal(|ui| {
                                 ui.label(egui::RichText::new("● origin").small().color(egui::Color32::from_rgb(183, 137, 63)));
                                 ui.label(egui::RichText::new("○ proxy group").small().color(egui::Color32::from_rgb(235, 190, 94)));
+                                ui.label(egui::RichText::new("group size shown in node").small().color(muted));
                                 ui.label(egui::RichText::new("Click a group to show it on the chart.").small().color(muted));
                             });
                             if self.selected_proximity_interaction.is_some() {
