@@ -16,6 +16,7 @@
 | Current-source ANX round-trip and safe rejection | PASS, Arch Notebook subset | Current debug binary round-tripped the fictional 8-entity/8-relationship fixture and rejected unsupported-shape and DTD inputs without changing the case. IBM XSD/application compatibility remains NOT TESTED; [ANX-ROUNDTRIP-03](evidence/anx/ANX-ROUNDTRIP-03-current-debug-20261127.md). |
 | Native interaction, Clinton visual review, renderer performance, IBM application parity | NOT TESTED | No native input/performance measurements, real corpus capture, or IBM application/schema validation in this run. |
 | Exact-head cross-platform CI | PASS | Manual workflow run [46059559135](https://github.com/pskeffington/arch_notebook/actions/runs/46059559135) completed successfully for `ab6e29318fca406d748f6694c89b3e25cd06b347`: Linux tests/SQL/ANX/installer, Linux x86_64, Linux ARM64, Arch package, macOS Intel, and macOS Apple Silicon. |
+| Hop-group contact direction rendering | PASS, headless UI | Reciprocal directed group contacts render opposing arrowheads; undirected ties remain unarrowed. Full Rust suite and debug build pass; exact-head CI [46062451089](https://github.com/pskeffington/arch_notebook/actions/runs/46062451089) passes all six jobs. Native visual review remains open; [PROXIMITY-MAP-DIRECTION-01](evidence/vector-ui/PROXIMITY-MAP-DIRECTION-01-linux.md). |
 
 The native screenshot resolves the left-edge clipping observed in the prior candidate, for this synthetic startup view only. It does not close G3/G4 native interaction or broader UI-00 acceptance.
 
