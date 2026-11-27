@@ -44,7 +44,7 @@ See [origin-centered proximity groups evidence](evidence/vector-ui/PROXIMITY-GRO
 | --- | --- | --- |
 | Offline Rust tests, compile and optimized build | PASS | 51 tests passed; locked offline check and release build exited 0. |
 | Local executable, desktop launcher and icon synchronization | PASS | Installed binary matches release hash; launcher entries validate; repository and installed icon hashes match. |
-| GitHub platform/package matrix | PENDING | [Run 45914257016](https://github.com/pskeffington/arch_notebook/actions/runs/45914257016) is queued for the exact source commit. The preceding candidate's run [45912700353](https://github.com/pskeffington/arch_notebook/actions/runs/45912700353) passed but predates the final sampler regression test. |
+| GitHub platform/package matrix | PASS | [Run 45914257016](https://github.com/pskeffington/arch_notebook/actions/runs/45914257016) passed Linux tests/fixture determinism, both Linux architectures, both macOS architectures, and Arch packaging for the exact source commit. Release attachment was skipped because this was not a release event. |
 | Native visual/input review | BLOCKED | Current Wayland diagnostic returned `Operation not permitted`; no native appearance or pointer acceptance is claimed. |
 
 The bounded map is in the Analysis pane. It samples at most 120 groups and 40 hop layers on large cases; the complete group and exact interaction records remain listed below it. See the [detailed acceptance record](evidence/vector-ui/PROXIMITY-MAP-01-linux-ffdd781.md).
