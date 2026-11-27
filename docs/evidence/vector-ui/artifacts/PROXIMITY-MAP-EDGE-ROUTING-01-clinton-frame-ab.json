@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "benchmark": "headless_production_chart_frame_with_and_without_sampled_topology",
+  "viewport_points": {
+    "width": 1440,
+    "height": 1600
+  },
+  "corpus_counts": {
+    "entities": 2813,
+    "relationship_records": 6173,
+    "sampled_groups": 48,
+    "sampled_contact_pairs": 47,
+    "represented_relationship_records": 1315,
+    "route_segments_per_pair": 12
+  },
+  "sample_order": "five warmups per variant, twenty measured frames per variant, order alternates each pair",
+  "without_topology": {
+    "clipped_shapes": 87855,
+    "tessellated_primitives": 23,
+    "frame_build_ns": {
+      "samples": 20,
+      "min_ns": 212272459,
+      "median_ns": 216512487,
+      "p95_ns": 226630851,
+      "max_ns": 226702839,
+      "mean_ns": 218081008
+    },
+    "egui_cpu_tessellation_ns": {
+      "samples": 20,
+      "min_ns": 142112294,
+      "median_ns": 147780195,
+      "p95_ns": 163779974,
+      "max_ns": 166345553,
+      "mean_ns": 149327657
+    }
+  },
+  "with_topology": {
+    "clipped_shapes": 88792,
+    "tessellated_primitives": 20,
+    "frame_build_ns": {
+      "samples": 20,
+      "min_ns": 213987165,
+      "median_ns": 218065171,
+      "p95_ns": 272109208,
+      "max_ns": 351249331,
+      "mean_ns": 229204359
+    },
+    "egui_cpu_tessellation_ns": {
+      "samples": 20,
+      "min_ns": 143639941,
+      "median_ns": 149034500,
+      "p95_ns": 164083134,
+      "max_ns": 174671596,
+      "mean_ns": 152360022
+    }
+  },
+  "scope": "Same retained Clinton case, viewport, production Chart frame, and precomputed analysis; toggles only displaying sampled topology in the analysis pane. Headless frame construction and egui CPU tessellation only. Does not measure GPU, compositor, presentation latency, FPS, Qwen analysis, or the 1128-pair complete-graph ceiling.",
+  "source_candidate": "recorded after commit"
+}

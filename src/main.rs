@@ -46090,6 +46090,120 @@ mod tests {
             "full virtualized group index must retain every contact group"
         );
 
+        let (sampled_group_count, sampled_pair_count, sampled_edge_records) = {
+            let analysis = &app.network_proximity_analysis.as_ref().unwrap().1;
+            (
+                analysis.map_group_indices.len(),
+                analysis.map_interaction_indices.len(),
+                analysis
+                    .map_interaction_indices
+                    .iter()
+                    .map(|index| analysis.interactions[*index].relationship_record_count)
+                    .sum::<usize>(),
+            )
+        };
+        let saved_analysis = app.network_proximity_analysis.clone();
+        let saved_group = app.selected_proximity_group;
+        let saved_interaction = app.selected_proximity_interaction;
+        let mut frame_build_samples_ns: [Vec<u128>; 2] =
+            std::array::from_fn(|_| Vec::with_capacity(20));
+        let mut tessellation_samples_ns: [Vec<u128>; 2] =
+            std::array::from_fn(|_| Vec::with_capacity(20));
+        let mut sample_shape_counts = [0; 2];
+        let mut sample_primitive_counts = [0; 2];
+        for sample in 0..25 {
+            let variants = if sample % 2 == 0 {
+                [false, true]
+            } else {
+                [true, false]
+            };
+            for show_topology in variants {
+                app.network_proximity_analysis = if show_topology {
+                    saved_analysis.clone()
+                } else {
+                    None
+                };
+                app.selected_proximity_group = if show_topology { saved_group } else { None };
+                app.selected_proximity_interaction = if show_topology {
+                    saved_interaction
+                } else {
+                    None
+                };
+                if show_topology {
+                    let visible = scroll_headless_until_text(
+                        &context,
+                        &mut app,
+                        &mut frame,
+                        &mut scroll_time,
+                        "SAMPLED CONTACT TOPOLOGY",
+                    );
+                    assert!(
+                        find_headless_text_rect(&visible, "SAMPLED CONTACT TOPOLOGY").is_some()
+                    );
+                }
+                scroll_time += 1.0 / 60.0;
+                let frame_start = std::time::Instant::now();
+                let shapes = render_headless_app_frame_at(
+                    &context,
+                    &mut app,
+                    &mut frame,
+                    scroll_time,
+                    Vec::new(),
+                    egui::vec2(1440.0, 1_600.0),
+                );
+                let frame_elapsed = frame_start.elapsed().as_nanos();
+                let topology_is_visible =
+                    find_headless_text_rect(&shapes, "SAMPLED CONTACT TOPOLOGY").is_some();
+                assert_eq!(topology_is_visible, show_topology);
+                let shape_count = shapes.len();
+                let tessellation_start = std::time::Instant::now();
+                let primitives = context.tessellate(shapes, context.pixels_per_point());
+                let tessellation_elapsed = tessellation_start.elapsed().as_nanos();
+                let variant_index = usize::from(show_topology);
+                if sample >= 5 {
+                    frame_build_samples_ns[variant_index].push(frame_elapsed);
+                    tessellation_samples_ns[variant_index].push(tessellation_elapsed);
+                }
+                sample_shape_counts[variant_index] = shape_count;
+                sample_primitive_counts[variant_index] = primitives.len();
+            }
+        }
+        app.network_proximity_analysis = saved_analysis;
+        app.selected_proximity_group = saved_group;
+        app.selected_proximity_interaction = saved_interaction;
+        let _ = scroll_headless_until_text(
+            &context,
+            &mut app,
+            &mut frame,
+            &mut scroll_time,
+            "SAMPLED CONTACT TOPOLOGY",
+        );
+        println!(
+            "Clinton sampled topology frame A/B: {}",
+            serde_json::to_string(&serde_json::json!({
+                "viewport_points": { "width": 1440, "height": 1600 },
+                "sampled_groups": sampled_group_count,
+                "sampled_contact_pairs": sampled_pair_count,
+                "represented_records": sampled_edge_records,
+                "route_segments_per_pair": super::PROXIMITY_MAP_ROUTE_SEGMENTS,
+                "without_topology": {
+                    "clipped_shapes": sample_shape_counts[0],
+                    "tessellated_primitives": sample_primitive_counts[0],
+                    "frame_build_ns": super::duration_summary(&frame_build_samples_ns[0]),
+                    "egui_cpu_tessellation_ns": super::duration_summary(&tessellation_samples_ns[0]),
+                },
+                "with_topology": {
+                    "clipped_shapes": sample_shape_counts[1],
+                    "tessellated_primitives": sample_primitive_counts[1],
+                    "frame_build_ns": super::duration_summary(&frame_build_samples_ns[1]),
+                    "egui_cpu_tessellation_ns": super::duration_summary(&tessellation_samples_ns[1]),
+                },
+                "sample_order": "five warmups per variant, twenty measured frames per variant, order alternates each pair",
+                "scope": "matched full production Chart frame on the retained Clinton case, toggling only whether previously computed sampled topology is displayed in the analysis pane; excludes analysis computation, GPU, compositor, input-to-display latency, and FPS"
+            }))
+            .expect("serialize aggregate topology benchmark")
+        );
+
         let (omitted_group, omitted_pair) = {
             let analysis = &app.network_proximity_analysis.as_ref().unwrap().1;
             let omitted_group = (0..analysis.groups.len())

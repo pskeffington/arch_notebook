@@ -20,6 +20,7 @@ Each sampled group interaction now uses a deterministic, twelve-segment quadrati
 | Full offline Rust suite | PASS | 71 passed, 0 failed, 3 ignored. |
 | Locked check/debug build and formatting | PASS | `cargo check --locked --offline`, `cargo build --locked --offline`, `cargo fmt --all -- --check`, and `git diff --check` exited 0. |
 | Exact-head cross-platform CI | PASS | [Run 46082650685](https://github.com/pskeffington/arch_notebook/actions/runs/46082650685) completed successfully for `58efaac921512a68f1565b537dd70c438a8c5db5`; all six Linux, Arch, and macOS jobs passed. |
-| Native visual/pointer review and dense-map frame cost | NOT TESTED | Headless production rendering and pointer-state checks do not prove native contrast, feel, or presentation performance. Dense 48-group/1,128-pair worst-case frame cost has not been measured. |
+| Clinton sampled-map CPU frame cost | MEASURED | Paired headless production frame A/B at 1440×1600, 48 sampled groups / 47 pairs / 1,315 records: median frame-build 216.5 ms without the topology panel and 218.1 ms with it (+0.7%); median egui tessellation 147.8 ms / 149.0 ms (+0.8%). The panel adds 937 clipped shapes. Build p95 was 226.6 ms / 272.1 ms, so tail latency is variable; these are machine-specific headless CPU timings, not an FPS claim. Full results are in [the raw aggregate](artifacts/PROXIMITY-MAP-EDGE-ROUTING-01-clinton-frame-ab.json). |
+| Native visual/pointer review and dense complete-map performance | NOT TESTED | Headless checks do not prove native contrast, feel, or presentation. The 1,128-pair complete-graph ceiling and GPU/compositor/FPS remain unmeasured. |
 
 No corpus-specific names, IDs, or relationship contents are included in repository evidence.
