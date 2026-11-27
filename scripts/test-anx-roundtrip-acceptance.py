@@ -209,6 +209,70 @@ def main() -> int:
                     f"{expected.get(field)!r} -> {actual.get(field)!r}"
                 )
 
+    # Exercise importer behavior that an Arch Notebook export does not emit:
+    # reverse-end arrow semantics and named standard strength/type references.
+    external_shape = work / "supported-external-shape.anx"
+    external_shape.write_text(
+        """<?xml version='1.0' encoding='utf-8'?>
+<Chart>
+  <StrengthCollection><Strength Id='STRONG-1' Name='Strong' /></StrengthCollection>
+  <LinkTypeCollection><LinkType Id='LINK-TYPE-1' Name='ASSOCIATED WITH' /></LinkTypeCollection>
+  <AttributeClassCollection><AttributeClass Id='ATTRIBUTE-1' Name='Origin note' /></AttributeClassCollection>
+  <ChartItemCollection>
+    <ChartItem Id='ENTITY-1' Label='Alpha'><End X='100' Y='200' Z='0'><Entity EntityId='17' Identity='SRC-ALPHA' LabelIsIdentity='false'><Icon><IconStyle Type='PERSON' /></Icon></Entity></End></ChartItem>
+    <ChartItem Id='ENTITY-2' Label='Bravo'><End X='300' Y='400' Z='0'><Entity EntityId='23' Identity='SRC-BRAVO' LabelIsIdentity='false'><Icon><IconStyle Type='PERSON' /></Icon></Entity></End></ChartItem>
+    <ChartItem Id='RELATIONSHIP-1' DateSet='true' DateTime='2025-04-03T00:00:00.000'><Link End1Id='17' End2Id='23'><LinkStyle Strength='STRONG-1' LinkTypeReference='LINK-TYPE-1' ArrowStyle='ArrowOnTail' /></Link><AttributeCollection><Attribute AttributeClassReference='ATTRIBUTE-1' AttributeClass='Origin note' Value='joined-fixture-value' /></AttributeCollection></ChartItem>
+  </ChartItemCollection>
+</Chart>\n""",
+        encoding="utf-8",
+    )
+    external_case = work / "external-shape.case.json"
+    external_case.write_text(
+        json.dumps(
+            {
+                "format_version": source.get("format_version", 19),
+                "title": "FICTIONAL EXTERNAL-SHAPE ACCEPTANCE",
+                "entities": [],
+                "links": [],
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    external_import = run(
+        binary,
+        "external_shape_import",
+        "--import-anx",
+        str(external_case),
+        str(external_shape),
+        "--json",
+    )
+    if not external_import.get("ok") or not external_import.get("saved"):
+        raise RuntimeError(f"supported external-shape import failed: {external_import}")
+    external_result = json.loads(external_case.read_text(encoding="utf-8"))
+    external_entities = {entity["name"]: entity["id"] for entity in external_result["entities"]}
+    if set(external_entities) != {"Alpha", "Bravo"}:
+        raise RuntimeError(f"external-shaped entity labels changed: {external_entities}")
+    if len(external_result["links"]) != 1:
+        raise RuntimeError("external-shaped chart did not import exactly one relationship")
+    external_link = external_result["links"][0]
+    if (external_link["from"], external_link["to"]) != (
+        external_entities["Bravo"],
+        external_entities["Alpha"],
+    ):
+        raise RuntimeError("ArrowOnTail did not reverse the imported relationship endpoints")
+    if not external_link["directed"]:
+        raise RuntimeError("ArrowOnTail did not produce a directed relationship")
+    if (external_link["label"], external_link["confidence"], external_link["date"]) != (
+        "ASSOCIATED WITH",
+        3,
+        "2025-04-03",
+    ):
+        raise RuntimeError("external link type, strength, or date did not map as expected")
+    if ["Origin note", "joined-fixture-value"] not in external_link.get("attributes", []):
+        raise RuntimeError("external relationship attribute was lost during import")
+
     malformed_anx = work / "unsupported-shape.anx"
     malformed_xml = (
         "<?xml version='1.0' encoding='utf-16'?>"
@@ -285,6 +349,8 @@ def main() -> int:
         "relationships": len(destination_links),
         "relationships_with_preserved_repeated_ids": len(repeated_ids),
         "labels": len(destination_labels),
+        "external_shape_reverse_arrow": True,
+        "external_shape_strength_type_date_attribute": True,
         "unsupported_shape_rejected": True,
         "failed_import_case_unchanged": True,
         "doctype_external_entity_rejected": True,

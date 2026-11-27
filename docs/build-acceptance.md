@@ -21,6 +21,19 @@
 
 See [PROXIMITY-MAP-CLINTON-01](evidence/vector-ui/PROXIMITY-MAP-CLINTON-01-linux.md) for exact commands and topology-specific assertions.
 
+## ANX external-shaped import coverage — 2026-11-27
+
+**Repository / branch / baseline:** `/home/sysadmin/github/arch_notebook` / `codex/ui-00-chart-baseline` / `1370e2172473dffbd1f4923d424bda6909292a25`.
+**Candidate source:** recorded after commit.
+
+| Gate | Result | Evidence |
+| --- | --- | --- |
+| Supported external-shaped UTF-8 import | PASS, internal subset | `ArrowOnTail` endpoint reversal, direction, LinkType name, Strong confidence, date, and custom relationship attribute are verified on the actual import CLI. |
+| Existing ANX safeguards and round-trip | PASS | Arch Notebook field round-trip, unsupported-shape rejection, DTD/external-entity rejection, and failed-import atomicity remain in the same passing harness. |
+| IBM XSD and Analyst's Notebook validation | NOT TESTED | No IBM schema or application fixture was available; the added XML is synthetic. |
+
+See [ANX-ROUNDTRIP-04](evidence/anx/ANX-ROUNDTRIP-04-external-shaped-fixture-linux.md).
+
 **Repository / branch / source:** `/home/sysadmin/github/arch_notebook` / `codex/ui-00-chart-baseline` / `a9f56cced2ec12c2f0f787520942939a7603b006`.
 **Candidate:** current-source Linux debug application, SHA-256 `74c900167f450e28f391506d043bfb17fe177382afe19d6f8fdd16bcab24e606`.
 
