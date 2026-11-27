@@ -1,0 +1,479 @@
+{
+  "schema_version": 1,
+  "benchmark_suite": "arch_notebook_g0_connectivity_vs_community_force_layout_cpu",
+  "host": {
+    "platform": "Linux-7.3.5-zen1-1-zen-x86_64-with-glibc2.44",
+    "machine": "x86_64"
+  },
+  "binary": "/tmp/arch-notebook-release-verify/release/arch-notebook",
+  "binary_sha256": "d4bfcdc0e8f7fb3c374e92b4ebca2e21b2920e3211550a2b9536b6ac88d35676",
+  "settings": {
+    "iterations": 20,
+    "samples": 25
+  },
+  "results": [
+    {
+      "application_version": "0.1.0",
+      "baseline_connectivity_coordinate_checksum": 999.9999948143959,
+      "benchmark": "g0_connectivity_vs_community_force_layout_cpu",
+      "build_profile": "release",
+      "community_detection_elapsed_ns_single_sample": 3734425,
+      "community_force_coordinate_checksum": 1004.1637249104679,
+      "community_force_iterations": 20,
+      "detected_communities": 61,
+      "entities": 1000,
+      "fixture_path": "/tmp/arch-notebook-layout-bench-3szqh_6k/sparse-1000.json",
+      "fixture_sha256": "41567e73d4ae2bee466ea2a07e1c6bc0d067ccf43efb8bc533141275c50ec1ab",
+      "g0_connectivity_iterations": 1,
+      "relationship_records": 3000,
+      "sample_order": "Alternates which layout runs first to reduce order bias",
+      "samples": 25,
+      "schema_version": 1,
+      "scope": "Runs the production G0 connectivity coordinate routine and community force coordinate routine on identical input nodes, edges, pinned positions, warmup count, and sample count. Community detection is timed separately once. Excludes UI, painting, compositor, and presentation.",
+      "timings": {
+        "community_force_layout": {
+          "max_ns": 18586554,
+          "mean_ns": 14084259,
+          "median_ns": 14767500,
+          "min_ns": 9712616,
+          "p95_ns": 18496814,
+          "samples": 25
+        },
+        "g0_connectivity_layout": {
+          "max_ns": 400885,
+          "mean_ns": 84138,
+          "median_ns": 67025,
+          "min_ns": 46547,
+          "p95_ns": 116447,
+          "samples": 25
+        }
+      },
+      "warmup_runs": 1
+    },
+    {
+      "application_version": "0.1.0",
+      "baseline_connectivity_coordinate_checksum": 4999.999978631735,
+      "benchmark": "g0_connectivity_vs_community_force_layout_cpu",
+      "build_profile": "release",
+      "community_detection_elapsed_ns_single_sample": 21424723,
+      "community_force_coordinate_checksum": 4992.648062821478,
+      "community_force_iterations": 20,
+      "detected_communities": 310,
+      "entities": 5000,
+      "fixture_path": "/tmp/arch-notebook-layout-bench-3szqh_6k/sparse-5000.json",
+      "fixture_sha256": "0309bb646a5ec8355919cee92dd661a64fb2e596a449da123eeea6c1f844d8af",
+      "g0_connectivity_iterations": 1,
+      "relationship_records": 15000,
+      "sample_order": "Alternates which layout runs first to reduce order bias",
+      "samples": 25,
+      "schema_version": 1,
+      "scope": "Runs the production G0 connectivity coordinate routine and community force coordinate routine on identical input nodes, edges, pinned positions, warmup count, and sample count. Community detection is timed separately once. Excludes UI, painting, compositor, and presentation.",
+      "timings": {
+        "community_force_layout": {
+          "max_ns": 56289741,
+          "mean_ns": 54667489,
+          "median_ns": 54496536,
+          "min_ns": 54094144,
+          "p95_ns": 55610403,
+          "samples": 25
+        },
+        "g0_connectivity_layout": {
+          "max_ns": 384809,
+          "mean_ns": 294095,
+          "median_ns": 291555,
+          "min_ns": 277091,
+          "p95_ns": 318996,
+          "samples": 25
+        }
+      },
+      "warmup_runs": 1
+    },
+    {
+      "application_version": "0.1.0",
+      "baseline_connectivity_coordinate_checksum": 9999.999961137772,
+      "benchmark": "g0_connectivity_vs_community_force_layout_cpu",
+      "build_profile": "release",
+      "community_detection_elapsed_ns_single_sample": 33143626,
+      "community_force_coordinate_checksum": 9993.91204947792,
+      "community_force_iterations": 20,
+      "detected_communities": 635,
+      "entities": 10000,
+      "fixture_path": "/tmp/arch-notebook-layout-bench-3szqh_6k/sparse-10000.json",
+      "fixture_sha256": "be06fe7d72b1df3704e26a9b3cf0e792aa3de39e5b36066c7175b66f49fbebbe",
+      "g0_connectivity_iterations": 1,
+      "relationship_records": 30000,
+      "sample_order": "Alternates which layout runs first to reduce order bias",
+      "samples": 25,
+      "schema_version": 1,
+      "scope": "Runs the production G0 connectivity coordinate routine and community force coordinate routine on identical input nodes, edges, pinned positions, warmup count, and sample count. Community detection is timed separately once. Excludes UI, painting, compositor, and presentation.",
+      "timings": {
+        "community_force_layout": {
+          "max_ns": 120545035,
+          "mean_ns": 116634527,
+          "median_ns": 116439497,
+          "min_ns": 114215090,
+          "p95_ns": 120521664,
+          "samples": 25
+        },
+        "g0_connectivity_layout": {
+          "max_ns": 833904,
+          "mean_ns": 644446,
+          "median_ns": 636720,
+          "min_ns": 605138,
+          "p95_ns": 716467,
+          "samples": 25
+        }
+      },
+      "warmup_runs": 1
+    },
+    {
+      "application_version": "0.1.0",
+      "baseline_connectivity_coordinate_checksum": 999.9999948143959,
+      "benchmark": "g0_connectivity_vs_community_force_layout_cpu",
+      "build_profile": "release",
+      "community_detection_elapsed_ns_single_sample": 10878807,
+      "community_force_coordinate_checksum": 987.4846665617079,
+      "community_force_iterations": 20,
+      "detected_communities": 393,
+      "entities": 1000,
+      "fixture_path": "/tmp/arch-notebook-layout-bench-3szqh_6k/hub-1000.json",
+      "fixture_sha256": "7236a9611fbfd851aa191baaaba3b48a902f097b404b58947c051597038a2d58",
+      "g0_connectivity_iterations": 1,
+      "relationship_records": 3000,
+      "sample_order": "Alternates which layout runs first to reduce order bias",
+      "samples": 25,
+      "schema_version": 1,
+      "scope": "Runs the production G0 connectivity coordinate routine and community force coordinate routine on identical input nodes, edges, pinned positions, warmup count, and sample count. Community detection is timed separately once. Excludes UI, painting, compositor, and presentation.",
+      "timings": {
+        "community_force_layout": {
+          "max_ns": 77811391,
+          "mean_ns": 21204102,
+          "median_ns": 13710971,
+          "min_ns": 13456157,
+          "p95_ns": 74313614,
+          "samples": 25
+        },
+        "g0_connectivity_layout": {
+          "max_ns": 310889,
+          "mean_ns": 79832,
+          "median_ns": 51055,
+          "min_ns": 45985,
+          "p95_ns": 281447,
+          "samples": 25
+        }
+      },
+      "warmup_runs": 1
+    },
+    {
+      "application_version": "0.1.0",
+      "baseline_connectivity_coordinate_checksum": 4999.999978631735,
+      "benchmark": "g0_connectivity_vs_community_force_layout_cpu",
+      "build_profile": "release",
+      "community_detection_elapsed_ns_single_sample": 92828496,
+      "community_force_coordinate_checksum": 4997.60733407177,
+      "community_force_iterations": 20,
+      "detected_communities": 2087,
+      "entities": 5000,
+      "fixture_path": "/tmp/arch-notebook-layout-bench-3szqh_6k/hub-5000.json",
+      "fixture_sha256": "d869e89297e75f1aef4a9625725592955449a3acd32b37470ce1c02939c5e212",
+      "g0_connectivity_iterations": 1,
+      "relationship_records": 15000,
+      "sample_order": "Alternates which layout runs first to reduce order bias",
+      "samples": 25,
+      "schema_version": 1,
+      "scope": "Runs the production G0 connectivity coordinate routine and community force coordinate routine on identical input nodes, edges, pinned positions, warmup count, and sample count. Community detection is timed separately once. Excludes UI, painting, compositor, and presentation.",
+      "timings": {
+        "community_force_layout": {
+          "max_ns": 78177876,
+          "mean_ns": 76723734,
+          "median_ns": 76646156,
+          "min_ns": 75904696,
+          "p95_ns": 77706785,
+          "samples": 25
+        },
+        "g0_connectivity_layout": {
+          "max_ns": 338288,
+          "mean_ns": 290438,
+          "median_ns": 291323,
+          "min_ns": 273439,
+          "p95_ns": 318461,
+          "samples": 25
+        }
+      },
+      "warmup_runs": 1
+    },
+    {
+      "application_version": "0.1.0",
+      "baseline_connectivity_coordinate_checksum": 9999.999961137772,
+      "benchmark": "g0_connectivity_vs_community_force_layout_cpu",
+      "build_profile": "release",
+      "community_detection_elapsed_ns_single_sample": 223412700,
+      "community_force_coordinate_checksum": 9994.129281125963,
+      "community_force_iterations": 20,
+      "detected_communities": 4259,
+      "entities": 10000,
+      "fixture_path": "/tmp/arch-notebook-layout-bench-3szqh_6k/hub-10000.json",
+      "fixture_sha256": "5b0e0d0e24030265b3ec56f795dc2ee939bf60904926fb7910fd820edf71f37b",
+      "g0_connectivity_iterations": 1,
+      "relationship_records": 30000,
+      "sample_order": "Alternates which layout runs first to reduce order bias",
+      "samples": 25,
+      "schema_version": 1,
+      "scope": "Runs the production G0 connectivity coordinate routine and community force coordinate routine on identical input nodes, edges, pinned positions, warmup count, and sample count. Community detection is timed separately once. Excludes UI, painting, compositor, and presentation.",
+      "timings": {
+        "community_force_layout": {
+          "max_ns": 167788216,
+          "mean_ns": 164582991,
+          "median_ns": 164282149,
+          "min_ns": 163053452,
+          "p95_ns": 167343737,
+          "samples": 25
+        },
+        "g0_connectivity_layout": {
+          "max_ns": 802320,
+          "mean_ns": 665665,
+          "median_ns": 646546,
+          "min_ns": 595782,
+          "p95_ns": 795312,
+          "samples": 25
+        }
+      },
+      "warmup_runs": 1
+    },
+    {
+      "application_version": "0.1.0",
+      "baseline_connectivity_coordinate_checksum": 999.9999948143959,
+      "benchmark": "g0_connectivity_vs_community_force_layout_cpu",
+      "build_profile": "release",
+      "community_detection_elapsed_ns_single_sample": 1592306,
+      "community_force_coordinate_checksum": 1002.9299724064767,
+      "community_force_iterations": 20,
+      "detected_communities": 237,
+      "entities": 1000,
+      "fixture_path": "/tmp/arch-notebook-layout-bench-3szqh_6k/disconnected-1000.json",
+      "fixture_sha256": "f7339ed385394f39b7525c42d4490a939c2a56d1a4d5a3b136921616be548729",
+      "g0_connectivity_iterations": 1,
+      "relationship_records": 2000,
+      "sample_order": "Alternates which layout runs first to reduce order bias",
+      "samples": 25,
+      "schema_version": 1,
+      "scope": "Runs the production G0 connectivity coordinate routine and community force coordinate routine on identical input nodes, edges, pinned positions, warmup count, and sample count. Community detection is timed separately once. Excludes UI, painting, compositor, and presentation.",
+      "timings": {
+        "community_force_layout": {
+          "max_ns": 49481499,
+          "mean_ns": 19613506,
+          "median_ns": 12465761,
+          "min_ns": 12146711,
+          "p95_ns": 48362137,
+          "samples": 25
+        },
+        "g0_connectivity_layout": {
+          "max_ns": 314755,
+          "mean_ns": 89207,
+          "median_ns": 57737,
+          "min_ns": 46640,
+          "p95_ns": 287505,
+          "samples": 25
+        }
+      },
+      "warmup_runs": 1
+    },
+    {
+      "application_version": "0.1.0",
+      "baseline_connectivity_coordinate_checksum": 4999.999978631735,
+      "benchmark": "g0_connectivity_vs_community_force_layout_cpu",
+      "build_profile": "release",
+      "community_detection_elapsed_ns_single_sample": 8197578,
+      "community_force_coordinate_checksum": 5004.110999200493,
+      "community_force_iterations": 20,
+      "detected_communities": 1192,
+      "entities": 5000,
+      "fixture_path": "/tmp/arch-notebook-layout-bench-3szqh_6k/disconnected-5000.json",
+      "fixture_sha256": "62024376f54bfd46400dad3005d1e5c9105a793d6c0fe3df545cd8d4fc39c9d8",
+      "g0_connectivity_iterations": 1,
+      "relationship_records": 10000,
+      "sample_order": "Alternates which layout runs first to reduce order bias",
+      "samples": 25,
+      "schema_version": 1,
+      "scope": "Runs the production G0 connectivity coordinate routine and community force coordinate routine on identical input nodes, edges, pinned positions, warmup count, and sample count. Community detection is timed separately once. Excludes UI, painting, compositor, and presentation.",
+      "timings": {
+        "community_force_layout": {
+          "max_ns": 140933249,
+          "mean_ns": 68761363,
+          "median_ns": 65755208,
+          "min_ns": 64314598,
+          "p95_ns": 66888042,
+          "samples": 25
+        },
+        "g0_connectivity_layout": {
+          "max_ns": 660177,
+          "mean_ns": 304385,
+          "median_ns": 289800,
+          "min_ns": 271364,
+          "p95_ns": 304911,
+          "samples": 25
+        }
+      },
+      "warmup_runs": 1
+    },
+    {
+      "application_version": "0.1.0",
+      "baseline_connectivity_coordinate_checksum": 9999.999961137772,
+      "benchmark": "g0_connectivity_vs_community_force_layout_cpu",
+      "build_profile": "release",
+      "community_detection_elapsed_ns_single_sample": 21353541,
+      "community_force_coordinate_checksum": 10003.034199625254,
+      "community_force_iterations": 20,
+      "detected_communities": 2372,
+      "entities": 10000,
+      "fixture_path": "/tmp/arch-notebook-layout-bench-3szqh_6k/disconnected-10000.json",
+      "fixture_sha256": "c992763516c22eef34cfbf069c6b612aba7a491f2824dccf667503eb98c3f565",
+      "g0_connectivity_iterations": 1,
+      "relationship_records": 20000,
+      "sample_order": "Alternates which layout runs first to reduce order bias",
+      "samples": 25,
+      "schema_version": 1,
+      "scope": "Runs the production G0 connectivity coordinate routine and community force coordinate routine on identical input nodes, edges, pinned positions, warmup count, and sample count. Community detection is timed separately once. Excludes UI, painting, compositor, and presentation.",
+      "timings": {
+        "community_force_layout": {
+          "max_ns": 148902428,
+          "mean_ns": 140565823,
+          "median_ns": 140199060,
+          "min_ns": 135922401,
+          "p95_ns": 143292962,
+          "samples": 25
+        },
+        "g0_connectivity_layout": {
+          "max_ns": 726955,
+          "mean_ns": 661108,
+          "median_ns": 655612,
+          "min_ns": 618995,
+          "p95_ns": 700292,
+          "samples": 25
+        }
+      },
+      "warmup_runs": 1
+    },
+    {
+      "application_version": "0.1.0",
+      "baseline_connectivity_coordinate_checksum": 999.9999948143959,
+      "benchmark": "g0_connectivity_vs_community_force_layout_cpu",
+      "build_profile": "release",
+      "community_detection_elapsed_ns_single_sample": 1598083,
+      "community_force_coordinate_checksum": 1005.0156170725822,
+      "community_force_iterations": 20,
+      "detected_communities": 444,
+      "entities": 1000,
+      "fixture_path": "/tmp/arch-notebook-layout-bench-3szqh_6k/dense-1000.json",
+      "fixture_sha256": "73fc78d25707f556311399b50acf7b0f29c61ce9adaf2b99c72ce336a24b1b14",
+      "g0_connectivity_iterations": 1,
+      "relationship_records": 10000,
+      "sample_order": "Alternates which layout runs first to reduce order bias",
+      "samples": 25,
+      "schema_version": 1,
+      "scope": "Runs the production G0 connectivity coordinate routine and community force coordinate routine on identical input nodes, edges, pinned positions, warmup count, and sample count. Community detection is timed separately once. Excludes UI, painting, compositor, and presentation.",
+      "timings": {
+        "community_force_layout": {
+          "max_ns": 16659694,
+          "mean_ns": 16520802,
+          "median_ns": 16527081,
+          "min_ns": 16305312,
+          "p95_ns": 16656768,
+          "samples": 25
+        },
+        "g0_connectivity_layout": {
+          "max_ns": 74967,
+          "mean_ns": 50342,
+          "median_ns": 49822,
+          "min_ns": 45862,
+          "p95_ns": 62255,
+          "samples": 25
+        }
+      },
+      "warmup_runs": 1
+    },
+    {
+      "application_version": "0.1.0",
+      "baseline_connectivity_coordinate_checksum": 4999.999978631735,
+      "benchmark": "g0_connectivity_vs_community_force_layout_cpu",
+      "build_profile": "release",
+      "community_detection_elapsed_ns_single_sample": 21265531,
+      "community_force_coordinate_checksum": 5004.233430840075,
+      "community_force_iterations": 20,
+      "detected_communities": 2230,
+      "entities": 5000,
+      "fixture_path": "/tmp/arch-notebook-layout-bench-3szqh_6k/dense-5000.json",
+      "fixture_sha256": "689d0b63a24c8753383d025032dfada410099b11d885e6f26369204192c09244",
+      "g0_connectivity_iterations": 1,
+      "relationship_records": 50000,
+      "sample_order": "Alternates which layout runs first to reduce order bias",
+      "samples": 25,
+      "schema_version": 1,
+      "scope": "Runs the production G0 connectivity coordinate routine and community force coordinate routine on identical input nodes, edges, pinned positions, warmup count, and sample count. Community detection is timed separately once. Excludes UI, painting, compositor, and presentation.",
+      "timings": {
+        "community_force_layout": {
+          "max_ns": 90340370,
+          "mean_ns": 88955068,
+          "median_ns": 88849374,
+          "min_ns": 88352439,
+          "p95_ns": 89699376,
+          "samples": 25
+        },
+        "g0_connectivity_layout": {
+          "max_ns": 412071,
+          "mean_ns": 297539,
+          "median_ns": 292392,
+          "min_ns": 276536,
+          "p95_ns": 350941,
+          "samples": 25
+        }
+      },
+      "warmup_runs": 1
+    },
+    {
+      "application_version": "0.1.0",
+      "baseline_connectivity_coordinate_checksum": 9999.999961137772,
+      "benchmark": "g0_connectivity_vs_community_force_layout_cpu",
+      "build_profile": "release",
+      "community_detection_elapsed_ns_single_sample": 19883406,
+      "community_force_coordinate_checksum": 10012.9010773357,
+      "community_force_iterations": 20,
+      "detected_communities": 4462,
+      "entities": 10000,
+      "fixture_path": "/tmp/arch-notebook-layout-bench-3szqh_6k/dense-10000.json",
+      "fixture_sha256": "8f7127eee91ab5ea912e0865755202f3b05b35d0347012774c056ddd948318a8",
+      "g0_connectivity_iterations": 1,
+      "relationship_records": 100000,
+      "sample_order": "Alternates which layout runs first to reduce order bias",
+      "samples": 25,
+      "schema_version": 1,
+      "scope": "Runs the production G0 connectivity coordinate routine and community force coordinate routine on identical input nodes, edges, pinned positions, warmup count, and sample count. Community detection is timed separately once. Excludes UI, painting, compositor, and presentation.",
+      "timings": {
+        "community_force_layout": {
+          "max_ns": 200868811,
+          "mean_ns": 186682550,
+          "median_ns": 185121656,
+          "min_ns": 182652635,
+          "p95_ns": 197189735,
+          "samples": 25
+        },
+        "g0_connectivity_layout": {
+          "max_ns": 756437,
+          "mean_ns": 647928,
+          "median_ns": 645344,
+          "min_ns": 619707,
+          "p95_ns": 675826,
+          "samples": 25
+        }
+      },
+      "warmup_runs": 1
+    }
+  ],
+  "limitations": [
+    "Synthetic fictional charts only.",
+    "The production G0 connectivity layout and community force layout run on identical fixture inputs and are timed separately.",
+    "Community detection is performed once before the repeated layout timings.",
+    "Does not measure native chart painting, input latency, compositor, or presentation.",
+    "Timing is host-specific and is not a universal performance target."
+  ]
+}

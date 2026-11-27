@@ -12,6 +12,8 @@
 
 The existing production G0 Connectivity placement was extracted into `layout::connectivity_layout` and the UI now calls that same function. The benchmark invokes it and the production `layout::force_layout` on the same fixture nodes and pinned coordinates. Each layout gets one warmup and 25 timed samples; sample order alternates. Community Force uses 20 iterations and the fixed benchmark seed; Connectivity is a one-pass degree sort and ring placement. Community detection is reported separately as a single untuned sample. Coordinate calculation is timed; checksum calculation and black-box retention happen after each timed interval.
 
+These are coordinate-routine timings, not full user-action latency. G0 degree counts and force-layout community assignments are prepared before the repeated coordinate timers; community detection has a separate one-off measurement, while G0 degree-count preparation is not timed here.
+
 Fixture JSON is generated in a temporary directory; the benchmark reads but does not mutate it. Hashes, input sizes, compiler profile binary hash, iteration count, sample count, coordinate checksums, medians, and p95s are stored in the raw JSON.
 
 ## Results
@@ -29,7 +31,8 @@ Times are milliseconds from the development/debug binary on this host. These val
 
 - **Paired coordinate benchmark:** **PASS** for execution and data capture on the current debug binary. The production Connectivity baseline is about 207–300 times faster by median in these runs, because it assigns one degree-sorted ring while Community Force performs 20 iterative layout steps. The algorithms do different work and produce different arrangements; this ratio is not an optimization win/loss or an equal-quality comparison.
 - **Correctness:** the Connectivity helper preserves the previous degree-descending order, UUID tie-break, ring coordinates, and pinned positions. A regression test covers degree ordering and pin preservation. The full 53-test suite and offline `cargo check`/debug build passed.
-- **Release profile:** **BLOCKED**. Cargo's release target remained locked with no visible owner process. Attempts to build were interrupted after waiting; the preexisting release binary is stale and was not used for these results.
+- **Headless UI Arrange/Restore:** **PASS**. A separate headless test drives the actual View → Arrange chart → Restore menu actions, waits up to 100 ms for the async worker via 1 ms frame waits, checks pin preservation and movement, then verifies exact coordinate/pin restoration. This does not substitute for native visual/input acceptance. **Independent review provenance is NOT VERIFIED** because no separate reviewer handoff is checked in.
+- **Release profile:** **PASS** in a separate 12-case run spanning 1,000, 5,000, and 10,000 nodes over four fixture families. See [release-profile evidence](G3-connectivity-vs-force-release-20261126.md). The debug timings above remain debug-only.
 - **Native G3 arrange/restore:** **NOT RUN**. No current-candidate native UI claim is made.
 - **G4 rendering:** **NOT MEASURED**. These are CPU coordinate timings only; they do not measure vector paint, text shaping, GPU, compositor, presentation, frame rate, or input-to-display latency.
 
@@ -48,4 +51,6 @@ python3 scripts/benchmark-community-layout.py \
   --families sparse hub disconnected dense
 ```
 
-Observed exit codes: formatting `0`, diff check `0`, tests `0` (53 passed), check `0`, debug build `0`, benchmark `0` (four cases). Release build remains blocked as stated above.
+Observed exit codes: formatting `0`, diff check `0`, tests `0` (53 passed), check `0`, debug build `0`, benchmark `0` (four cases). At the time of this report, the release build was blocked as stated above.
+
+**Follow-up:** the release-profile comparison subsequently completed and passed across 12 sparse, hub, disconnected, and dense cases; see [release-profile evidence](G3-connectivity-vs-force-release-20261126.md). The native arrange/restore gate remains open.

@@ -45309,6 +45309,120 @@ mod tests {
     }
 
     #[test]
+    fn headless_view_menu_arranges_and_restores_community_force_layout() {
+        let mut case: CaseFile =
+            serde_json::from_str(include_str!("../fixtures/chart/correctness.case.json"))
+                .expect("checked-in chart fixture is valid");
+        let mut entities = vec![
+            layout_entity("North", "PERSON", false),
+            layout_entity("Pinned", "PERSON", true),
+            layout_entity("South", "PERSON", false),
+        ];
+        for (index, entity) in entities.iter_mut().enumerate() {
+            entity.id = Uuid::from_u128(index as u128 + 1);
+        }
+        entities[0].x = 0.12;
+        entities[0].y = 0.18;
+        entities[1].x = 0.31;
+        entities[1].y = 0.47;
+        entities[2].x = 0.84;
+        entities[2].y = 0.78;
+        case.entities = entities;
+        let ids: Vec<_> = case.entities.iter().map(|entity| entity.id).collect();
+        case.links = [(ids[0], ids[1]), (ids[1], ids[2]), (ids[0], ids[2])]
+            .into_iter()
+            .map(|(from, to)| super::Link {
+                from,
+                to,
+                connection_id: format!("headless-layout-{from}-{to}"),
+                label: "CONTACTS".into(),
+                date: String::new(),
+                confidence: 2,
+                directed: false,
+                notes: String::new(),
+                source_notes: String::new(),
+                source_reference: String::new(),
+                ingest_source: None,
+                attributes: Vec::new(),
+            })
+            .collect();
+        let original: Vec<_> = case
+            .entities
+            .iter()
+            .map(|entity| (entity.x, entity.y, entity.position_locked))
+            .collect();
+        let mut app = App::automation_context(case, "/tmp/headless-community-layout.case.json");
+        app.layout_mode = super::LayoutMode::CommunityForce;
+        let context = egui::Context::default();
+        let mut frame = eframe::Frame::_new_kittest();
+        let mut time = 0.0;
+
+        let initial = render_headless_app_frame(&context, &mut app, &mut frame, time, Vec::new());
+        assert!(find_headless_text_point(&initial, "View…").is_some());
+        click_headless_text(&context, &mut app, &mut frame, &mut time, "View…");
+        let arrange_menu =
+            render_headless_app_frame(&context, &mut app, &mut frame, time, Vec::new());
+        assert!(find_headless_text_point(&arrange_menu, "Arrange chart").is_some());
+        click_headless_visible_text(
+            &context,
+            &mut app,
+            &mut frame,
+            &mut time,
+            &arrange_menu,
+            "Arrange chart",
+        );
+
+        for _ in 0..100 {
+            if app.layout_worker.is_none() && app.layout_restore.is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+            time += 1.0 / 60.0;
+            render_headless_app_frame(&context, &mut app, &mut frame, time, Vec::new());
+        }
+        assert!(app.layout_worker.is_none(), "layout worker should finish");
+        let snapshot = app
+            .layout_restore
+            .as_ref()
+            .expect("Arrange chart stores a restore snapshot");
+        assert!(super::community_layout_restore_matches(
+            app.case.active_chart_id,
+            &app.case.entities,
+            snapshot,
+        ));
+        assert_eq!(
+            (app.case.entities[1].x, app.case.entities[1].y),
+            (original[1].0, original[1].1),
+            "pinned node remains in place during arrangement",
+        );
+        assert_ne!(
+            (app.case.entities[0].x, app.case.entities[0].y),
+            (original[0].0, original[0].1),
+            "arrangement changes a movable node",
+        );
+
+        click_headless_text(&context, &mut app, &mut frame, &mut time, "View…");
+        let restore_menu =
+            render_headless_app_frame(&context, &mut app, &mut frame, time, Vec::new());
+        assert!(
+            find_headless_text_point(&restore_menu, "Restore positions from before force layout")
+                .is_some()
+        );
+        click_headless_visible_text(
+            &context,
+            &mut app,
+            &mut frame,
+            &mut time,
+            &restore_menu,
+            "Restore positions from before force layout",
+        );
+        for (entity, (x, y, pinned)) in app.case.entities.iter().zip(original) {
+            assert_eq!((entity.x, entity.y, entity.position_locked), (x, y, pinned));
+        }
+        assert!(app.layout_restore.is_none());
+    }
+
+    #[test]
     fn entity_type_layout_adapts_cluster_grid_to_canvas_aspect() {
         let entities = (0..6)
             .map(|index| layout_entity(&format!("Entity {index}"), &format!("TYPE-{index}"), false))
