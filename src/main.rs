@@ -26157,7 +26157,7 @@ impl eframe::App for App {
                                 "Entities at the same hop are grouped when they contact within that layer. Group links retain record counts and direction; parallel records remain individually inspectable.",
                             ).small().color(muted));
                             ui.label(egui::RichText::new(
-                                "GROUP CONTACT MAP · each node is a hop-layer group; thicker lines represent more relationship records. Direction counts remain available in the interaction list.",
+                                "GROUP CONTACT MAP · nodes are hop-layer groups; line thickness represents relationship-record count, and arrowheads show recorded direction. Lines without arrowheads represent undirected records.",
                             ).small().color(muted));
                             let displayed_hops = &analysis.map_hops;
                             let visible_groups_by_column = &analysis.map_groups_by_column;
@@ -26203,10 +26203,18 @@ impl eframe::App for App {
                                             );
                                         }
                                     }
+                                    let direction_color = egui::Color32::from_rgb(84, 194, 205);
                                     for interaction_index in &analysis.map_interaction_indices {
                                         let Some(interaction) = analysis.interactions.get(*interaction_index) else { continue };
                                         let Some(&from) = group_positions.get(&interaction.first_group) else { continue };
                                         let Some(&to) = group_positions.get(&interaction.second_group) else { continue };
+                                        let delta = to - from;
+                                        let length = delta.length();
+                                        if length <= f32::EPSILON {
+                                            continue;
+                                        }
+                                        let direction = delta / length;
+                                        let normal = egui::vec2(-direction.y, direction.x);
                                         let width = (1.0
                                             + (interaction.relationship_record_count as f32).log2())
                                             .clamp(1.0, 5.0);
@@ -26214,6 +26222,26 @@ impl eframe::App for App {
                                             [from, to],
                                             egui::Stroke::new(width, egui::Color32::from_rgb(66, 111, 129)),
                                         );
+                                        let has_forward = interaction.first_to_second_record_count > 0;
+                                        let has_reverse = interaction.second_to_first_record_count > 0;
+                                        let first_radius = (8.0
+                                            + (analysis.groups[interaction.first_group].members.len() as f32).sqrt())
+                                            .clamp(9.0, 15.0);
+                                        let second_radius = (8.0
+                                            + (analysis.groups[interaction.second_group].members.len() as f32).sqrt())
+                                            .clamp(9.0, 15.0);
+                                        if has_forward {
+                                            let offset = if has_reverse { normal * 2.5 } else { egui::Vec2::ZERO };
+                                            let start = from + direction * (first_radius + 4.0) + offset;
+                                            let end = to - direction * (second_radius + 4.0) + offset;
+                                            painter.arrow(start, end - start, egui::Stroke::new(1.5_f32, direction_color));
+                                        }
+                                        if has_reverse {
+                                            let offset = if has_forward { normal * -2.5 } else { egui::Vec2::ZERO };
+                                            let start = to - direction * (second_radius + 4.0) + offset;
+                                            let end = from + direction * (first_radius + 4.0) + offset;
+                                            painter.arrow(start, end - start, egui::Stroke::new(1.5_f32, direction_color));
+                                        }
                                     }
                                     for group_index in analysis.map_group_indices.iter().copied() {
                                         let group = &analysis.groups[group_index];
@@ -45013,6 +45041,26 @@ mod tests {
 
     #[test]
     fn headless_ui_drives_geodesic_and_detected_community_actions() {
+        fn count_strokes_with_color(
+            shapes: &[egui::epaint::ClippedShape],
+            color: egui::Color32,
+        ) -> usize {
+            fn count(shape: &egui::epaint::Shape, color: egui::Color32) -> usize {
+                match shape {
+                    egui::epaint::Shape::LineSegment { stroke, .. } if stroke.color == color => 1,
+                    egui::epaint::Shape::Vec(children) => {
+                        children.iter().map(|child| count(child, color)).sum()
+                    }
+                    _ => 0,
+                }
+            }
+
+            shapes
+                .iter()
+                .map(|clipped| count(&clipped.shape, color))
+                .sum()
+        }
+
         let mut case: CaseFile =
             serde_json::from_str(include_str!("../fixtures/chart/correctness.case.json"))
                 .expect("checked-in chart fixture is valid");
@@ -45059,7 +45107,8 @@ mod tests {
             }
         }
         case.links.extend([
-            make_link(entity_ids[3], entity_ids[4], false),
+            make_link(entity_ids[3], entity_ids[4], true),
+            make_link(entity_ids[4], entity_ids[3], true),
             make_link(entity_ids[3], entity_ids[8], false),
         ]);
         let origin = case.entities[0].id;
@@ -45099,6 +45148,22 @@ mod tests {
             .clone();
         let visible_contact_map =
             scroll_headless_until_text(&context, &mut app, &mut frame, &mut time, "G2");
+        assert_eq!(
+            count_strokes_with_color(&visible_contact_map, egui::Color32::from_rgb(84, 194, 205),),
+            6,
+            "the contact-map painter should draw arrowheads in both directions for reciprocal group records",
+        );
+        let reciprocal_contact = app
+            .network_proximity_analysis
+            .as_ref()
+            .unwrap()
+            .1
+            .interactions
+            .iter()
+            .find(|interaction| interaction.first_group == 1 && interaction.second_group == 2)
+            .expect("fixture contains reciprocal contacts between hop-layer groups");
+        assert_eq!(reciprocal_contact.first_to_second_record_count, 1);
+        assert_eq!(reciprocal_contact.second_to_first_record_count, 1);
         click_headless_visible_text(
             &context,
             &mut app,
