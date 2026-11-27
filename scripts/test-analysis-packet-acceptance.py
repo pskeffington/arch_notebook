@@ -98,6 +98,12 @@ def main() -> int:
         assert stat.S_IMODE((default_dir / "finding.md").stat().st_mode) == 0o600
         assert stat.S_IMODE(default_svg_path.stat().st_mode) == 0o600
     assert default_result["ok"] is True
+    assert default_result["output_files"] == ["finding.md", "network.svg"]
+    assert str(default_dir) not in default_run.stdout
+    human_dir = work_dir / "human-readable-packet"
+    human_run = run(binary, str(case_path), str(human_dir))
+    assert "finding.md + network.svg WRITTEN TO REQUESTED DIRECTORY" in human_run.stdout
+    assert str(human_dir) not in human_run.stdout
     assert default_result["entities"] == len(original["entities"])
     assert default_result["relationships"] == len(original["links"])
     assert "Chart: Redacted" in default_report
@@ -229,6 +235,7 @@ def main() -> int:
         "case_copy_sha256": case_hash_before,
         "case_copy_unchanged": case_hash_after == case_hash_before,
         "default_packet": default_result,
+        "human_stdout_omits_destination": str(human_dir) not in human_run.stdout,
         "disclosed_packet": disclosure_result,
         "selected_chart_packet": selected_result,
         "existing_destination_exit_code": occupied.returncode,

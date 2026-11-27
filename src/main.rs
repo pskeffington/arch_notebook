@@ -14918,14 +14918,13 @@ fn export_analysis_packet_cli(
     if json_output {
         println!(
             "{}",
-            serde_json::json!({"schema_version":1,"ok":true,"output":output_dir,"entities":case.entities.len(),"relationships":case.links.len(),"options":{"names":disclosure.names,"relationship_labels":disclosure.relationship_labels,"ids":disclosure.ids,"evidence_references":disclosure.evidence_references},"source_sha256":source_hash})
+            serde_json::json!({"schema_version":1,"ok":true,"output_files":["finding.md","network.svg"],"entities":case.entities.len(),"relationships":case.links.len(),"options":{"names":disclosure.names,"relationship_labels":disclosure.relationship_labels,"ids":disclosure.ids,"evidence_references":disclosure.evidence_references},"source_sha256":source_hash})
         );
     } else {
         println!(
-            "ANALYSIS PACKET EXPORTED · {} ENTITIES · {} RELATIONSHIPS · {}",
+            "ANALYSIS PACKET EXPORTED · {} ENTITIES · {} RELATIONSHIPS · finding.md + network.svg WRITTEN TO REQUESTED DIRECTORY",
             case.entities.len(),
-            case.links.len(),
-            output_dir
+            case.links.len()
         );
     }
     Ok(())
