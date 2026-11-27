@@ -34,6 +34,8 @@ jobs:
             libsqlite3-dev libwayland-dev libx11-dev libxcb1-dev libxcursor-dev libxkbcommon-dev
       - name: Check formatting
         run: cargo fmt --all -- --check
+      - name: Check local Clinton corpus QA harness syntax
+        run: python3 -m py_compile scripts/test-clinton-corpus-acceptance.py
       - name: Fetch locked dependencies
         run: cargo fetch --locked
       - name: Run unit and chart-kernel regression tests

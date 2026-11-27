@@ -1528,6 +1528,8 @@ struct CaseFile {
     active_chart_zoom: f32,
     #[serde(default)]
     active_chart_pan: [f32; 2],
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    chart_coordinate_bounds: Option<[f32; 4]>,
     #[serde(default)]
     chart_tabs: Vec<ChartDocument>,
     #[serde(default)]
@@ -1560,6 +1562,8 @@ struct ChartDocument {
     zoom: f32,
     #[serde(default)]
     pan: [f32; 2],
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    coordinate_bounds: Option<[f32; 4]>,
     entities: Vec<Entity>,
     links: Vec<Link>,
     #[serde(default)]
@@ -1831,6 +1835,12 @@ fn default_chart_label_color() -> [u8; 3] {
 
 fn default_chart_zoom() -> f32 {
     1.0
+}
+
+fn chart_view_needs_initial_fit(case: &CaseFile) -> bool {
+    case.chart_coordinate_bounds.is_none()
+        && case.active_chart_zoom == default_chart_zoom()
+        && case.active_chart_pan == [0.0, 0.0]
 }
 
 fn clamp_chart_zoom(zoom: f32) -> f32 {
@@ -2942,9 +2952,9 @@ impl Default for App {
                         }) {
                         Ok((mut saved_case, contents)) => {
                             normalize_snapshot_database_paths(&mut saved_case, &case_path);
+                            fit_initial_chart = chart_view_needs_initial_fit(&saved_case);
                             case = saved_case;
                             disk_case_json = Some(contents);
-                            fit_initial_chart = false;
                             "SAVED CASE RESTORED".into()
                         }
                         Err(error) => {
@@ -3388,6 +3398,7 @@ fn demo_case() -> CaseFile {
         active_chart_title: default_chart_title(),
         active_chart_zoom: default_chart_zoom(),
         active_chart_pan: [0.0, 0.0],
+        chart_coordinate_bounds: None,
         chart_tabs: Vec::new(),
         chart_templates: Vec::new(),
         active_chart_template: None,
@@ -3556,12 +3567,14 @@ impl App {
             title: std::mem::replace(&mut self.case.active_chart_title, target.title),
             zoom: self.chart_zoom,
             pan: [self.chart_pan.x, self.chart_pan.y],
+            coordinate_bounds: self.case.chart_coordinate_bounds,
             entities: std::mem::take(&mut self.case.entities),
             links: std::mem::take(&mut self.case.links),
             labels: std::mem::take(&mut self.case.labels),
             template_id: outgoing_template,
         });
         self.case.active_chart_id = target.id;
+        self.case.chart_coordinate_bounds = target.coordinate_bounds;
         self.case.active_chart_template = target.template_id;
         self.case.active_chart_zoom = clamp_chart_zoom(target.zoom);
         self.case.active_chart_pan = target.pan;
@@ -3688,6 +3701,7 @@ impl App {
             title: old_title,
             zoom: self.chart_zoom,
             pan: [self.chart_pan.x, self.chart_pan.y],
+            coordinate_bounds: self.case.chart_coordinate_bounds,
             entities: std::mem::take(&mut self.case.entities),
             links: std::mem::take(&mut self.case.links),
             labels: std::mem::take(&mut self.case.labels),
@@ -3695,6 +3709,7 @@ impl App {
         });
         let inherited_template = self.case.active_chart_template;
         self.case.active_chart_id = Uuid::new_v4();
+        self.case.chart_coordinate_bounds = None;
         self.case.active_chart_template = inherited_template;
         self.case.active_chart_title = format!("Chart {}", self.case.chart_tabs.len() + 1);
         self.case.active_chart_zoom = default_chart_zoom();
@@ -3735,6 +3750,7 @@ impl App {
         let copied_entities = self.case.entities.clone();
         let copied_links = self.case.links.clone();
         let copied_labels = self.case.labels.clone();
+        let copied_coordinate_bounds = self.case.chart_coordinate_bounds;
         let base_title = format!("{source_title} copy");
         let mut duplicate_title = base_title.clone();
         let mut suffix = 2usize;
@@ -3755,6 +3771,7 @@ impl App {
             title: std::mem::replace(&mut self.case.active_chart_title, duplicate_title.clone()),
             zoom: self.chart_zoom,
             pan: [self.chart_pan.x, self.chart_pan.y],
+            coordinate_bounds: copied_coordinate_bounds,
             entities: std::mem::take(&mut self.case.entities),
             links: std::mem::take(&mut self.case.links),
             labels: std::mem::take(&mut self.case.labels),
@@ -3762,6 +3779,7 @@ impl App {
         });
         let inherited_template = self.case.active_chart_template;
         self.case.active_chart_id = Uuid::new_v4();
+        self.case.chart_coordinate_bounds = copied_coordinate_bounds;
         self.case.active_chart_template = inherited_template;
         self.case.entities = copied_entities;
         self.case.links = copied_links;
@@ -4614,6 +4632,7 @@ impl App {
             Ok((mut c, disk_case_json)) => {
                 let cleared_one_run_overrides =
                     !self.automation_run_parameter_text.trim().is_empty();
+                let fit_on_load = chart_view_needs_initial_fit(&c);
                 normalize_snapshot_database_paths(&mut c, &requested_path);
                 self.discard_sql_entity_source_lookup();
                 self.chart_zoom = clamp_chart_zoom(c.active_chart_zoom);
@@ -4647,7 +4666,8 @@ impl App {
                 self.chart_pan_origin = egui::Vec2::ZERO;
                 self.chart_focus = None;
                 self.chart_focus_link = None;
-                self.chart_fit_entities = None;
+                self.chart_fit_entities = fit_on_load
+                    .then(|| self.case.entities.iter().map(|entity| entity.id).collect());
                 self.chart_fit_path = None;
                 self.chart_focus_group = None;
                 self.clear_chart_entity_selection();
@@ -12067,9 +12087,12 @@ impl App {
         let Some(current_id) = self.selected else {
             return;
         };
-        let Some(entity_id) =
-            chart_neighbor_in_direction(&self.case.entities, current_id, direction)
-        else {
+        let Some(entity_id) = chart_neighbor_in_direction_mapped(
+            &self.case.entities,
+            current_id,
+            direction,
+            ChartCoordinateMap::for_case(&self.case),
+        ) else {
             return;
         };
         if extend_selection {
@@ -12456,6 +12479,7 @@ impl App {
                 return;
             }
         }
+        self.case.chart_coordinate_bounds = None;
         self.chart_zoom = 1.0;
         self.chart_pan = egui::Vec2::ZERO;
         self.chart_focus = None;
@@ -12572,6 +12596,7 @@ impl App {
                         entity.y = y;
                     }
                 }
+                self.case.chart_coordinate_bounds = None;
                 self.chart_zoom = 1.0;
                 self.chart_pan = egui::Vec2::ZERO;
                 self.chart_focus = None;
@@ -12617,6 +12642,7 @@ impl App {
             entity.x = *x;
             entity.y = *y;
         }
+        self.case.chart_coordinate_bounds = None;
         self.chart_zoom = 1.0;
         self.chart_pan = egui::Vec2::ZERO;
         self.chart_focus = None;
@@ -12703,6 +12729,7 @@ impl App {
             active_chart_title: default_chart_title(),
             active_chart_zoom: default_chart_zoom(),
             active_chart_pan: [0.0, 0.0],
+            chart_coordinate_bounds: None,
             chart_tabs: Vec::new(),
             chart_templates: Vec::new(),
             active_chart_template: None,
@@ -13836,12 +13863,23 @@ fn linked_entities_for(
     linked_entities
 }
 
+#[cfg(test)]
 fn chart_fit_transform(
     case: &CaseFile,
     entity_ids: &[Uuid],
     rect: egui::Rect,
 ) -> Option<(f32, egui::Vec2)> {
-    let transform = ChartTransform::new(rect, 1.0, egui::Vec2::ZERO);
+    let coordinates = ChartCoordinateMap::for_case(case);
+    chart_fit_transform_with_coordinates(case, entity_ids, rect, coordinates)
+}
+
+fn chart_fit_transform_with_coordinates(
+    case: &CaseFile,
+    entity_ids: &[Uuid],
+    rect: egui::Rect,
+    coordinates: ChartCoordinateMap,
+) -> Option<(f32, egui::Vec2)> {
+    let transform = ChartTransform::with_coordinates(rect, 1.0, egui::Vec2::ZERO, coordinates);
     let entity_positions: HashMap<Uuid, egui::Pos2> = case
         .entities
         .iter()
@@ -13876,6 +13914,106 @@ struct ChartTransform {
     rect: egui::Rect,
     zoom: f32,
     pan: egui::Vec2,
+    coordinates: ChartCoordinateMap,
+}
+
+#[derive(Clone, Copy)]
+struct ChartCoordinateMap {
+    min: egui::Pos2,
+    max: egui::Pos2,
+    identity: bool,
+}
+
+impl ChartCoordinateMap {
+    fn for_case(case: &CaseFile) -> Self {
+        if let Some([min_x, min_y, max_x, max_y]) = case.chart_coordinate_bounds
+            && [min_x, min_y, max_x, max_y]
+                .iter()
+                .all(|value| value.is_finite())
+            && min_x <= max_x
+            && min_y <= max_y
+        {
+            let min = egui::pos2(min_x, min_y);
+            let max = egui::pos2(max_x, max_y);
+            let identity = min.x >= 0.0 && min.y >= 0.0 && max.x <= 1.0 && max.y <= 1.0;
+            return Self { min, max, identity };
+        }
+        Self::from_entity_positions(case)
+    }
+
+    fn from_entity_positions(case: &CaseFile) -> Self {
+        let mut min = egui::pos2(f32::INFINITY, f32::INFINITY);
+        let mut max = egui::pos2(f32::NEG_INFINITY, f32::NEG_INFINITY);
+        let mut found = false;
+        // Standalone labels share the entity coordinate frame but must not
+        // influence its bounds: moving an outer label must not shift the graph.
+        for (x, y) in case.entities.iter().map(|e| (e.x, e.y)) {
+            if !x.is_finite() || !y.is_finite() {
+                continue;
+            }
+            found = true;
+            min.x = min.x.min(x);
+            min.y = min.y.min(y);
+            max.x = max.x.max(x);
+            max.y = max.y.max(y);
+        }
+        if !found {
+            min = egui::Pos2::ZERO;
+            max = egui::pos2(1.0, 1.0);
+        }
+        let identity = min.x >= 0.0 && min.y >= 0.0 && max.x <= 1.0 && max.y <= 1.0;
+        Self { min, max, identity }
+    }
+
+    fn bounds(self) -> [f32; 4] {
+        [self.min.x, self.min.y, self.max.x, self.max.y]
+    }
+
+    fn to_viewport(self, x: f32, y: f32) -> egui::Pos2 {
+        if !x.is_finite() || !y.is_finite() {
+            return egui::pos2(0.5, 0.5);
+        }
+        if self.identity {
+            return egui::pos2(x, y);
+        }
+        let axis = |value: f32, min: f32, max: f32| {
+            let value = value as f64;
+            let (min, max) = if max == min {
+                chart_degenerate_axis_bounds(min)
+            } else {
+                (min as f64, max as f64)
+            };
+            (0.10 + (value - min) / (max - min) * 0.80) as f32
+        };
+        egui::pos2(
+            axis(x, self.min.x, self.max.x),
+            axis(y, self.min.y, self.max.y),
+        )
+    }
+
+    fn from_viewport(self, point: egui::Pos2) -> egui::Pos2 {
+        if self.identity {
+            return point;
+        }
+        let axis = |value: f32, min: f32, max: f32| {
+            let (min, max) = if max == min {
+                chart_degenerate_axis_bounds(min)
+            } else {
+                (min as f64, max as f64)
+            };
+            (min + (value as f64 - 0.10) / 0.80 * (max - min)) as f32
+        };
+        egui::pos2(
+            axis(point.x, self.min.x, self.max.x),
+            axis(point.y, self.min.y, self.max.y),
+        )
+    }
+}
+
+fn chart_degenerate_axis_bounds(value: f32) -> (f64, f64) {
+    let value = value as f64;
+    let half_span = (value.abs() * f32::EPSILON as f64 * 131_072.0).max(0.5);
+    (value - half_span, value + half_span)
 }
 
 impl ChartTransform {
@@ -13884,6 +14022,23 @@ impl ChartTransform {
             rect,
             zoom: clamp_chart_zoom(zoom),
             pan,
+            coordinates: ChartCoordinateMap {
+                min: egui::Pos2::ZERO,
+                max: egui::pos2(1.0, 1.0),
+                identity: true,
+            },
+        }
+    }
+
+    fn with_coordinates(
+        rect: egui::Rect,
+        zoom: f32,
+        pan: egui::Vec2,
+        coordinates: ChartCoordinateMap,
+    ) -> Self {
+        Self {
+            coordinates,
+            ..Self::new(rect, zoom, pan)
         }
     }
 
@@ -13897,8 +14052,8 @@ impl ChartTransform {
 
     fn normalized_to_screen(self, x: f32, y: f32) -> egui::Pos2 {
         self.viewport_to_screen(egui::pos2(
-            self.rect.left() + x * self.rect.width(),
-            self.rect.top() + y * self.rect.height(),
+            self.rect.left() + self.coordinates.to_viewport(x, y).x * self.rect.width(),
+            self.rect.top() + self.coordinates.to_viewport(x, y).y * self.rect.height(),
         ))
     }
 
@@ -13921,7 +14076,8 @@ impl ChartTransform {
             (viewport_point.x - self.rect.left()) / width,
             (viewport_point.y - self.rect.top()) / height,
         );
-        (normalized.x.is_finite() && normalized.y.is_finite()).then_some(normalized)
+        let data = self.coordinates.from_viewport(normalized);
+        (data.x.is_finite() && data.y.is_finite()).then_some(data)
     }
 
     fn zoomed_at(self, point: egui::Pos2, zoom: f32) -> Self {
@@ -13950,18 +14106,21 @@ fn chart_entity_at_position(
     })
 }
 
-fn chart_neighbor_in_direction(
+fn chart_neighbor_in_direction_mapped(
     entities: &[Entity],
     current_id: Uuid,
     direction: egui::Key,
+    coordinates: ChartCoordinateMap,
 ) -> Option<Uuid> {
     let current = entities.iter().find(|entity| entity.id == current_id)?;
+    let current_pos = coordinates.to_viewport(current.x, current.y);
     entities
         .iter()
         .filter(|entity| entity.id != current_id)
         .filter_map(|entity| {
-            let dx = entity.x - current.x;
-            let dy = entity.y - current.y;
+            let position = coordinates.to_viewport(entity.x, entity.y);
+            let dx = position.x - current_pos.x;
+            let dy = position.y - current_pos.y;
             if !dx.is_finite() || !dy.is_finite() {
                 return None;
             }
@@ -14662,11 +14821,10 @@ fn analysis_packet_svg(
     let mut svg = format!(
         "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{WIDTH}\" height=\"{HEIGHT}\" viewBox=\"0 0 {WIDTH} {HEIGHT}\"><title>Simplified network overview</title><desc>Stored chart positions; distances are not a social measure.</desc><defs><marker id=\"arrow\" markerWidth=\"10\" markerHeight=\"7\" refX=\"9\" refY=\"3.5\" orient=\"auto\"><polygon points=\"0 0, 10 3.5, 0 7\" fill=\"#46545f\"/></marker></defs><rect width=\"100%\" height=\"100%\" fill=\"white\"/>\n"
     );
+    let coordinates = ChartCoordinateMap::for_case(case);
     let point = |entity: &Entity| -> (f32, f32) {
-        (
-            40.0 + entity.x.clamp(0.0, 1.0) * 1120.0,
-            40.0 + entity.y.clamp(0.0, 1.0) * 660.0,
-        )
+        let p = coordinates.to_viewport(entity.x, entity.y);
+        (40.0 + p.x * 1120.0, 40.0 + p.y * 720.0)
     };
     for (index, link) in links.iter().enumerate() {
         let from = entities[entity_index[&link.from]];
@@ -14949,6 +15107,7 @@ fn export_analysis_packet_cli(
     let source_hash = sha256_hex(content.as_bytes());
     if let Some(selector) = selector {
         let chart_id = chart_id_for_selector(&case, selector)?;
+        case.chart_coordinate_bounds = chart_coordinate_bounds_for_id(&case, chart_id);
         let chart_title = chart_title_for_id(&case, chart_id)
             .ok_or("chart title missing")?
             .to_owned();
@@ -15243,10 +15402,15 @@ fn refreshed_link_index(links: &[Link], selected: &SelectedLinkIdentity) -> Opti
         .map(|(index, _)| index)
 }
 
-fn chart_navigator_map_point(entity: &Entity, map: egui::Rect) -> egui::Pos2 {
+fn chart_navigator_map_point(
+    entity: &Entity,
+    map: egui::Rect,
+    coordinates: ChartCoordinateMap,
+) -> egui::Pos2 {
+    let point = coordinates.to_viewport(entity.x, entity.y);
     egui::pos2(
-        map.left() + entity.x.clamp(0.0, 1.0) * map.width(),
-        map.top() + entity.y.clamp(0.0, 1.0) * map.height(),
+        map.left() + point.x * map.width(),
+        map.top() + point.y * map.height(),
     )
 }
 
@@ -18444,6 +18608,8 @@ impl eframe::App for App {
                             selected_link,
                             chart_fit_entities,
                         } => {
+                            let mut case = case;
+                            case.chart_coordinate_bounds = None;
                             self.case = case;
                             self.disk_case_json = Some(disk_case_json);
                             self.saved_case_json = self.current_case_json();
@@ -18470,6 +18636,8 @@ impl eframe::App for App {
                             selected_link,
                             chart_fit_entities,
                         } => {
+                            let mut case = case;
+                            case.chart_coordinate_bounds = None;
                             self.case = case;
                             self.disk_case_json = Some(disk_case_json);
                             self.saved_case_json = self.current_case_json();
@@ -18496,6 +18664,8 @@ impl eframe::App for App {
                             selected_link,
                             chart_fit_entities,
                         } => {
+                            let mut case = case;
+                            case.chart_coordinate_bounds = None;
                             self.case = case;
                             self.selected_link = selected_link;
                             if chart_fit_entities.is_some() {
@@ -23535,11 +23705,12 @@ impl eframe::App for App {
                         }
                         let (rect,response)=ui.allocate_exact_size(egui::vec2(canvas_w,avail.y),egui::Sense::click_and_drag());
                         let p=ui.painter_at(rect);
+                        let mut coordinates = ChartCoordinateMap::for_case(&self.case);
                         if response.hovered() {
                             let scroll=ctx.input(|input|input.smooth_scroll_delta.y);
                             if scroll!=0.0 {
                                 let pointer=response.hover_pos().unwrap_or_else(||rect.center());
-                                let transform=ChartTransform::new(rect,self.chart_zoom,self.chart_pan)
+                                let transform=ChartTransform::with_coordinates(rect,self.chart_zoom,self.chart_pan,coordinates)
                                     .zoomed_at(pointer,self.chart_zoom*(1.0+scroll*0.001));
                                 self.chart_pan=transform.pan;
                                 self.chart_zoom=transform.zoom;
@@ -23550,7 +23721,9 @@ impl eframe::App for App {
                             .take()
                             .or_else(|| self.chart_fit_path.take())
                         {
-                            if let Some((zoom, pan)) = chart_fit_transform(&self.case, &entity_ids, rect)
+                            coordinates = ChartCoordinateMap::from_entity_positions(&self.case);
+                            self.case.chart_coordinate_bounds = Some(coordinates.bounds());
+                            if let Some((zoom, pan)) = chart_fit_transform_with_coordinates(&self.case, &entity_ids, rect, coordinates)
                             {
                                 self.chart_zoom = zoom;
                                 self.chart_pan = pan;
@@ -23559,14 +23732,14 @@ impl eframe::App for App {
                             self.chart_focus_link=None;
                         } else if let Some(id)=self.chart_focus.take(){
                             if let Some(entity)=self.case.entities.iter().find(|e|e.id==id){
-                                let base=ChartTransform::new(rect,1.0,egui::Vec2::ZERO).normalized_to_screen(entity.x,entity.y);
+                                let base=ChartTransform::with_coordinates(rect,1.0,egui::Vec2::ZERO,coordinates).normalized_to_screen(entity.x,entity.y);
                                 self.chart_pan=-(base-rect.center())*self.chart_zoom;
                             }
                             self.chart_focus_link=None;
                         } else if let Some(index)=self.chart_focus_link.take(){
                             if let Some(link)=self.case.links.get(index){
                                 if let (Some(from),Some(to))=(self.case.entities.iter().find(|entity|entity.id==link.from),self.case.entities.iter().find(|entity|entity.id==link.to)){
-                                    let base_transform=ChartTransform::new(rect,1.0,egui::Vec2::ZERO);
+                                    let base_transform=ChartTransform::with_coordinates(rect,1.0,egui::Vec2::ZERO,coordinates);
                                     let base_from=base_transform.normalized_to_screen(from.x,from.y);
                                     let base_to=base_transform.normalized_to_screen(to.x,to.y);
                                     self.chart_pan=-(base_from.lerp(base_to,0.5)-rect.center())*self.chart_zoom;
@@ -23600,14 +23773,20 @@ impl eframe::App for App {
                         }
                         let chart_zoom = self.chart_zoom;
                         let chart_pan = self.chart_pan;
-                        let chart_transform=ChartTransform::new(rect,chart_zoom,chart_pan);
+                        let chart_transform=ChartTransform::with_coordinates(rect,chart_zoom,chart_pan,coordinates);
                         let center=|e:&Entity|chart_transform.normalized_to_screen(e.x,e.y);
                         let chart_prepare_started = Instant::now();
                         let ChartVectorGeometry {
                             link_lanes: _,
                             entity_positions,
                             route_lanes,
-                        } = chart_vector_geometry(&self.case, rect, chart_zoom, chart_pan);
+                        } = chart_vector_geometry_with_coordinates(
+                            &self.case,
+                            rect,
+                            chart_zoom,
+                            chart_pan,
+                            coordinates,
+                        );
                         let entity_indices = chart_entity_indices(&self.case);
                         let path_link_indices: HashSet<usize> = if self.path_result.is_empty() {
                             HashSet::new()
@@ -24278,7 +24457,7 @@ impl eframe::App for App {
                             muted,
                         );
                         let navigator_started = Instant::now();
-                        let map_point = |entity: &Entity| chart_navigator_map_point(entity, navigator_map);
+                        let map_point = |entity: &Entity| chart_navigator_map_point(entity, navigator_map, coordinates);
                         for link in &self.case.links {
                             if let (Some(from), Some(to)) = (
                                 entity_indices
@@ -24631,6 +24810,7 @@ impl eframe::App for App {
                                         .flatten();
                                     if let Some(label_id) = label_id {
                                         self.select_chart_label(label_id);
+                                        self.case.chart_coordinate_bounds = Some(coordinates.bounds());
                                         if let Some(label) = self.case.labels.iter().find(|label| label.id == label_id) {
                                             self.chart_label_drag_origin = Some((label.id, label.x, label.y));
                                         }
@@ -24642,6 +24822,7 @@ impl eframe::App for App {
                                                 .find(|entity| entity.id == id)
                                                 .map(|entity| (entity.id, entity.position_locked))
                                         }) {
+                                        self.case.chart_coordinate_bounds = Some(coordinates.bounds());
                                         if !self.selected_entities.contains(&entity_id) {
                                             self.select_chart_entity(entity_id, false);
                                         } else {
@@ -24706,13 +24887,18 @@ impl eframe::App for App {
                                 } else if let Some((label_id, anchor_x, anchor_y)) =
                                     self.chart_label_drag_origin
                                 {
-                                    let dx = response.drag_delta().x
-                                        / (self.chart_zoom * rect.width()).max(1.0);
-                                    let dy = response.drag_delta().y
-                                        / (self.chart_zoom * rect.height()).max(1.0);
+                                    let drag_delta = response.drag_delta();
+                                    let previous = pos - drag_delta;
+                                    let current_data = chart_transform.screen_to_normalized(pos);
+                                    let previous_data = chart_transform.screen_to_normalized(previous);
+                                    let (dx, dy) = match (current_data, previous_data) {
+                                        (Some(current), Some(previous)) =>
+                                            (current.x - previous.x, current.y - previous.y),
+                                        _ => (0.0, 0.0),
+                                    };
                                     if let Some(label) = self.case.labels.iter_mut().find(|label| label.id == label_id) {
-                                        label.x = (anchor_x + dx).clamp(0.0, 1.0);
-                                        label.y = (anchor_y + dy).clamp(0.0, 1.0);
+                                        label.x = anchor_x + dx;
+                                        label.y = anchor_y + dy;
                                     }
                                 } else if let Some(id) = self.selected
                                     && let Some((anchor_x, anchor_y)) =
@@ -24721,10 +24907,12 @@ impl eframe::App for App {
                                     let normalized_position = chart_transform
                                         .screen_to_normalized(pos)
                                         .unwrap_or_else(|| egui::pos2(anchor_x, anchor_y));
-                                    let target_x =
-                                        normalized_position.x.clamp(0.05, 0.95);
-                                    let target_y =
-                                        normalized_position.y.clamp(0.08, 0.92);
+                                    let target_x = normalized_position.x;
+                                    let target_y = normalized_position.y;
+                                    let left = coordinates.from_viewport(egui::pos2(0.05, 0.5)).x;
+                                    let right = coordinates.from_viewport(egui::pos2(0.95, 0.5)).x;
+                                    let top = coordinates.from_viewport(egui::pos2(0.5, 0.05)).y;
+                                    let bottom = coordinates.from_viewport(egui::pos2(0.5, 0.95)).y;
                                     let (min_dx, max_dx, min_dy, max_dy) = self
                                         .drag_entity_origins
                                         .values()
@@ -24732,10 +24920,10 @@ impl eframe::App for App {
                                             (f32::NEG_INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::INFINITY),
                                             |(min_dx, max_dx, min_dy, max_dy), (x, y)| {
                                                 (
-                                                    min_dx.max(0.05 - x),
-                                                    max_dx.min(0.95 - x),
-                                                    min_dy.max(0.08 - y),
-                                                    max_dy.min(0.92 - y),
+                                                    min_dx.max(left - x),
+                                                    max_dx.min(right - x),
+                                                    min_dy.max(top - y),
+                                                    max_dy.min(bottom - y),
                                                 )
                                             },
                                         );
@@ -28772,7 +28960,23 @@ fn chart_vector_geometry(
     zoom: f32,
     pan: egui::Vec2,
 ) -> ChartVectorGeometry {
-    let transform = ChartTransform::new(rect, zoom, pan);
+    chart_vector_geometry_with_coordinates(
+        case,
+        rect,
+        zoom,
+        pan,
+        ChartCoordinateMap::for_case(case),
+    )
+}
+
+fn chart_vector_geometry_with_coordinates(
+    case: &CaseFile,
+    rect: egui::Rect,
+    zoom: f32,
+    pan: egui::Vec2,
+    coordinates: ChartCoordinateMap,
+) -> ChartVectorGeometry {
+    let transform = ChartTransform::with_coordinates(rect, zoom, pan, coordinates);
     let center = |entity: &Entity| transform.normalized_to_screen(entity.x, entity.y);
     let link_lanes = link_lane_offsets(case);
     let entity_positions: HashMap<Uuid, egui::Pos2> = case
@@ -36100,6 +36304,7 @@ fn export_anx_cli(
         .map_err(|error| format!("cannot parse case: {error}"))?;
     if let Some(selector) = chart_selector {
         let chart_id = chart_id_for_selector(&case, selector)?;
+        case.chart_coordinate_bounds = chart_coordinate_bounds_for_id(&case, chart_id);
         case.active_chart_title = chart_title_for_id(&case, chart_id)
             .ok_or_else(|| format!("chart does not exist: {chart_id}"))?
             .to_owned();
@@ -36160,6 +36365,7 @@ fn export_graphml_cli(
         .map_err(|error| format!("cannot parse case: {error}"))?;
     if let Some(selector) = chart_selector {
         let chart_id = chart_id_for_selector(&case, selector)?;
+        case.chart_coordinate_bounds = chart_coordinate_bounds_for_id(&case, chart_id);
         let chart_title = chart_title_for_id(&case, chart_id)
             .ok_or_else(|| format!("chart does not exist: {chart_id}"))?
             .to_owned();
@@ -40806,6 +41012,17 @@ fn chart_entities_for_id(case: &CaseFile, chart_id: Uuid) -> Option<&[Entity]> {
     }
 }
 
+fn chart_coordinate_bounds_for_id(case: &CaseFile, chart_id: Uuid) -> Option<[f32; 4]> {
+    if chart_id == case.active_chart_id {
+        case.chart_coordinate_bounds
+    } else {
+        case.chart_tabs
+            .iter()
+            .find(|chart| chart.id == chart_id)
+            .and_then(|chart| chart.coordinate_bounds)
+    }
+}
+
 fn chart_links_for_id(case: &CaseFile, chart_id: Uuid) -> Option<&[Link]> {
     if chart_id == case.active_chart_id {
         Some(&case.links)
@@ -41386,6 +41603,7 @@ fn create_import_design_package_cli(
             active_chart_title: default_chart_title(),
             active_chart_zoom: default_chart_zoom(),
             active_chart_pan: [0.0, 0.0],
+            chart_coordinate_bounds: None,
             chart_tabs: Vec::new(),
             chart_templates: Vec::new(),
             active_chart_template: None,
@@ -45975,6 +46193,7 @@ mod tests {
             title: "Alternate **Chart**\n# injected heading".into(),
             zoom: 1.0,
             pan: [0.0, 0.0],
+            coordinate_bounds: None,
             entities: vec![layout_entity("ALTERNATE ENTITY", "Organization", false)],
             links: Vec::new(),
             labels: Vec::new(),
@@ -46136,6 +46355,7 @@ mod tests {
             title: "Alternate **Chart**\n# injected heading".into(),
             zoom: 1.0,
             pan: [0.0, 0.0],
+            coordinate_bounds: None,
             entities: Vec::new(),
             links: Vec::new(),
             labels: Vec::new(),
@@ -47554,6 +47774,7 @@ mod tests {
             active_chart_title: "fixture".into(),
             active_chart_zoom: 1.0,
             active_chart_pan: [0.0, 0.0],
+            chart_coordinate_bounds: None,
             chart_tabs: Vec::new(),
             chart_templates: Vec::new(),
             active_chart_template: None,
@@ -47592,6 +47813,250 @@ mod tests {
                     entity.name
                 );
             }
+        }
+    }
+
+    #[test]
+    fn default_and_unframed_saved_chart_views_request_fit_all_on_open() {
+        let mut case = super::demo_case();
+        assert!(super::chart_view_needs_initial_fit(&case));
+        case.active_chart_pan = [12.0, -4.0];
+        assert!(!super::chart_view_needs_initial_fit(&case));
+        case.active_chart_pan = [0.0, 0.0];
+        case.active_chart_zoom = 1.5;
+        assert!(!super::chart_view_needs_initial_fit(&case));
+        case.active_chart_zoom = 1.0;
+        case.chart_coordinate_bounds = Some([0.0, 0.0, 1.0, 1.0]);
+        assert!(!super::chart_view_needs_initial_fit(&case));
+    }
+
+    #[test]
+    fn anomalous_chart_coordinates_map_consistently_for_fit_selection_routes_and_packet() {
+        let mut case = super::demo_case();
+        case.entities = vec![
+            layout_entity("A", "PERSON", false),
+            layout_entity("B", "PERSON", false),
+            layout_entity("C", "PERSON", false),
+        ];
+        case.entities[0].id = Uuid::from_u128(101);
+        case.entities[0].x = -10_000.0;
+        case.entities[0].y = -80.0;
+        case.entities[1].id = Uuid::from_u128(102);
+        case.entities[1].x = 5.0;
+        case.entities[1].y = 140.0;
+        case.entities[2].id = Uuid::from_u128(103);
+        case.entities[2].x = 10_000.0;
+        case.entities[2].y = 3.0;
+        case.links.truncate(1);
+        case.links[0].from = case.entities[0].id;
+        case.links[0].to = case.entities[1].id;
+        case.labels.clear();
+        let rect = egui::Rect::from_min_size(egui::pos2(23.0, 17.0), egui::vec2(1200.0, 800.0));
+        let map = super::ChartCoordinateMap::for_case(&case);
+        let fit = super::chart_fit_transform(
+            &case,
+            &case.entities.iter().map(|e| e.id).collect::<Vec<_>>(),
+            rect,
+        )
+        .unwrap();
+        let transform = super::ChartTransform::with_coordinates(rect, fit.0, fit.1, map);
+        let geometry = super::chart_vector_geometry(&case, rect, fit.0, fit.1);
+        let mut centers: Vec<_> = case
+            .entities
+            .iter()
+            .map(|e| geometry.entity_positions[&e.id])
+            .collect();
+        centers.sort_by(|a, b| a.x.total_cmp(&b.x).then(a.y.total_cmp(&b.y)));
+        assert!(
+            centers
+                .windows(2)
+                .all(|pair| pair[0].distance(pair[1]) > 1.0),
+            "distinct extreme positions must not collapse"
+        );
+        for entity in &case.entities {
+            let center = transform.normalized_to_screen(entity.x, entity.y);
+            assert!(center.x.is_finite() && center.y.is_finite());
+            assert_eq!(
+                super::chart_entity_at_position(
+                    &case.entities,
+                    &geometry.entity_positions,
+                    center,
+                    fit.0
+                ),
+                Some(entity.id)
+            );
+            let recovered = transform.screen_to_normalized(center).unwrap();
+            assert!((recovered.x - entity.x).abs() < 0.05 && (recovered.y - entity.y).abs() < 0.05);
+        }
+        let link = &case.links[0];
+        let from = geometry.entity_positions[&link.from];
+        let to = geometry.entity_positions[&link.to];
+        let curve =
+            super::connection_curve_points(from, to, geometry.route_lanes[0] * fit.0, false);
+        let pointer = curve[curve.len() / 2];
+        assert!(
+            super::polyline_distance(
+                pointer,
+                &super::connection_curve_points(from, to, geometry.route_lanes[0] * fit.0, false)
+            ) < 0.01
+        );
+        assert_eq!(
+            super::nearest_link_index_at_position(
+                &case.links,
+                &geometry.entity_positions,
+                &geometry.route_lanes,
+                pointer,
+                fit.0,
+                22.0
+            ),
+            Some(0)
+        );
+        let svg =
+            super::analysis_packet_svg(&case, super::AnalysisPacketDisclosure::default()).unwrap();
+        assert_eq!(svg.matches("<g data-entity=").count(), case.entities.len());
+        assert_eq!(svg.matches("<g data-record=").count(), case.links.len());
+        assert!(
+            svg.contains("cx=\"152.00\""),
+            "SVG uses the same bounded affine mapping, not per-node clamping"
+        );
+
+        let mut normal = case.clone();
+        for (entity, (x, y)) in
+            normal
+                .entities
+                .iter_mut()
+                .zip([(0.0, 0.0), (1.0, 1.0), (0.5, 0.25)])
+        {
+            entity.x = x;
+            entity.y = y;
+        }
+        assert!(
+            super::ChartCoordinateMap::for_case(&normal).identity,
+            "ordinary normalized charts retain identity mapping"
+        );
+
+        let mut extremes = normal.clone();
+        extremes.entities[0].x = -f32::MAX;
+        extremes.entities[1].x = f32::MAX;
+        extremes.entities[2].y = f32::NAN;
+        let extreme_map = super::ChartCoordinateMap::for_case(&extremes);
+        assert!(extreme_map.to_viewport(-f32::MAX, 0.0).x.is_finite());
+        assert!(extreme_map.to_viewport(f32::MAX, 0.0).x.is_finite());
+        assert_eq!(
+            extreme_map.to_viewport(f32::NAN, f32::INFINITY),
+            egui::pos2(0.5, 0.5)
+        );
+        let svg = super::analysis_packet_svg(&extremes, super::AnalysisPacketDisclosure::default())
+            .unwrap();
+        assert!(!svg.contains("NaN") && !svg.contains("inf"));
+    }
+
+    #[test]
+    fn standalone_chart_labels_do_not_change_entity_coordinate_mapping() {
+        let mut case = super::demo_case();
+        case.entities.truncate(2);
+        case.entities[0].x = -25.0;
+        case.entities[0].y = 12.0;
+        case.entities[1].x = 80.0;
+        case.entities[1].y = 99.0;
+        case.labels.push(super::ChartLabel {
+            id: Uuid::from_u128(999),
+            text: "Outer annotation".into(),
+            x: 0.5,
+            y: 0.5,
+            font_size: 16.0,
+            color: [0, 0, 0],
+            is_legend: false,
+            legend_entries: Vec::new(),
+            legend_entries_truncated: false,
+            template_rules_for: None,
+        });
+        let before = super::ChartCoordinateMap::for_case(&case);
+        let entity_before = before.to_viewport(case.entities[0].x, case.entities[0].y);
+        case.labels[0].x = 1_000_000.0;
+        case.labels[0].y = -1_000_000.0;
+        let after = super::ChartCoordinateMap::for_case(&case);
+        assert_eq!(after.min, before.min);
+        assert_eq!(after.max, before.max);
+        assert_eq!(
+            after.to_viewport(case.entities[0].x, case.entities[0].y),
+            entity_before
+        );
+    }
+
+    #[test]
+    fn anomalous_entity_drag_keeps_graph_geometry_on_the_frozen_coordinate_map() {
+        let mut case = super::demo_case();
+        case.entities.truncate(2);
+        case.entities[0].id = Uuid::from_u128(201);
+        case.entities[0].x = -10.0;
+        case.entities[0].y = 5.0;
+        case.entities[1].id = Uuid::from_u128(202);
+        case.entities[1].x = 20.0;
+        case.entities[1].y = 80.0;
+        let frozen = super::ChartCoordinateMap::for_case(&case);
+        case.chart_coordinate_bounds = Some(frozen.bounds());
+        case.entities[0].x = -10_000.0;
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0));
+        let geometry = super::chart_vector_geometry_with_coordinates(
+            &case,
+            rect,
+            1.0,
+            egui::Vec2::ZERO,
+            frozen,
+        );
+        let expected = super::ChartTransform::with_coordinates(rect, 1.0, egui::Vec2::ZERO, frozen)
+            .normalized_to_screen(case.entities[0].x, case.entities[0].y);
+        assert_eq!(geometry.entity_positions[&case.entities[0].id], expected);
+        let live = super::chart_vector_geometry_with_coordinates(
+            &case,
+            rect,
+            1.0,
+            egui::Vec2::ZERO,
+            super::ChartCoordinateMap::from_entity_positions(&case),
+        );
+        assert_ne!(
+            geometry.entity_positions[&case.entities[0].id],
+            live.entity_positions[&case.entities[0].id]
+        );
+        let reloaded: super::CaseFile = serde_json::from_str(
+            &serde_json::to_string(&case).expect("case with coordinate bounds serializes"),
+        )
+        .expect("saved coordinate bounds deserialize");
+        assert_eq!(
+            super::ChartCoordinateMap::for_case(&reloaded).min,
+            frozen.min
+        );
+        assert_eq!(
+            super::ChartCoordinateMap::for_case(&reloaded).max,
+            frozen.max
+        );
+    }
+
+    #[test]
+    fn degenerate_chart_axes_keep_a_reversible_drag_range() {
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0));
+        for (x, y) in [(7.0, -3.0), (f32::MAX, -f32::MAX)] {
+            let mut case = super::demo_case();
+            case.entities.truncate(1);
+            case.entities[0].x = x;
+            case.entities[0].y = y;
+            let coordinates = super::ChartCoordinateMap::for_case(&case);
+            let transform =
+                super::ChartTransform::with_coordinates(rect, 1.0, egui::Vec2::ZERO, coordinates);
+            let center = transform.normalized_to_screen(x, y);
+            assert_eq!(center, rect.center());
+            let pointer = if x.is_sign_positive() && x > 1.0e30 {
+                center + egui::vec2(-80.0, 40.0)
+            } else {
+                center + egui::vec2(80.0, -40.0)
+            };
+            let moved = transform.screen_to_normalized(pointer).unwrap();
+            assert!(moved.x.is_finite() && moved.y.is_finite());
+            assert_ne!(moved.x, x);
+            assert_ne!(moved.y, y);
+            let round_trip = transform.normalized_to_screen(moved.x, moved.y);
+            assert!(round_trip.distance(pointer) < 0.01);
         }
     }
 
@@ -48037,15 +48502,26 @@ mod tests {
     }
 
     #[test]
-    fn navigator_projection_clamps_entities_and_clips_offscreen_viewports() {
+    fn navigator_projection_maps_anomalous_entities_and_clips_offscreen_viewports() {
         let entity = layout_entity("edge", "PERSON", false);
         let map = egui::Rect::from_min_size(egui::pos2(10.0, 20.0), egui::vec2(100.0, 60.0));
         let mut edge = entity;
         edge.x = 1.2;
         edge.y = -0.2;
+        let mut other = edge.clone();
+        other.x = -4.0;
+        other.y = 12.0;
+        let coordinates = super::ChartCoordinateMap::for_case(&super::CaseFile {
+            entities: vec![edge.clone(), other],
+            ..super::demo_case()
+        });
+        let point = super::chart_navigator_map_point(&edge, map, coordinates);
         assert_eq!(
-            super::chart_navigator_map_point(&edge, map),
-            map.right_top()
+            point,
+            egui::pos2(
+                map.left() + map.width() * 0.9,
+                map.top() + map.height() * 0.1
+            )
         );
         let canvas = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1000.0, 500.0));
         let viewport =

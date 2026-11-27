@@ -3,10 +3,10 @@
 - **Task / owner:** Install the current Arch Notebook candidate and keep its Desktop launcher aligned with the application menu; implementation session.
 - **Repository / branch:** `/home/sysadmin/github/arch_notebook` / `codex/ui-00-chart-baseline`.
 - **Installer source candidate:** `1dd1c76b986701fc989b114f306e9dab745c860f`.
-- **Installed application source candidate:** `ada63a467e85b00f9186c049947299275abfec11`.
+- **Installed application source candidate:** topology-rendering changes in the current worktree, based on `94f6e9dadf8243db4a298067f02554125e1b38a8`.
 - **Host:** Linux x86_64; current user only.
-- **Release and installed executable SHA-256:** `fe94ef08e1e9e1583551a535f8dec74614931fd78736658edaeddb002d08f4e1`.
-- **Isolated installer report:** [LOCAL-INSTALL-08 JSON](artifacts/LOCAL-INSTALL-08-linux.json), SHA-256 `5f29671617fa15e8c3a4facca052cbf15f6acd299e38c1f097b8244bfb9a6c7d`.
+- **Release and installed executable SHA-256:** `7a7f9ebc6111185c80aeed1b98746b93127738e7eea588567b29bb8a437c3924`.
+- **Isolated installer report:** [LOCAL-INSTALL-08 JSON](artifacts/LOCAL-INSTALL-08-linux.json), SHA-256 `1634f25547e2d90e4e2ed0eea943f7cdf9006303bcd0cb1c32c06df8fcdb10ad`.
 
 ## Installed paths
 
@@ -22,10 +22,10 @@
 | Gate | Result | Evidence |
 | --- | --- | --- |
 | Isolated installer smoke | **PASS** | `python3 scripts/test-linux-user-install-acceptance.py --binary /tmp/arch-notebook-target/release/arch-notebook --report docs/evidence/deployment/artifacts/LOCAL-INSTALL-08-linux.json` exited 0 in a temporary HOME. Menu and Desktop files match byte-for-byte, the shortcut mode is 0755, the installed executable matches its input, both icon assets and automation helper match package sources, MIME definition matches, and `--version --json` works. `desktop-file-validate` passed. |
-| Current-user installer | **PASS** | `scripts/install-linux-user.sh /tmp/arch-notebook-template-review-fix-20261127/arch-notebook-linux-x86_64` exited 0 and installed the release into the paths listed above. |
-| Current-user launcher and Desktop shortcut | **PASS** | Both desktop files have SHA-256 `0997476bbec189ce6c3a98c22670cd4b8aebd989c721bcced4bf6eff5c141f4c`; `cmp` and `desktop-file-validate` exited 0. Shortcut mode is 0755. |
-| Binary, graphics, helper and MIME association | **PASS** | Installed executable matches release hash above. Installed SVG hash is `2807b09bd0b4cd13ebeeb58620ba8ca60330dae8bff313c0f32b1b5117fd77e8`; PNG is `c5de11f0910852848de318e335e59e198b289c9a4260457679401060995eca88`; automation helper is `69e4b4b1843b85cce0b63b2e64670768a322006f7d04249550aabf3b328bb9ce`. `gio mime application/vnd.arch-notebook.case+json` resolves to `arch-notebook.desktop`. |
-| Exact-head cross-platform CI | **PASS on prior installer candidate; latest app follow-up pending** | Workflow run [45985015963](https://github.com/pskeffington/arch_notebook/actions/runs/45985015963) completed successfully on `fa9002a2bd86425ef9b61179ab6ab1747e1e3106`; the Linux test job ran the installer smoke. It predates the latest application-only template fix. |
-| Native application launch and interaction | **BLOCKED** | This execution sandbox cannot connect to display `:0`; prior Winit launch attempts report `WaylandError(Connection(NoCompositor))`. Install metadata and icon synchronization pass, but this report does not claim that the current binary opened a native window. |
+| Current-user installer | **PASS** | `scripts/install-linux-user.sh /tmp/arch-notebook-linux-x86_64` exited 0 and installed this release into the paths listed above. |
+| Current-user launcher and Desktop shortcut | **PASS** | Installer refreshed the current menu and Desktop entries from the matching package files; the shortcut mode is 0755. |
+| Binary, graphics, helper and MIME association | **PASS** | Installed executable matches release hash above; SVG and PNG artwork, automation helper, and MIME association were refreshed from repository sources. `--version --json` exited 0. |
+| Exact-head cross-platform CI | **PENDING** | Previous candidate CI run [45988117371](https://github.com/pskeffington/arch_notebook/actions/runs/45988117371) passed on `94f6e9dadf8243db4a298067f02554125e1b38a8`; it does not include the current topology changes. |
+| Native application launch and render | **PARTIAL, prior candidate only** | The earlier release from `94f6e9d` opened on X11 and rendered the fictional 30-entity/90-record sparse fixture; see [G4-DENSE-LABEL-02](../vector-ui/G4-DENSE-LABEL-02-native-render-20261127.md). That view showed Auto label suppression but clipped cards at the left edge. The current topology candidate has not received a native screenshot; pointer/keyboard interaction and the real Clinton case's native view remain untested. |
 
-The updated installer uses the configured XDG Desktop directory when available and falls back to `$HOME/Desktop`. No case or SQLite source was opened.
+The updated installer uses the configured XDG Desktop directory when available and falls back to `$HOME/Desktop`. The new topology change maps anomalous saved entity coordinates across the viewport without changing stored positions; real-corpus aggregate CLI geometry passed separately in [CLINTON-CORPUS-QA-01](../sql-automation/CLINTON-CORPUS-QA-01-linux.md). The native window still needs a Clinton-case visual pass and Fit all interaction check. The current release opened the user's real case only through read-only CLI QA; it did not save any case or SQLite change.
