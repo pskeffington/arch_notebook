@@ -24,6 +24,10 @@ Detailed source semantics, headless assertions, host limitation, and residual ga
 
 The eight-case 100/1,000-entity synthetic workload benchmark completed successfully. It records full-app frame-build and egui CPU tessellation separately; the normal offline Rust suite reports 60 passed, 0 failed, and one opt-in benchmark ignored. The matched route-culling A/B shows 20.9–45.1% lower frame-build medians and 29.8–77.3% lower CPU tessellation medians on offscreen-panned synthetic charts; neutral-view shape counts are unchanged. GPU/presentation results remain unmeasured. See [headless CPU baseline](evidence/vector-ui/G4-EGUI-TESSELLATION-01-linux.md), [matched culling evidence](evidence/vector-ui/G4-CULLING-AB-01-linux.md), and [raw paired results](evidence/vector-ui/artifacts/G4-culling-ab-20261126.json).
 
+## Analysis packet CLI output privacy — 2026-11-27
+
+The JSON and human-readable success summaries no longer echo the caller-supplied packet output directory. The full offline suite passed (61 passed, 0 failed, 1 opt-in benchmark ignored), the locked release build passed, and the packet acceptance harness passed redaction, selected-chart, source immutability, SVG, failure-safety, permission, and stdout path-omission checks. See [UI-ANALYSIS-PACKET-OUTPUT-PRIVACY-01](evidence/vector-ui/UI-ANALYSIS-PACKET-OUTPUT-PRIVACY-01-linux.md) and its [acceptance report](evidence/vector-ui/artifacts/UI-ANALYSIS-PACKET-OUTPUT-PRIVACY-01-linux.json).
+
 
 ## SQL automation and scale recheck — 2026-11-27
 
