@@ -2,7 +2,11 @@
 
 ## Topology pointer-target geometry — 2026-11-27
 
-Named map-geometry helpers size group nodes and their proxy-ring hit targets, place rows at a measured pitch, and include the last target in the scroll content. The sampled map now reports group, pair, and record coverage plus omitted totals. Production UI regression checks geometry, calculated coverage, and navigation; retained Clinton production UI and sampling checks pass. Native review remains open. CI run [46076165646](https://github.com/pskeffington/arch_notebook/actions/runs/46076165646) targets the geometry commit `a577698` and is still queued; the coverage-label follow-up needs exact-head CI. See [PROXIMITY-MAP-HIT-GEOMETRY-01](evidence/vector-ui/PROXIMITY-MAP-HIT-GEOMETRY-01.md).
+Named map-geometry helpers size group nodes and their proxy-ring hit targets, place rows at a measured pitch, and include the last target in the scroll content. The sampled map now reports group, pair, and record coverage plus omitted totals. Production UI regression checks geometry, calculated coverage, and navigation; retained Clinton production UI and sampling checks pass. Exact-head CI [46076464039](https://github.com/pskeffington/arch_notebook/actions/runs/46076464039) passed all six jobs for `25ff6b6`. Native review remains open. See [PROXIMITY-MAP-HIT-GEOMETRY-01](evidence/vector-ui/PROXIMITY-MAP-HIT-GEOMETRY-01.md).
+
+## Sampled topology row ordering — 2026-11-27
+
+The bounded hop-group sample now orders rows by neighboring group contacts using deterministic barycenter sweeps. A test fixture decreases crossings from six to zero; the Clinton real-corpus headless UI and sample bounds tests remain green. The read-only Clinton acceptance also passes: 2,813 entities, 6,173 relationships, query-only SQL preflight 1/1, replay with zero skipped rows/deltas, and default-redacted packet with all entity centers in view. Human review, PDF extraction completeness, and Qwen analysis remain unverified. Cross-platform CI for this ordering follow-up is pending. See [PROXIMITY-MAP-CROSSING-REDUCTION-01](evidence/vector-ui/PROXIMITY-MAP-CROSSING-REDUCTION-01.md).
 
 ## Topology rendering cleanup — 2026-11-27
 

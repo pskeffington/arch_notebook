@@ -111,6 +111,77 @@ fn sample_group_map(
     (displayed_hops, visible_groups_by_column)
 }
 
+/// Reorder sampled hop columns using neighboring group rows to reduce edge
+/// crossings. Initial proxy/size priority remains the stable tie-break order.
+fn reorder_map_groups_by_connections(
+    groups_by_column: &mut [Vec<usize>],
+    interactions: &[GroupInteraction],
+) {
+    if groups_by_column.len() < 2 {
+        return;
+    }
+    let sampled_groups: HashSet<usize> = groups_by_column.iter().flatten().copied().collect();
+    let mut neighbors = HashMap::<usize, Vec<usize>>::new();
+    for interaction in interactions {
+        if sampled_groups.contains(&interaction.first_group)
+            && sampled_groups.contains(&interaction.second_group)
+        {
+            neighbors
+                .entry(interaction.first_group)
+                .or_default()
+                .push(interaction.second_group);
+            neighbors
+                .entry(interaction.second_group)
+                .or_default()
+                .push(interaction.first_group);
+        }
+    }
+
+    for _ in 0..4 {
+        for column in 1..groups_by_column.len() {
+            reorder_map_column(column, groups_by_column, &neighbors);
+        }
+        for column in (0..groups_by_column.len() - 1).rev() {
+            reorder_map_column(column, groups_by_column, &neighbors);
+        }
+    }
+}
+
+fn reorder_map_column(
+    column: usize,
+    groups_by_column: &mut [Vec<usize>],
+    neighbors: &HashMap<usize, Vec<usize>>,
+) {
+    let row_by_group: HashMap<usize, usize> = groups_by_column
+        .iter()
+        .flat_map(|groups| groups.iter().enumerate())
+        .map(|(row, group)| (*group, row))
+        .collect();
+    let original_order: HashMap<usize, usize> = groups_by_column[column]
+        .iter()
+        .enumerate()
+        .map(|(row, group)| (*group, row))
+        .collect();
+    groups_by_column[column].sort_by(|first, second| {
+        let barycenter = |group: &usize| {
+            let (sum, count) = neighbors
+                .get(group)
+                .into_iter()
+                .flatten()
+                .filter_map(|neighbor| row_by_group.get(neighbor).copied())
+                .fold((0usize, 0usize), |(sum, count), row| (sum + row, count + 1));
+            if count == 0 {
+                original_order[group] as f64
+            } else {
+                sum as f64 / count as f64
+            }
+        };
+        barycenter(first)
+            .total_cmp(&barycenter(second))
+            .then_with(|| original_order[first].cmp(&original_order[second]))
+    });
+}
+
 /// Build a deterministic, undirected and unweighted contact roll-up from an
 /// origin. Directions and parallel records do not alter hop distance or group
 /// membership; cross-group summaries still preserve direction and every link
@@ -332,7 +403,8 @@ where
             .iter()
             .any(|member| proxy_entities.contains(member));
     }
-    let (map_hops, map_groups_by_column) = sample_group_map(&groups, 48, 40);
+    let (map_hops, mut map_groups_by_column) = sample_group_map(&groups, 48, 40);
+    reorder_map_groups_by_connections(&mut map_groups_by_column, &interactions);
     let map_group_indices: Vec<usize> = map_groups_by_column.iter().flatten().copied().collect();
     let map_group_set: HashSet<usize> = map_group_indices.iter().copied().collect();
     let map_interaction_indices = interactions
@@ -375,7 +447,9 @@ mod tests {
     use std::collections::{HashMap, HashSet};
 
     use super::analyze;
-    use super::{ContactGroup, sample_group_map};
+    use super::{
+        ContactGroup, GroupInteraction, reorder_map_groups_by_connections, sample_group_map,
+    };
     use uuid::Uuid;
 
     fn id(value: u128) -> Uuid {
@@ -498,6 +572,51 @@ mod tests {
         assert_eq!(one_column, vec![vec![0, 1, 2]]);
         assert!(sample_group_map(&groups, 0, 3).1.is_empty());
         assert!(sample_group_map(&groups, 3, 0).0.is_empty());
+    }
+
+    #[test]
+    fn sampled_group_rows_follow_contacts_to_reduce_crossings_deterministically() {
+        let mut columns = vec![vec![0, 1, 2, 3], vec![4, 5, 6, 7]];
+        let interactions: Vec<GroupInteraction> = (0..4)
+            .map(|row| GroupInteraction {
+                first_group: row,
+                second_group: 7 - row,
+                relationship_record_count: 1,
+                ..Default::default()
+            })
+            .collect();
+        let crossing_count = |columns: &[Vec<usize>]| {
+            let row_by_group: HashMap<usize, usize> = columns[0]
+                .iter()
+                .enumerate()
+                .chain(columns[1].iter().enumerate())
+                .map(|(row, group)| (*group, row))
+                .collect();
+            let mut crossings = 0;
+            for first in 0..interactions.len() {
+                for second in first + 1..interactions.len() {
+                    let left = &interactions[first];
+                    let right = &interactions[second];
+                    let left_from = row_by_group[&left.first_group] as isize;
+                    let left_to = row_by_group[&left.second_group] as isize;
+                    let right_from = row_by_group[&right.first_group] as isize;
+                    let right_to = row_by_group[&right.second_group] as isize;
+                    if (left_from - right_from) * (left_to - right_to) < 0 {
+                        crossings += 1;
+                    }
+                }
+            }
+            crossings
+        };
+
+        let initial_crossings = crossing_count(&columns);
+        assert_eq!(initial_crossings, 6);
+        reorder_map_groups_by_connections(&mut columns, &interactions);
+        assert_eq!(crossing_count(&columns), 0);
+
+        let result = columns.clone();
+        reorder_map_groups_by_connections(&mut columns, &interactions);
+        assert_eq!(columns, result);
     }
 
     #[test]

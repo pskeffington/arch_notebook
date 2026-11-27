@@ -22,6 +22,6 @@ The sampled-map label now reports sampled versus total groups, mapped versus tot
 | Offline check and debug build | PASS | Locked offline `cargo check` and `cargo build` exited 0. |
 | Formatting and diff validation | PASS | `cargo fmt --all -- --check` and `git diff --check` exited 0. |
 | Native pointer/display review | BLOCKED | X11/Wayland access unavailable; geometry assertions do not establish native appearance or pointer feel. |
-| Cross-platform CI | PENDING | Run [46076165646](https://github.com/pskeffington/arch_notebook/actions/runs/46076165646) targets geometry commit `a577698`; it is queued with no jobs started. The subsequent coverage-label follow-up needs its own exact-head CI run. |
+| Cross-platform CI | PASS | Run [46076464039](https://github.com/pskeffington/arch_notebook/actions/runs/46076464039) targets exact source `25ff6b63e03b27fa98a31de0a00345f87c708847`; Linux tests, Linux x86_64, Linux ARM64, Arch package, macOS Intel, and macOS Apple Silicon all passed. |
 
 The Clinton tests read the local case and do not emit names or IDs into repository evidence.

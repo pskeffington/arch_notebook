@@ -1,5 +1,7 @@
 # SNG-DELIVERY-002: Detected communities and vector graph optimization
 
+- **Status (2026-11-27 sampled topology row ordering):** The bounded sample now uses deterministic forward/backward barycenter sweeps to position groups by their contacts, reducing line crossings while preserving proxy/size sampling priority and the full contact index. A reversed four-by-four fixture drops from six crossings to zero; the production UI, retained Clinton corpus UI/sampling tests, 70-test suite, offline check/build, and formatting pass. Native visual review remains open; see [PROXIMITY-MAP-CROSSING-REDUCTION-01](../evidence/vector-ui/PROXIMITY-MAP-CROSSING-REDUCTION-01.md).
+
 - **Status (2026-11-27 topology pointer geometry and sample coverage follow-up):** Centralized sampled-map node size, hit target, row position, and scroll-height calculations. The map reports sampled versus total groups, contacts, and records, with omitted totals. The production headless UI test checks minimum hit-target/label clearances, computed sample coverage, and navigation; full Rust suite, Clinton topology UI/sampler tests, locked offline check/debug build, formatting, and diff checks pass. Native display review and exact-head CI remain open; see [PROXIMITY-MAP-HIT-GEOMETRY-01](../evidence/vector-ui/PROXIMITY-MAP-HIT-GEOMETRY-01.md).
 
 - **Owner:** orchestrator; implementation proceeds in bounded stages.
