@@ -44401,9 +44401,44 @@ mod tests {
             render_headless_app_frame(&context, &mut app, &mut frame, 0.0, Vec::new());
         let visible_relationship_labels = count_relationship_labels(&visible_shapes);
 
-        app.chart_pan = egui::vec2(2_000.0, 0.0);
-        let offscreen_shapes =
-            render_headless_app_frame(&context, &mut app, &mut frame, 1.0 / 60.0, Vec::new());
+        let drag_start = find_headless_text_point(&visible_shapes, "CONTACTS")
+            .expect("visible relationship label provides a point inside the chart canvas");
+        let drag_end = drag_start + egui::vec2(2_000.0, 0.0);
+        let primary_button = |position, pressed| egui::Event::PointerButton {
+            pos: position,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::default(),
+        };
+        render_headless_app_frame(
+            &context,
+            &mut app,
+            &mut frame,
+            1.0 / 60.0,
+            vec![
+                egui::Event::PointerMoved(drag_start),
+                primary_button(drag_start, true),
+            ],
+        );
+        render_headless_app_frame(
+            &context,
+            &mut app,
+            &mut frame,
+            2.0 / 60.0,
+            vec![egui::Event::PointerMoved(drag_end)],
+        );
+        assert!(
+            app.chart_pan.x > 1_900.0,
+            "headless drag should pan chart by the pointer delta; got {:?}",
+            app.chart_pan
+        );
+        let offscreen_shapes = render_headless_app_frame(
+            &context,
+            &mut app,
+            &mut frame,
+            3.0 / 60.0,
+            vec![primary_button(drag_end, false)],
+        );
         let offscreen_relationship_labels = count_relationship_labels(&offscreen_shapes);
 
         assert!(
