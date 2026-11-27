@@ -905,6 +905,49 @@ struct CommunityInteraction {
     link_indices: Vec<usize>,
 }
 
+fn sample_proximity_map_groups(
+    groups_by_hop: &[Vec<usize>],
+    max_groups: usize,
+    max_hops: usize,
+) -> (Vec<usize>, Vec<Vec<usize>>) {
+    if groups_by_hop.is_empty() || max_groups == 0 || max_hops == 0 {
+        return (Vec::new(), Vec::new());
+    }
+
+    let hop_count = groups_by_hop.len();
+    let displayed_hops: Vec<usize> = if hop_count <= max_hops {
+        (0..hop_count).collect()
+    } else if max_hops == 1 {
+        vec![0]
+    } else {
+        (0..max_hops)
+            .map(|column| column * (hop_count - 1) / (max_hops - 1))
+            .collect()
+    };
+    let mut visible_groups_by_column = vec![Vec::new(); displayed_hops.len()];
+    let mut group_cursors = vec![0; displayed_hops.len()];
+    let mut visible_group_count = 0;
+    loop {
+        let mut found_group = false;
+        for (column, hop) in displayed_hops.iter().copied().enumerate() {
+            if visible_group_count >= max_groups {
+                break;
+            }
+            if let Some(group_index) = groups_by_hop[hop].get(group_cursors[column]).copied() {
+                visible_groups_by_column[column].push(group_index);
+                group_cursors[column] += 1;
+                visible_group_count += 1;
+                found_group = true;
+            }
+        }
+        if !found_group || visible_group_count >= max_groups {
+            break;
+        }
+    }
+
+    (displayed_hops, visible_groups_by_column)
+}
+
 struct ChartVectorGeometry {
     link_lanes: Vec<f32>,
     entity_positions: HashMap<Uuid, egui::Pos2>,
@@ -25542,43 +25585,14 @@ impl eframe::App for App {
                             const MAX_MAP_GROUPS: usize = 120;
                             const MAX_MAP_HOPS: usize = 40;
                             let hop_count = groups_by_hop.len();
-                            let displayed_hops: Vec<usize> = if hop_count <= MAX_MAP_HOPS {
-                                (0..hop_count).collect()
-                            } else {
-                                (0..MAX_MAP_HOPS)
-                                    .map(|column| {
-                                        column * (hop_count - 1) / (MAX_MAP_HOPS - 1)
-                                    })
-                                    .collect()
-                            };
-                            let mut map_groups_by_column = vec![Vec::new(); displayed_hops.len()];
-                            for (column, hop) in displayed_hops.iter().copied().enumerate() {
-                                map_groups_by_column[column].clone_from(&groups_by_hop[hop]);
-                            }
-                            let mut visible_groups_by_column =
-                                vec![Vec::new(); displayed_hops.len()];
-                            let mut group_cursors = vec![0; displayed_hops.len()];
-                            let mut visible_group_count = 0;
-                            loop {
-                                let mut found_group = false;
-                                for column in 0..map_groups_by_column.len() {
-                                    if visible_group_count >= MAX_MAP_GROUPS {
-                                        break;
-                                    }
-                                    if let Some(group_index) = map_groups_by_column[column]
-                                        .get(group_cursors[column])
-                                        .copied()
-                                    {
-                                        visible_groups_by_column[column].push(group_index);
-                                        group_cursors[column] += 1;
-                                        visible_group_count += 1;
-                                        found_group = true;
-                                    }
-                                }
-                                if !found_group || visible_group_count >= MAX_MAP_GROUPS {
-                                    break;
-                                }
-                            }
+                            let (displayed_hops, visible_groups_by_column) =
+                                sample_proximity_map_groups(
+                                    &groups_by_hop,
+                                    MAX_MAP_GROUPS,
+                                    MAX_MAP_HOPS,
+                                );
+                            let visible_group_count: usize =
+                                visible_groups_by_column.iter().map(Vec::len).sum();
                             let visible_group_indices: Vec<usize> = visible_groups_by_column
                                 .iter()
                                 .flatten()
@@ -43641,6 +43655,7 @@ mod tests {
         ImportValueTransform, Uuid, apply_import_value_transforms, canonical_connection,
         compare_snapshots, compile_import_value_transforms, entity_type_layout_positions,
         export_analysis_packet_cli, grid_layout_dimensions, import_filter_matches,
+        sample_proximity_map_groups,
     };
 
     fn layout_entity(name: &str, kind: &str, position_locked: bool) -> Entity {
@@ -43686,6 +43701,57 @@ mod tests {
             ImportFilterOperator::Equals,
             "PENDING"
         ));
+    }
+
+    #[test]
+    fn proximity_map_sampling_is_bounded_deterministic_and_covers_sampled_hops() {
+        let groups_by_hop = vec![
+            vec![0, 1, 2],
+            vec![3],
+            vec![4, 5],
+            vec![6, 7],
+            vec![8],
+            vec![9, 10],
+            vec![11],
+            vec![12, 13],
+        ];
+        let (displayed_hops, sampled) = sample_proximity_map_groups(&groups_by_hop, 5, 3);
+        assert_eq!(displayed_hops, vec![0, 3, 7]);
+        assert!(sampled.iter().all(|hop_groups| !hop_groups.is_empty()));
+        assert_eq!(sampled.iter().map(Vec::len).sum::<usize>(), 5);
+        assert!(
+            sampled[0]
+                .iter()
+                .all(|group| groups_by_hop[0].contains(group))
+        );
+        assert!(
+            sampled[1]
+                .iter()
+                .all(|group| groups_by_hop[3].contains(group))
+        );
+        assert!(
+            sampled[2]
+                .iter()
+                .all(|group| groups_by_hop[7].contains(group))
+        );
+        assert_eq!(
+            (displayed_hops.clone(), sampled.clone()),
+            sample_proximity_map_groups(&groups_by_hop, 5, 3)
+        );
+
+        let (one_hop, one_column) = sample_proximity_map_groups(&groups_by_hop, 120, 1);
+        assert_eq!(one_hop, vec![0]);
+        assert_eq!(one_column, vec![vec![0, 1, 2]]);
+        assert!(
+            sample_proximity_map_groups(&groups_by_hop, 0, 3)
+                .1
+                .is_empty()
+        );
+        assert!(
+            sample_proximity_map_groups(&groups_by_hop, 3, 0)
+                .0
+                .is_empty()
+        );
     }
 
     #[test]
