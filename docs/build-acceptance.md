@@ -22,7 +22,7 @@ Detailed source semantics, headless assertions, host limitation, and residual ga
 
 ## Headless egui CPU baseline — 2026-11-27
 
-The eight-case 100/1,000-entity synthetic workload benchmark completed successfully. It records full-app frame-build and egui CPU tessellation separately; the normal offline Rust suite reports 60 passed, 0 failed, and one opt-in benchmark ignored. This is a headless CPU baseline, with no GPU/presentation or optimization-improvement claim. See [G4-EGUI-TESSELLATION-01](evidence/vector-ui/G4-EGUI-TESSELLATION-01-linux.md) and its [raw report](evidence/vector-ui/artifacts/G4-EGUI-TESSELLATION-01-linux-20261127.json).
+The eight-case 100/1,000-entity synthetic workload benchmark completed successfully. It records full-app frame-build and egui CPU tessellation separately; the normal offline Rust suite reports 60 passed, 0 failed, and one opt-in benchmark ignored. The matched route-culling A/B shows 20.9–45.1% lower frame-build medians and 29.8–77.3% lower CPU tessellation medians on offscreen-panned synthetic charts; neutral-view shape counts are unchanged. GPU/presentation results remain unmeasured. See [headless CPU baseline](evidence/vector-ui/G4-EGUI-TESSELLATION-01-linux.md), [matched culling evidence](evidence/vector-ui/G4-CULLING-AB-01-linux.md), and [raw paired results](evidence/vector-ui/artifacts/G4-culling-ab-20261126.json).
 
 
 ## SQL automation and scale recheck — 2026-11-27

@@ -48,4 +48,4 @@ python3 scripts/benchmark-chart-egui-tessellation.py \
   --iterations 30 --sizes 100 1000 --compare-pan 2000 0
 ```
 
-This command writes JSON containing the release test-binary SHA-256 and all 16 raw cases. To compare outputs, use the same host, Rust toolchain, source and profile. Synthetic fixtures are fictional and are generated in a temporary directory.
+This command writes JSON containing the release test-binary SHA-256 and all 16 raw cases. To compare outputs, use the same host, Rust toolchain, source and profile. Synthetic fixtures are fictional and are generated in a temporary directory. For a matched culling-enabled versus culling-disabled comparison, see [G4-CULLING-AB-01](G4-CULLING-AB-01-linux.md).

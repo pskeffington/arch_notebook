@@ -1,0 +1,1508 @@
+{
+  "schema_version": 2,
+  "benchmark_suite": "arch_notebook_headless_ui_culling_ab_cpu",
+  "host": {
+    "platform": "Linux-7.3.5-zen1-1-zen-x86_64-with-glibc2.44",
+    "machine": "x86_64"
+  },
+  "test_binary": "/tmp/arch-notebook-target/release/build/arch-notebook/53cc4e3ef7ff654e/out/arch_notebook-53cc4e3ef7ff654e",
+  "test_binary_sha256": "650522285626ba9f702ddd2faa90ac0a9f7f5779db64c0d3cf57fb6ca6acd85e",
+  "profile": "release test profile",
+  "view_transform": {
+    "pan_settings_points": [
+      [
+        0.0,
+        0.0
+      ],
+      [
+        2000.0,
+        0.0
+      ]
+    ],
+    "zoom": 1.0
+  },
+  "sample_order": "pan settings are interleaved per fixture with order alternating by fixture; culling variant first order alternates by fixture/view, and measurement-pair order alternates per sample",
+  "comparison": "For every fixture and pan setting, the same deterministic input is measured with production route culling enabled and with only the route-culling branch disabled in the test harness.",
+  "results": [
+    {
+      "benchmark": "headless_chart_ui_and_egui_tessellation_cpu",
+      "culling_order": [
+        false,
+        true
+      ],
+      "fixture_path": "/tmp/arch-notebook-egui-bench-4btnhgl4/sparse-100-pan-0.0-0.0.case.json",
+      "fixture_sha256": "2882d43cb5c261ad1551f5bdbb9b6eeabdb9ebec6c51e1859e662fca005c5bf4",
+      "pan_points": [
+        0.0,
+        0.0
+      ],
+      "sample_order": "culling variants alternate order within each warmup and measurement pair",
+      "schema_version": 2,
+      "scope": "headless full-app egui frame build and egui CPU tessellation; variants use the same deterministic fictional chart, viewport, zoom, and pan, toggling only the production relationship-route culling branch; excludes GPU, compositor, presentation, input-to-display latency, and FPS",
+      "variants": [
+        {
+          "culling_enabled": false,
+          "draw_output": {
+            "clipped_shapes": 5511,
+            "mesh_indices": 346773,
+            "mesh_vertices": 112214,
+            "tessellated_primitives": 13
+          },
+          "entities": 100,
+          "iterations": 30,
+          "labels": 0,
+          "relationship_records": 300,
+          "timings": {
+            "app_update_frame_build": {
+              "max_ns": 4627023,
+              "mean_ns": 1782981,
+              "median_ns": 1745834,
+              "min_ns": 1224931,
+              "p95_ns": 2762573,
+              "samples": 30
+            },
+            "egui_cpu_tessellation": {
+              "max_ns": 4441359,
+              "mean_ns": 2254808,
+              "median_ns": 2114597,
+              "min_ns": 1782167,
+              "p95_ns": 4008424,
+              "samples": 30
+            }
+          },
+          "warmup_runs": 5
+        },
+        {
+          "culling_enabled": true,
+          "draw_output": {
+            "clipped_shapes": 5511,
+            "mesh_indices": 346773,
+            "mesh_vertices": 112214,
+            "tessellated_primitives": 13
+          },
+          "entities": 100,
+          "iterations": 30,
+          "labels": 0,
+          "relationship_records": 300,
+          "timings": {
+            "app_update_frame_build": {
+              "max_ns": 6155811,
+              "mean_ns": 1881991,
+              "median_ns": 1764794,
+              "min_ns": 1241393,
+              "p95_ns": 2966240,
+              "samples": 30
+            },
+            "egui_cpu_tessellation": {
+              "max_ns": 7529485,
+              "mean_ns": 2336529,
+              "median_ns": 2023809,
+              "min_ns": 1627326,
+              "p95_ns": 3635173,
+              "samples": 30
+            }
+          },
+          "warmup_runs": 5
+        }
+      ],
+      "viewport_points": {
+        "height": 900,
+        "width": 1440
+      },
+      "fixture_family": "sparse",
+      "culling_effect": {
+        "shapes_omitted": 0,
+        "mesh_vertices_omitted": 0,
+        "tessellation_median_reduction_percent": 4.29
+      }
+    },
+    {
+      "benchmark": "headless_chart_ui_and_egui_tessellation_cpu",
+      "culling_order": [
+        true,
+        false
+      ],
+      "fixture_path": "/tmp/arch-notebook-egui-bench-4btnhgl4/sparse-100-pan-2000.0-0.0.case.json",
+      "fixture_sha256": "d7ac21724ebf25919c341577d871b6e116bfdd32be592963702beb0aff42c20c",
+      "pan_points": [
+        2000.0,
+        0.0
+      ],
+      "sample_order": "culling variants alternate order within each warmup and measurement pair",
+      "schema_version": 2,
+      "scope": "headless full-app egui frame build and egui CPU tessellation; variants use the same deterministic fictional chart, viewport, zoom, and pan, toggling only the production relationship-route culling branch; excludes GPU, compositor, presentation, input-to-display latency, and FPS",
+      "variants": [
+        {
+          "culling_enabled": true,
+          "draw_output": {
+            "clipped_shapes": 1411,
+            "mesh_indices": 24837,
+            "mesh_vertices": 12218,
+            "tessellated_primitives": 13
+          },
+          "entities": 100,
+          "iterations": 30,
+          "labels": 0,
+          "relationship_records": 300,
+          "timings": {
+            "app_update_frame_build": {
+              "max_ns": 2782977,
+              "mean_ns": 1552735,
+              "median_ns": 1357938,
+              "min_ns": 844656,
+              "p95_ns": 2481253,
+              "samples": 30
+            },
+            "egui_cpu_tessellation": {
+              "max_ns": 483226,
+              "mean_ns": 266180,
+              "median_ns": 241286,
+              "min_ns": 147874,
+              "p95_ns": 458853,
+              "samples": 30
+            }
+          },
+          "warmup_runs": 5
+        },
+        {
+          "culling_enabled": false,
+          "draw_output": {
+            "clipped_shapes": 5511,
+            "mesh_indices": 24837,
+            "mesh_vertices": 12218,
+            "tessellated_primitives": 13
+          },
+          "entities": 100,
+          "iterations": 30,
+          "labels": 0,
+          "relationship_records": 300,
+          "timings": {
+            "app_update_frame_build": {
+              "max_ns": 3761466,
+              "mean_ns": 2233539,
+              "median_ns": 2017929,
+              "min_ns": 1246753,
+              "p95_ns": 3760244,
+              "samples": 30
+            },
+            "egui_cpu_tessellation": {
+              "max_ns": 1041794,
+              "mean_ns": 476689,
+              "median_ns": 404611,
+              "min_ns": 242148,
+              "p95_ns": 989715,
+              "samples": 30
+            }
+          },
+          "warmup_runs": 5
+        }
+      ],
+      "viewport_points": {
+        "height": 900,
+        "width": 1440
+      },
+      "fixture_family": "sparse",
+      "culling_effect": {
+        "shapes_omitted": 4100,
+        "mesh_vertices_omitted": 0,
+        "tessellation_median_reduction_percent": 40.37
+      }
+    },
+    {
+      "benchmark": "headless_chart_ui_and_egui_tessellation_cpu",
+      "culling_order": [
+        true,
+        false
+      ],
+      "fixture_path": "/tmp/arch-notebook-egui-bench-4btnhgl4/sparse-1000-pan-2000.0-0.0.case.json",
+      "fixture_sha256": "82a11830a2c8a313f74247aa07a0eea44016057c775f5bc7cdd20f819bac0bd1",
+      "pan_points": [
+        2000.0,
+        0.0
+      ],
+      "sample_order": "culling variants alternate order within each warmup and measurement pair",
+      "schema_version": 2,
+      "scope": "headless full-app egui frame build and egui CPU tessellation; variants use the same deterministic fictional chart, viewport, zoom, and pan, toggling only the production relationship-route culling branch; excludes GPU, compositor, presentation, input-to-display latency, and FPS",
+      "variants": [
+        {
+          "culling_enabled": true,
+          "draw_output": {
+            "clipped_shapes": 12211,
+            "mesh_indices": 62667,
+            "mesh_vertices": 32038,
+            "tessellated_primitives": 13
+          },
+          "entities": 1000,
+          "iterations": 30,
+          "labels": 0,
+          "relationship_records": 3000,
+          "timings": {
+            "app_update_frame_build": {
+              "max_ns": 9400480,
+              "mean_ns": 8340911,
+              "median_ns": 8300136,
+              "min_ns": 7606866,
+              "p95_ns": 9360213,
+              "samples": 30
+            },
+            "egui_cpu_tessellation": {
+              "max_ns": 1321328,
+              "mean_ns": 924728,
+              "median_ns": 845980,
+              "min_ns": 771689,
+              "p95_ns": 1308640,
+              "samples": 30
+            }
+          },
+          "warmup_runs": 5
+        },
+        {
+          "culling_enabled": false,
+          "draw_output": {
+            "clipped_shapes": 53211,
+            "mesh_indices": 62667,
+            "mesh_vertices": 32038,
+            "tessellated_primitives": 13
+          },
+          "entities": 1000,
+          "iterations": 30,
+          "labels": 0,
+          "relationship_records": 3000,
+          "timings": {
+            "app_update_frame_build": {
+              "max_ns": 15351905,
+              "mean_ns": 12939250,
+              "median_ns": 13015207,
+              "min_ns": 11341789,
+              "p95_ns": 13517790,
+              "samples": 30
+            },
+            "egui_cpu_tessellation": {
+              "max_ns": 3457213,
+              "mean_ns": 2246008,
+              "median_ns": 1983271,
+              "min_ns": 1946251,
+              "p95_ns": 3207429,
+              "samples": 30
+            }
+          },
+          "warmup_runs": 5
+        }
+      ],
+      "viewport_points": {
+        "height": 900,
+        "width": 1440
+      },
+      "fixture_family": "sparse",
+      "culling_effect": {
+        "shapes_omitted": 41000,
+        "mesh_vertices_omitted": 0,
+        "tessellation_median_reduction_percent": 57.34
+      }
+    },
+    {
+      "benchmark": "headless_chart_ui_and_egui_tessellation_cpu",
+      "culling_order": [
+        false,
+        true
+      ],
+      "fixture_path": "/tmp/arch-notebook-egui-bench-4btnhgl4/sparse-1000-pan-0.0-0.0.case.json",
+      "fixture_sha256": "41567e73d4ae2bee466ea2a07e1c6bc0d067ccf43efb8bc533141275c50ec1ab",
+      "pan_points": [
+        0.0,
+        0.0
+      ],
+      "sample_order": "culling variants alternate order within each warmup and measurement pair",
+      "schema_version": 2,
+      "scope": "headless full-app egui frame build and egui CPU tessellation; variants use the same deterministic fictional chart, viewport, zoom, and pan, toggling only the production relationship-route culling branch; excludes GPU, compositor, presentation, input-to-display latency, and FPS",
+      "variants": [
+        {
+          "culling_enabled": false,
+          "draw_output": {
+            "clipped_shapes": 53211,
+            "mesh_indices": 3288657,
+            "mesh_vertices": 1033678,
+            "tessellated_primitives": 13
+          },
+          "entities": 1000,
+          "iterations": 30,
+          "labels": 0,
+          "relationship_records": 3000,
+          "timings": {
+            "app_update_frame_build": {
+              "max_ns": 13128275,
+              "mean_ns": 11975983,
+              "median_ns": 11861325,
+              "min_ns": 11059018,
+              "p95_ns": 13062696,
+              "samples": 30
+            },
+            "egui_cpu_tessellation": {
+              "max_ns": 19497011,
+              "mean_ns": 18868635,
+              "median_ns": 18875870,
+              "min_ns": 18134538,
+              "p95_ns": 19417296,
+              "samples": 30
+            }
+          },
+          "warmup_runs": 5
+        },
+        {
+          "culling_enabled": true,
+          "draw_output": {
+            "clipped_shapes": 53211,
+            "mesh_indices": 3288657,
+            "mesh_vertices": 1033678,
+            "tessellated_primitives": 13
+          },
+          "entities": 1000,
+          "iterations": 30,
+          "labels": 0,
+          "relationship_records": 3000,
+          "timings": {
+            "app_update_frame_build": {
+              "max_ns": 14142178,
+              "mean_ns": 12752522,
+              "median_ns": 12666575,
+              "min_ns": 11629550,
+              "p95_ns": 13788967,
+              "samples": 30
+            },
+            "egui_cpu_tessellation": {
+              "max_ns": 19567332,
+              "mean_ns": 18844223,
+              "median_ns": 18824704,
+              "min_ns": 18024460,
+              "p95_ns": 19552113,
+              "samples": 30
+            }
+          },
+          "warmup_runs": 5
+        }
+      ],
+      "viewport_points": {
+        "height": 900,
+        "width": 1440
+      },
+      "fixture_family": "sparse",
+      "culling_effect": {
+        "shapes_omitted": 0,
+        "mesh_vertices_omitted": 0,
+        "tessellation_median_reduction_percent": 0.27
+      }
+    },
+    {
+      "benchmark": "headless_chart_ui_and_egui_tessellation_cpu",
+      "culling_order": [
+        false,
+        true
+      ],
+      "fixture_path": "/tmp/arch-notebook-egui-bench-4btnhgl4/hub-100-pan-0.0-0.0.case.json",
+      "fixture_sha256": "1d48281591313ac384a77b5a699f2baf8239b7db0cdada8bcbc285a348887c6c",
+      "pan_points": [
+        0.0,
+        0.0
+      ],
+      "sample_order": "culling variants alternate order within each warmup and measurement pair",
+      "schema_version": 2,
+      "scope": "headless full-app egui frame build and egui CPU tessellation; variants use the same deterministic fictional chart, viewport, zoom, and pan, toggling only the production relationship-route culling branch; excludes GPU, compositor, presentation, input-to-display latency, and FPS",
+      "variants": [
+        {
+          "culling_enabled": false,
+          "draw_output": {
+            "clipped_shapes": 5511,
+            "mesh_indices": 346725,
+            "mesh_vertices": 112182,
+            "tessellated_primitives": 13
+          },
+          "entities": 100,
+          "iterations": 30,
+          "labels": 0,
+          "relationship_records": 300,
+          "timings": {
+            "app_update_frame_build": {
+              "max_ns": 7209838,
+              "mean_ns": 1773329,
+              "median_ns": 1289749,
+              "min_ns": 1196220,
+              "p95_ns": 6686800,
+              "samples": 30
+            },
+            "egui_cpu_tessellation": {
+              "max_ns": 11751626,
+              "mean_ns": 2754878,
+              "median_ns": 2035653,
+              "min_ns": 1689266,
+              "p95_ns": 9243222,
+              "samples": 30
+            }
+          },
+          "warmup_runs": 5
+        },
+        {
+          "culling_enabled": true,
+          "draw_output": {
+            "clipped_shapes": 5511,
+            "mesh_indices": 346725,
+            "mesh_vertices": 112182,
+            "tessellated_primitives": 13
+          },
+          "entities": 100,
+          "iterations": 30,
+          "labels": 0,
+          "relationship_records": 300,
+          "timings": {
+            "app_update_frame_build": {
+              "max_ns": 6797265,
+              "mean_ns": 1789978,
+              "median_ns": 1366225,
+              "min_ns": 1202467,
+              "p95_ns": 4683776,
+              "samples": 30
+            },
+            "egui_cpu_tessellation": {
+              "max_ns": 11200035,
+              "mean_ns": 2589659,
+              "median_ns": 1958139,
+              "min_ns": 1679774,
+              "p95_ns": 5585875,
+              "samples": 30
+            }
+          },
+          "warmup_runs": 5
+        }
+      ],
+      "viewport_points": {
+        "height": 900,
+        "width": 1440
+      },
+      "fixture_family": "hub",
+      "culling_effect": {
+        "shapes_omitted": 0,
+        "mesh_vertices_omitted": 0,
+        "tessellation_median_reduction_percent": 3.81
+      }
+    },
+    {
+      "benchmark": "headless_chart_ui_and_egui_tessellation_cpu",
+      "culling_order": [
+        true,
+        false
+      ],
+      "fixture_path": "/tmp/arch-notebook-egui-bench-4btnhgl4/hub-100-pan-2000.0-0.0.case.json",
+      "fixture_sha256": "41c124c1d9bd907a2e2c9c207cf4ae1a9010cc94161736cedb7594ebf6255156",
+      "pan_points": [
+        2000.0,
+        0.0
+      ],
+      "sample_order": "culling variants alternate order within each warmup and measurement pair",
+      "schema_version": 2,
+      "scope": "headless full-app egui frame build and egui CPU tessellation; variants use the same deterministic fictional chart, viewport, zoom, and pan, toggling only the production relationship-route culling branch; excludes GPU, compositor, presentation, input-to-display latency, and FPS",
+      "variants": [
+        {
+          "culling_enabled": true,
+          "draw_output": {
+            "clipped_shapes": 1411,
+            "mesh_indices": 24789,
+            "mesh_vertices": 12186,
+            "tessellated_primitives": 13
+          },
+          "entities": 100,
+          "iterations": 30,
+          "labels": 0,
+          "relationship_records": 300,
+          "timings": {
+            "app_update_frame_build": {
+              "max_ns": 2348926,
+              "mean_ns": 1527841,
+              "median_ns": 1484558,
+              "min_ns": 862657,
+              "p95_ns": 2339589,
+              "samples": 30
+            },
+            "egui_cpu_tessellation": {
+              "max_ns": 455991,
+              "mean_ns": 262704,
+              "median_ns": 264397,
+              "min_ns": 148605,
+              "p95_ns": 360944,
+              "samples": 30
+            }
+          },
+          "warmup_runs": 5
+        },
+        {
+          "culling_enabled": false,
+          "draw_output": {
+            "clipped_shapes": 5511,
+            "mesh_indices": 24789,
+            "mesh_vertices": 12186,
+            "tessellated_primitives": 13
+          },
+          "entities": 100,
+          "iterations": 30,
+          "labels": 0,
+          "relationship_records": 300,
+          "timings": {
+            "app_update_frame_build": {
+              "max_ns": 3172995,
+              "mean_ns": 2195398,
+              "median_ns": 2348362,
+              "min_ns": 1268575,
+              "p95_ns": 3142406,
+              "samples": 30
+            },
+            "egui_cpu_tessellation": {
+              "max_ns": 1029452,
+              "mean_ns": 483887,
+              "median_ns": 505335,
+              "min_ns": 267707,
+              "p95_ns": 883067,
+              "samples": 30
+            }
+          },
+          "warmup_runs": 5
+        }
+      ],
+      "viewport_points": {
+        "height": 900,
+        "width": 1440
+      },
+      "fixture_family": "hub",
+      "culling_effect": {
+        "shapes_omitted": 4100,
+        "mesh_vertices_omitted": 0,
+        "tessellation_median_reduction_percent": 47.68
+      }
+    },
+    {
+      "benchmark": "headless_chart_ui_and_egui_tessellation_cpu",
+      "culling_order": [
+        true,
+        false
+      ],
+      "fixture_path": "/tmp/arch-notebook-egui-bench-4btnhgl4/hub-1000-pan-2000.0-0.0.case.json",
+      "fixture_sha256": "1b2550bc447c67c7314152f989e39ae5571286817bd2c202e4a1995078adeae8",
+      "pan_points": [
+        2000.0,
+        0.0
+      ],
+      "sample_order": "culling variants alternate order within each warmup and measurement pair",
+      "schema_version": 2,
+      "scope": "headless full-app egui frame build and egui CPU tessellation; variants use the same deterministic fictional chart, viewport, zoom, and pan, toggling only the production relationship-route culling branch; excludes GPU, compositor, presentation, input-to-display latency, and FPS",
+      "variants": [
+        {
+          "culling_enabled": true,
+          "draw_output": {
+            "clipped_shapes": 12211,
+            "mesh_indices": 62625,
+            "mesh_vertices": 32010,
+            "tessellated_primitives": 13
+          },
+          "entities": 1000,
+          "iterations": 30,
+          "labels": 0,
+          "relationship_records": 3000,
+          "timings": {
+            "app_update_frame_build": {
+              "max_ns": 8220659,
+              "mean_ns": 7198636,
+              "median_ns": 7114913,
+              "min_ns": 6750985,
+              "p95_ns": 7867419,
+              "samples": 30
+            },
+            "egui_cpu_tessellation": {
+              "max_ns": 1224715,
+              "mean_ns": 815408,
+              "median_ns": 782410,
+              "min_ns": 714370,
+              "p95_ns": 1004004,
+              "samples": 30
+            }
+          },
+          "warmup_runs": 5
+        },
+        {
+          "culling_enabled": false,
+          "draw_output": {
+            "clipped_shapes": 53211,
+            "mesh_indices": 62625,
+            "mesh_vertices": 32010,
+            "tessellated_primitives": 13
+          },
+          "entities": 1000,
+          "iterations": 30,
+          "labels": 0,
+          "relationship_records": 3000,
+          "timings": {
+            "app_update_frame_build": {
+              "max_ns": 12795048,
+              "mean_ns": 11260949,
+              "median_ns": 11045455,
+              "min_ns": 10747007,
+              "p95_ns": 12581280,
+              "samples": 30
+            },
+            "egui_cpu_tessellation": {
+              "max_ns": 3004594,
+              "mean_ns": 2072395,
+              "median_ns": 1970871,
+              "min_ns": 1924679,
+              "p95_ns": 2694363,
+              "samples": 30
+            }
+          },
+          "warmup_runs": 5
+        }
+      ],
+      "viewport_points": {
+        "height": 900,
+        "width": 1440
+      },
+      "fixture_family": "hub",
+      "culling_effect": {
+        "shapes_omitted": 41000,
+        "mesh_vertices_omitted": 0,
+        "tessellation_median_reduction_percent": 60.3
+      }
+    },
+    {
+      "benchmark": "headless_chart_ui_and_egui_tessellation_cpu",
+      "culling_order": [
+        false,
+        true
+      ],
+      "fixture_path": "/tmp/arch-notebook-egui-bench-4btnhgl4/hub-1000-pan-0.0-0.0.case.json",
+      "fixture_sha256": "7236a9611fbfd851aa191baaaba3b48a902f097b404b58947c051597038a2d58",
+      "pan_points": [
+        0.0,
+        0.0
+      ],
+      "sample_order": "culling variants alternate order within each warmup and measurement pair",
+      "schema_version": 2,
+      "scope": "headless full-app egui frame build and egui CPU tessellation; variants use the same deterministic fictional chart, viewport, zoom, and pan, toggling only the production relationship-route culling branch; excludes GPU, compositor, presentation, input-to-display latency, and FPS",
+      "variants": [
+        {
+          "culling_enabled": false,
+          "draw_output": {
+            "clipped_shapes": 53211,
+            "mesh_indices": 3288615,
+            "mesh_vertices": 1033650,
+            "tessellated_primitives": 13
+          },
+          "entities": 1000,
+          "iterations": 30,
+          "labels": 0,
+          "relationship_records": 3000,
+          "timings": {
+            "app_update_frame_build": {
+              "max_ns": 12163348,
+              "mean_ns": 11017043,
+              "median_ns": 10870740,
+              "min_ns": 10736877,
+              "p95_ns": 11814779,
+              "samples": 30
+            },
+            "egui_cpu_tessellation": {
+              "max_ns": 19183942,
+              "mean_ns": 17604890,
+              "median_ns": 17462573,
+              "min_ns": 17352452,
+              "p95_ns": 18259341,
+              "samples": 30
+            }
+          },
+          "warmup_runs": 5
+        },
+        {
+          "culling_enabled": true,
+          "draw_output": {
+            "clipped_shapes": 53211,
+            "mesh_indices": 3288615,
+            "mesh_vertices": 1033650,
+            "tessellated_primitives": 13
+          },
+          "entities": 1000,
+          "iterations": 30,
+          "labels": 0,
+          "relationship_records": 3000,
+          "timings": {
+            "app_update_frame_build": {
+              "max_ns": 11935490,
+              "mean_ns": 11089920,
+              "median_ns": 11029251,
+              "min_ns": 10920472,
+              "p95_ns": 11856526,
+              "samples": 30
+            },
+            "egui_cpu_tessellation": {
+              "max_ns": 17914970,
+              "mean_ns": 17501713,
+              "median_ns": 17478271,
+              "min_ns": 17256099,
+              "p95_ns": 17889775,
+              "samples": 30
+            }
+          },
+          "warmup_runs": 5
+        }
+      ],
+      "viewport_points": {
+        "height": 900,
+        "width": 1440
+      },
+      "fixture_family": "hub",
+      "culling_effect": {
+        "shapes_omitted": 0,
+        "mesh_vertices_omitted": 0,
+        "tessellation_median_reduction_percent": -0.09
+      }
+    },
+    {
+      "benchmark": "headless_chart_ui_and_egui_tessellation_cpu",
+      "culling_order": [
+        false,
+        true
+      ],
+      "fixture_path": "/tmp/arch-notebook-egui-bench-4btnhgl4/disconnected-100-pan-0.0-0.0.case.json",
+      "fixture_sha256": "39b721ec2fa44e4eb832aaa7103a788921205cc5b62dc6bffcaa0c2033e92eff",
+      "pan_points": [
+        0.0,
+        0.0
+      ],
+      "sample_order": "culling variants alternate order within each warmup and measurement pair",
+      "schema_version": 2,
+      "scope": "headless full-app egui frame build and egui CPU tessellation; variants use the same deterministic fictional chart, viewport, zoom, and pan, toggling only the production relationship-route culling branch; excludes GPU, compositor, presentation, input-to-display latency, and FPS",
+      "variants": [
+        {
+          "culling_enabled": false,
+          "draw_output": {
+            "clipped_shapes": 4038,
+            "mesh_indices": 288531,
+            "mesh_vertices": 92082,
+            "tessellated_primitives": 13
+          },
+          "entities": 100,
+          "iterations": 30,
+          "labels": 0,
+          "relationship_records": 200,
+          "timings": {
+            "app_update_frame_build": {
+              "max_ns": 1119125,
+              "mean_ns": 1035984,
+              "median_ns": 1023348,
+              "min_ns": 974515,
+              "p95_ns": 1102602,
+              "samples": 30
+            },
+            "egui_cpu_tessellation": {
+              "max_ns": 1927835,
+              "mean_ns": 1633082,
+              "median_ns": 1822829,
+              "min_ns": 1200319,
+              "p95_ns": 1921463,
+              "samples": 30
+            }
+          },
+          "warmup_runs": 5
+        },
+        {
+          "culling_enabled": true,
+          "draw_output": {
+            "clipped_shapes": 4038,
+            "mesh_indices": 288531,
+            "mesh_vertices": 92082,
+            "tessellated_primitives": 13
+          },
+          "entities": 100,
+          "iterations": 30,
+          "labels": 0,
+          "relationship_records": 200,
+          "timings": {
+            "app_update_frame_build": {
+              "max_ns": 1148602,
+              "mean_ns": 1055863,
+              "median_ns": 1052847,
+              "min_ns": 983133,
+              "p95_ns": 1138417,
+              "samples": 30
+            },
+            "egui_cpu_tessellation": {
+              "max_ns": 1918407,
+              "mean_ns": 1573634,
+              "median_ns": 1782632,
+              "min_ns": 1210400,
+              "p95_ns": 1889907,
+              "samples": 30
+            }
+          },
+          "warmup_runs": 5
+        }
+      ],
+      "viewport_points": {
+        "height": 900,
+        "width": 1440
+      },
+      "fixture_family": "disconnected",
+      "culling_effect": {
+        "shapes_omitted": 0,
+        "mesh_vertices_omitted": 0,
+        "tessellation_median_reduction_percent": 2.21
+      }
+    },
+    {
+      "benchmark": "headless_chart_ui_and_egui_tessellation_cpu",
+      "culling_order": [
+        true,
+        false
+      ],
+      "fixture_path": "/tmp/arch-notebook-egui-bench-4btnhgl4/disconnected-100-pan-2000.0-0.0.case.json",
+      "fixture_sha256": "fbc7c64ebb014ef4db3ad0afe1c87b369bc27916a0d955fa15dd7714a84a84c6",
+      "pan_points": [
+        2000.0,
+        0.0
+      ],
+      "sample_order": "culling variants alternate order within each warmup and measurement pair",
+      "schema_version": 2,
+      "scope": "headless full-app egui frame build and egui CPU tessellation; variants use the same deterministic fictional chart, viewport, zoom, and pan, toggling only the production relationship-route culling branch; excludes GPU, compositor, presentation, input-to-display latency, and FPS",
+      "variants": [
+        {
+          "culling_enabled": true,
+          "draw_output": {
+            "clipped_shapes": 1310,
+            "mesh_indices": 23619,
+            "mesh_vertices": 11606,
+            "tessellated_primitives": 13
+          },
+          "entities": 100,
+          "iterations": 30,
+          "labels": 0,
+          "relationship_records": 200,
+          "timings": {
+            "app_update_frame_build": {
+              "max_ns": 2270441,
+              "mean_ns": 1276236,
+              "median_ns": 1228640,
+              "min_ns": 758176,
+              "p95_ns": 1652686,
+              "samples": 30
+            },
+            "egui_cpu_tessellation": {
+              "max_ns": 340357,
+              "mean_ns": 229841,
+              "median_ns": 226523,
+              "min_ns": 136850,
+              "p95_ns": 335630,
+              "samples": 30
+            }
+          },
+          "warmup_runs": 5
+        },
+        {
+          "culling_enabled": false,
+          "draw_output": {
+            "clipped_shapes": 4038,
+            "mesh_indices": 23619,
+            "mesh_vertices": 11606,
+            "tessellated_primitives": 13
+          },
+          "entities": 100,
+          "iterations": 30,
+          "labels": 0,
+          "relationship_records": 200,
+          "timings": {
+            "app_update_frame_build": {
+              "max_ns": 3264865,
+              "mean_ns": 1681286,
+              "median_ns": 1553002,
+              "min_ns": 1035102,
+              "p95_ns": 2263700,
+              "samples": 30
+            },
+            "egui_cpu_tessellation": {
+              "max_ns": 583765,
+              "mean_ns": 346333,
+              "median_ns": 322850,
+              "min_ns": 211478,
+              "p95_ns": 503242,
+              "samples": 30
+            }
+          },
+          "warmup_runs": 5
+        }
+      ],
+      "viewport_points": {
+        "height": 900,
+        "width": 1440
+      },
+      "fixture_family": "disconnected",
+      "culling_effect": {
+        "shapes_omitted": 2728,
+        "mesh_vertices_omitted": 0,
+        "tessellation_median_reduction_percent": 29.84
+      }
+    },
+    {
+      "benchmark": "headless_chart_ui_and_egui_tessellation_cpu",
+      "culling_order": [
+        true,
+        false
+      ],
+      "fixture_path": "/tmp/arch-notebook-egui-bench-4btnhgl4/disconnected-1000-pan-2000.0-0.0.case.json",
+      "fixture_sha256": "336d1741bf1bb7414040bc009f7535f4c17428d97f5861ca48ad0e21982e9fe0",
+      "pan_points": [
+        2000.0,
+        0.0
+      ],
+      "sample_order": "culling variants alternate order within each warmup and measurement pair",
+      "schema_version": 2,
+      "scope": "headless full-app egui frame build and egui CPU tessellation; variants use the same deterministic fictional chart, viewport, zoom, and pan, toggling only the production relationship-route culling branch; excludes GPU, compositor, presentation, input-to-display latency, and FPS",
+      "variants": [
+        {
+          "culling_enabled": true,
+          "draw_output": {
+            "clipped_shapes": 11210,
+            "mesh_indices": 50637,
+            "mesh_vertices": 26018,
+            "tessellated_primitives": 13
+          },
+          "entities": 1000,
+          "iterations": 30,
+          "labels": 0,
+          "relationship_records": 2000,
+          "timings": {
+            "app_update_frame_build": {
+              "max_ns": 6274436,
+              "mean_ns": 5769658,
+              "median_ns": 5723763,
+              "min_ns": 5624130,
+              "p95_ns": 5902684,
+              "samples": 30
+            },
+            "egui_cpu_tessellation": {
+              "max_ns": 770261,
+              "mean_ns": 695487,
+              "median_ns": 679301,
+              "min_ns": 640429,
+              "p95_ns": 759807,
+              "samples": 30
+            }
+          },
+          "warmup_runs": 5
+        },
+        {
+          "culling_enabled": false,
+          "draw_output": {
+            "clipped_shapes": 38538,
+            "mesh_indices": 50637,
+            "mesh_vertices": 26018,
+            "tessellated_primitives": 13
+          },
+          "entities": 1000,
+          "iterations": 30,
+          "labels": 0,
+          "relationship_records": 2000,
+          "timings": {
+            "app_update_frame_build": {
+              "max_ns": 8439204,
+              "mean_ns": 8339466,
+              "median_ns": 8331113,
+              "min_ns": 8285424,
+              "p95_ns": 8423871,
+              "samples": 30
+            },
+            "egui_cpu_tessellation": {
+              "max_ns": 1450491,
+              "mean_ns": 1411081,
+              "median_ns": 1407929,
+              "min_ns": 1367923,
+              "p95_ns": 1448234,
+              "samples": 30
+            }
+          },
+          "warmup_runs": 5
+        }
+      ],
+      "viewport_points": {
+        "height": 900,
+        "width": 1440
+      },
+      "fixture_family": "disconnected",
+      "culling_effect": {
+        "shapes_omitted": 27328,
+        "mesh_vertices_omitted": 0,
+        "tessellation_median_reduction_percent": 51.75
+      }
+    },
+    {
+      "benchmark": "headless_chart_ui_and_egui_tessellation_cpu",
+      "culling_order": [
+        false,
+        true
+      ],
+      "fixture_path": "/tmp/arch-notebook-egui-bench-4btnhgl4/disconnected-1000-pan-0.0-0.0.case.json",
+      "fixture_sha256": "f7339ed385394f39b7525c42d4490a939c2a56d1a4d5a3b136921616be548729",
+      "pan_points": [
+        0.0,
+        0.0
+      ],
+      "sample_order": "culling variants alternate order within each warmup and measurement pair",
+      "schema_version": 2,
+      "scope": "headless full-app egui frame build and egui CPU tessellation; variants use the same deterministic fictional chart, viewport, zoom, and pan, toggling only the production relationship-route culling branch; excludes GPU, compositor, presentation, input-to-display latency, and FPS",
+      "variants": [
+        {
+          "culling_enabled": false,
+          "draw_output": {
+            "clipped_shapes": 38538,
+            "mesh_indices": 2708403,
+            "mesh_vertices": 832938,
+            "tessellated_primitives": 13
+          },
+          "entities": 1000,
+          "iterations": 30,
+          "labels": 0,
+          "relationship_records": 2000,
+          "timings": {
+            "app_update_frame_build": {
+              "max_ns": 8657156,
+              "mean_ns": 8526247,
+              "median_ns": 8511214,
+              "min_ns": 8418086,
+              "p95_ns": 8651121,
+              "samples": 30
+            },
+            "egui_cpu_tessellation": {
+              "max_ns": 10828116,
+              "mean_ns": 9443221,
+              "median_ns": 9175800,
+              "min_ns": 8966344,
+              "p95_ns": 10722013,
+              "samples": 30
+            }
+          },
+          "warmup_runs": 5
+        },
+        {
+          "culling_enabled": true,
+          "draw_output": {
+            "clipped_shapes": 38538,
+            "mesh_indices": 2708403,
+            "mesh_vertices": 832938,
+            "tessellated_primitives": 13
+          },
+          "entities": 1000,
+          "iterations": 30,
+          "labels": 0,
+          "relationship_records": 2000,
+          "timings": {
+            "app_update_frame_build": {
+              "max_ns": 8713896,
+              "mean_ns": 8539410,
+              "median_ns": 8533401,
+              "min_ns": 8437224,
+              "p95_ns": 8639611,
+              "samples": 30
+            },
+            "egui_cpu_tessellation": {
+              "max_ns": 10748841,
+              "mean_ns": 9571285,
+              "median_ns": 9186667,
+              "min_ns": 8981146,
+              "p95_ns": 10748778,
+              "samples": 30
+            }
+          },
+          "warmup_runs": 5
+        }
+      ],
+      "viewport_points": {
+        "height": 900,
+        "width": 1440
+      },
+      "fixture_family": "disconnected",
+      "culling_effect": {
+        "shapes_omitted": 0,
+        "mesh_vertices_omitted": 0,
+        "tessellation_median_reduction_percent": -0.12
+      }
+    },
+    {
+      "benchmark": "headless_chart_ui_and_egui_tessellation_cpu",
+      "culling_order": [
+        false,
+        true
+      ],
+      "fixture_path": "/tmp/arch-notebook-egui-bench-4btnhgl4/dense-100-pan-0.0-0.0.case.json",
+      "fixture_sha256": "92be2fae6dc2814eb852b0d1c23a727725a0326c986fe8dbac329a9f46bc8989",
+      "pan_points": [
+        0.0,
+        0.0
+      ],
+      "sample_order": "culling variants alternate order within each warmup and measurement pair",
+      "schema_version": 2,
+      "scope": "headless full-app egui frame build and egui CPU tessellation; variants use the same deterministic fictional chart, viewport, zoom, and pan, toggling only the production relationship-route culling branch; excludes GPU, compositor, presentation, input-to-display latency, and FPS",
+      "variants": [
+        {
+          "culling_enabled": false,
+          "draw_output": {
+            "clipped_shapes": 15775,
+            "mesh_indices": 752037,
+            "mesh_vertices": 252358,
+            "tessellated_primitives": 13
+          },
+          "entities": 100,
+          "iterations": 30,
+          "labels": 0,
+          "relationship_records": 1000,
+          "timings": {
+            "app_update_frame_build": {
+              "max_ns": 10698096,
+              "mean_ns": 3934850,
+              "median_ns": 3394761,
+              "min_ns": 2914026,
+              "p95_ns": 10458788,
+              "samples": 30
+            },
+            "egui_cpu_tessellation": {
+              "max_ns": 12115852,
+              "mean_ns": 4267810,
+              "median_ns": 3680100,
+              "min_ns": 3264870,
+              "p95_ns": 9184025,
+              "samples": 30
+            }
+          },
+          "warmup_runs": 5
+        },
+        {
+          "culling_enabled": true,
+          "draw_output": {
+            "clipped_shapes": 15775,
+            "mesh_indices": 752037,
+            "mesh_vertices": 252358,
+            "tessellated_primitives": 13
+          },
+          "entities": 100,
+          "iterations": 30,
+          "labels": 0,
+          "relationship_records": 1000,
+          "timings": {
+            "app_update_frame_build": {
+              "max_ns": 11352990,
+              "mean_ns": 4048736,
+              "median_ns": 3422119,
+              "min_ns": 2976852,
+              "p95_ns": 11126750,
+              "samples": 30
+            },
+            "egui_cpu_tessellation": {
+              "max_ns": 10766928,
+              "mean_ns": 4248907,
+              "median_ns": 3687533,
+              "min_ns": 3298632,
+              "p95_ns": 7958917,
+              "samples": 30
+            }
+          },
+          "warmup_runs": 5
+        }
+      ],
+      "viewport_points": {
+        "height": 900,
+        "width": 1440
+      },
+      "fixture_family": "dense",
+      "culling_effect": {
+        "shapes_omitted": 0,
+        "mesh_vertices_omitted": 0,
+        "tessellation_median_reduction_percent": -0.2
+      }
+    },
+    {
+      "benchmark": "headless_chart_ui_and_egui_tessellation_cpu",
+      "culling_order": [
+        true,
+        false
+      ],
+      "fixture_path": "/tmp/arch-notebook-egui-bench-4btnhgl4/dense-100-pan-2000.0-0.0.case.json",
+      "fixture_sha256": "d28b1f9bb70e8de177133d8cb6aeaeafd36556139c026cd0978172b109899c21",
+      "pan_points": [
+        2000.0,
+        0.0
+      ],
+      "sample_order": "culling variants alternate order within each warmup and measurement pair",
+      "schema_version": 2,
+      "scope": "headless full-app egui frame build and egui CPU tessellation; variants use the same deterministic fictional chart, viewport, zoom, and pan, toggling only the production relationship-route culling branch; excludes GPU, compositor, presentation, input-to-display latency, and FPS",
+      "variants": [
+        {
+          "culling_enabled": true,
+          "draw_output": {
+            "clipped_shapes": 2111,
+            "mesh_indices": 33225,
+            "mesh_vertices": 16410,
+            "tessellated_primitives": 13
+          },
+          "entities": 100,
+          "iterations": 30,
+          "labels": 0,
+          "relationship_records": 1000,
+          "timings": {
+            "app_update_frame_build": {
+              "max_ns": 2518406,
+              "mean_ns": 1805551,
+              "median_ns": 1728347,
+              "min_ns": 1525706,
+              "p95_ns": 2517474,
+              "samples": 30
+            },
+            "egui_cpu_tessellation": {
+              "max_ns": 353137,
+              "mean_ns": 214735,
+              "median_ns": 190641,
+              "min_ns": 171107,
+              "p95_ns": 322390,
+              "samples": 30
+            }
+          },
+          "warmup_runs": 5
+        },
+        {
+          "culling_enabled": false,
+          "draw_output": {
+            "clipped_shapes": 15775,
+            "mesh_indices": 33225,
+            "mesh_vertices": 16410,
+            "tessellated_primitives": 13
+          },
+          "entities": 100,
+          "iterations": 30,
+          "labels": 0,
+          "relationship_records": 1000,
+          "timings": {
+            "app_update_frame_build": {
+              "max_ns": 4352988,
+              "mean_ns": 3260579,
+              "median_ns": 3150354,
+              "min_ns": 2731373,
+              "p95_ns": 4135077,
+              "samples": 30
+            },
+            "egui_cpu_tessellation": {
+              "max_ns": 1113296,
+              "mean_ns": 689476,
+              "median_ns": 523035,
+              "min_ns": 497594,
+              "p95_ns": 1112273,
+              "samples": 30
+            }
+          },
+          "warmup_runs": 5
+        }
+      ],
+      "viewport_points": {
+        "height": 900,
+        "width": 1440
+      },
+      "fixture_family": "dense",
+      "culling_effect": {
+        "shapes_omitted": 13664,
+        "mesh_vertices_omitted": 0,
+        "tessellation_median_reduction_percent": 63.55
+      }
+    },
+    {
+      "benchmark": "headless_chart_ui_and_egui_tessellation_cpu",
+      "culling_order": [
+        true,
+        false
+      ],
+      "fixture_path": "/tmp/arch-notebook-egui-bench-4btnhgl4/dense-1000-pan-2000.0-0.0.case.json",
+      "fixture_sha256": "696b4c0989bd31dc45785a127dd77c98d5894c409a9f5d877b2e92dbd9ca5366",
+      "pan_points": [
+        2000.0,
+        0.0
+      ],
+      "sample_order": "culling variants alternate order within each warmup and measurement pair",
+      "schema_version": 2,
+      "scope": "headless full-app egui frame build and egui CPU tessellation; variants use the same deterministic fictional chart, viewport, zoom, and pan, toggling only the production relationship-route culling branch; excludes GPU, compositor, presentation, input-to-display latency, and FPS",
+      "variants": [
+        {
+          "culling_enabled": true,
+          "draw_output": {
+            "clipped_shapes": 19211,
+            "mesh_indices": 146655,
+            "mesh_vertices": 74030,
+            "tessellated_primitives": 13
+          },
+          "entities": 1000,
+          "iterations": 30,
+          "labels": 0,
+          "relationship_records": 10000,
+          "timings": {
+            "app_update_frame_build": {
+              "max_ns": 41426083,
+              "mean_ns": 20793294,
+              "median_ns": 19817292,
+              "min_ns": 18038291,
+              "p95_ns": 27388626,
+              "samples": 30
+            },
+            "egui_cpu_tessellation": {
+              "max_ns": 3462074,
+              "mean_ns": 1609891,
+              "median_ns": 1476067,
+              "min_ns": 1335972,
+              "p95_ns": 2121654,
+              "samples": 30
+            }
+          },
+          "warmup_runs": 5
+        },
+        {
+          "culling_enabled": false,
+          "draw_output": {
+            "clipped_shapes": 155875,
+            "mesh_indices": 146655,
+            "mesh_vertices": 74030,
+            "tessellated_primitives": 13
+          },
+          "entities": 1000,
+          "iterations": 30,
+          "labels": 0,
+          "relationship_records": 10000,
+          "timings": {
+            "app_update_frame_build": {
+              "max_ns": 81314234,
+              "mean_ns": 37088989,
+              "median_ns": 34294765,
+              "min_ns": 32472442,
+              "p95_ns": 71743619,
+              "samples": 30
+            },
+            "egui_cpu_tessellation": {
+              "max_ns": 12739988,
+              "mean_ns": 6515350,
+              "median_ns": 6506927,
+              "min_ns": 4941288,
+              "p95_ns": 8104819,
+              "samples": 30
+            }
+          },
+          "warmup_runs": 5
+        }
+      ],
+      "viewport_points": {
+        "height": 900,
+        "width": 1440
+      },
+      "fixture_family": "dense",
+      "culling_effect": {
+        "shapes_omitted": 136664,
+        "mesh_vertices_omitted": 0,
+        "tessellation_median_reduction_percent": 77.32
+      }
+    },
+    {
+      "benchmark": "headless_chart_ui_and_egui_tessellation_cpu",
+      "culling_order": [
+        false,
+        true
+      ],
+      "fixture_path": "/tmp/arch-notebook-egui-bench-4btnhgl4/dense-1000-pan-0.0-0.0.case.json",
+      "fixture_sha256": "73fc78d25707f556311399b50acf7b0f29c61ce9adaf2b99c72ce336a24b1b14",
+      "pan_points": [
+        0.0,
+        0.0
+      ],
+      "sample_order": "culling variants alternate order within each warmup and measurement pair",
+      "schema_version": 2,
+      "scope": "headless full-app egui frame build and egui CPU tessellation; variants use the same deterministic fictional chart, viewport, zoom, and pan, toggling only the production relationship-route culling branch; excludes GPU, compositor, presentation, input-to-display latency, and FPS",
+      "variants": [
+        {
+          "culling_enabled": false,
+          "draw_output": {
+            "clipped_shapes": 155875,
+            "mesh_indices": 7347915,
+            "mesh_vertices": 2438006,
+            "tessellated_primitives": 13
+          },
+          "entities": 1000,
+          "iterations": 30,
+          "labels": 0,
+          "relationship_records": 10000,
+          "timings": {
+            "app_update_frame_build": {
+              "max_ns": 36252112,
+              "mean_ns": 34817666,
+              "median_ns": 35035115,
+              "min_ns": 32056835,
+              "p95_ns": 36216445,
+              "samples": 30
+            },
+            "egui_cpu_tessellation": {
+              "max_ns": 35755920,
+              "mean_ns": 33975681,
+              "median_ns": 33784047,
+              "min_ns": 32275970,
+              "p95_ns": 35175473,
+              "samples": 30
+            }
+          },
+          "warmup_runs": 5
+        },
+        {
+          "culling_enabled": true,
+          "draw_output": {
+            "clipped_shapes": 155875,
+            "mesh_indices": 7347915,
+            "mesh_vertices": 2438006,
+            "tessellated_primitives": 13
+          },
+          "entities": 1000,
+          "iterations": 30,
+          "labels": 0,
+          "relationship_records": 10000,
+          "timings": {
+            "app_update_frame_build": {
+              "max_ns": 39277878,
+              "mean_ns": 35424574,
+              "median_ns": 35316435,
+              "min_ns": 32269030,
+              "p95_ns": 37623826,
+              "samples": 30
+            },
+            "egui_cpu_tessellation": {
+              "max_ns": 35168942,
+              "mean_ns": 33788410,
+              "median_ns": 33755533,
+              "min_ns": 31868591,
+              "p95_ns": 34705322,
+              "samples": 30
+            }
+          },
+          "warmup_runs": 5
+        }
+      ],
+      "viewport_points": {
+        "height": 900,
+        "width": 1440
+      },
+      "fixture_family": "dense",
+      "culling_effect": {
+        "shapes_omitted": 0,
+        "mesh_vertices_omitted": 0,
+        "tessellation_median_reduction_percent": 0.08
+      }
+    }
+  ],
+  "limitations": [
+    "Synthetic fictional graph fixtures only; App::update covers the full application UI at a fixed 1440x900 point viewport.",
+    "Each fixture/view compares culling-enabled and culling-disabled variants using identical input, viewport, zoom, and pan; only the route-culling branch changes.",
+    "Culling-enabled and culling-disabled timings alternate within every warmup and measured sample pair.",
+    "Reports egui frame-build CPU time (App::update, layout, and shape generation) separately from egui CPU tessellation, plus submitted shape and mesh counts.",
+    "Does not measure GPU execution, compositor work, buffer presentation, input-to-display latency, or FPS.",
+    "Host-specific characterization; comparisons require the same host, profile, viewport, and fixture hashes."
+  ]
+}
