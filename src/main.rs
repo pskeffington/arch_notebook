@@ -46183,6 +46183,7 @@ mod tests {
         let mut case = super::demo_case();
         case.title = "PRIVATE CASE TITLE".into();
         case.active_chart_title = "PRIVATE CHART TITLE".into();
+        case.chart_coordinate_bounds = Some([-80.0, -40.0, 120.0, 80.0]);
         case.links[0].connection_id = "PRIVATE CONNECTION ID".into();
         case.links[0].source_reference = "PRIVATE EVIDENCE <reference>".into();
         case.links[0].notes = "PRIVATE ANALYST NOTE".into();
@@ -46193,8 +46194,13 @@ mod tests {
             title: "Alternate **Chart**\n# injected heading".into(),
             zoom: 1.0,
             pan: [0.0, 0.0],
-            coordinate_bounds: None,
-            entities: vec![layout_entity("ALTERNATE ENTITY", "Organization", false)],
+            coordinate_bounds: Some([1_000.0, 2_000.0, 3_000.0, 4_000.0]),
+            entities: vec![{
+                let mut entity = layout_entity("ALTERNATE ENTITY", "Organization", false);
+                entity.x = 2_000.0;
+                entity.y = 3_000.0;
+                entity
+            }],
             links: Vec::new(),
             labels: Vec::new(),
             template_id: None,
@@ -46262,6 +46268,7 @@ mod tests {
         assert!(selected_report.contains("Entities: 1"));
         assert!(selected_report.contains("Relationship records: 0 total"));
         assert!(selected_svg.contains("ALTERNATE ENTITY"));
+        assert!(selected_svg.contains("cx=\"600.00\" cy=\"400.00\""));
         assert!(!selected_svg.contains("Avery Rowan"));
         assert!(!selected_svg.contains("PRIVATE EVIDENCE"));
 
@@ -47118,6 +47125,64 @@ mod tests {
             assert_eq!((entity.x, entity.y, entity.position_locked), (x, y, pinned));
         }
         assert!(app.layout_restore.is_none());
+    }
+
+    #[test]
+    fn chart_topology_frame_follows_switch_duplicate_and_new_chart_lifecycle() {
+        let mut case: CaseFile =
+            serde_json::from_str(include_str!("../fixtures/chart/correctness.case.json"))
+                .expect("checked-in chart fixture is valid");
+        let original_id = case.active_chart_id;
+        let original_bounds = [-24.0, -12.0, 48.0, 36.0];
+        let alternate_id = Uuid::new_v4();
+        let alternate_bounds = [100.0, 200.0, 300.0, 400.0];
+        case.chart_coordinate_bounds = Some(original_bounds);
+        case.chart_tabs.push(ChartDocument {
+            id: alternate_id,
+            title: "Alternate topology".into(),
+            zoom: 1.0,
+            pan: [0.0, 0.0],
+            coordinate_bounds: Some(alternate_bounds),
+            entities: vec![layout_entity("Alternate", "PERSON", false)],
+            links: Vec::new(),
+            labels: Vec::new(),
+            template_id: None,
+        });
+
+        let mut app = App::automation_context(case, "/tmp/topology-lifecycle.case.json");
+        app.switch_chart(alternate_id);
+        assert_eq!(app.case.chart_coordinate_bounds, Some(alternate_bounds));
+        assert_eq!(
+            app.case
+                .chart_tabs
+                .iter()
+                .find(|chart| chart.id == original_id)
+                .and_then(|chart| chart.coordinate_bounds),
+            Some(original_bounds),
+            "switching saves the outgoing chart's topology frame",
+        );
+
+        app.switch_chart(original_id);
+        assert_eq!(app.case.chart_coordinate_bounds, Some(original_bounds));
+        app.duplicate_active_chart();
+        assert_eq!(app.case.chart_coordinate_bounds, Some(original_bounds));
+        let duplicate_id = app.case.active_chart_id;
+        app.switch_chart(original_id);
+        assert_eq!(app.case.chart_coordinate_bounds, Some(original_bounds));
+        app.switch_chart(duplicate_id);
+        assert_eq!(app.case.chart_coordinate_bounds, Some(original_bounds));
+
+        app.create_chart(false);
+        assert_eq!(app.case.chart_coordinate_bounds, None);
+        assert_eq!(
+            app.case
+                .chart_tabs
+                .iter()
+                .find(|chart| chart.id == duplicate_id)
+                .and_then(|chart| chart.coordinate_bounds),
+            Some(original_bounds),
+            "creating a blank chart preserves the duplicate's saved frame",
+        );
     }
 
     #[test]
