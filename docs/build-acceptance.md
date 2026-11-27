@@ -30,11 +30,11 @@ The JSON and human-readable success summaries no longer echo the caller-supplied
 
 ## Conditional formatting in chart templates — 2026-11-27
 
-Chart templates now carry up to 96 conditional attribute-formatting rules and apply them through bounded, visible template-owned legend blocks. The full suite (63 passed, 1 opt-in benchmark ignored), locked check/debug/release builds, and current-user launcher/icon sync pass. Exact-source CI is pending; native visual review remains blocked by the unavailable display. See [CHART-TEMPLATE-CONDITIONAL-RULES-01](evidence/vector-ui/CHART-TEMPLATE-CONDITIONAL-RULES-01-linux.md).
+Chart templates now carry up to 96 conditional attribute-formatting rules and apply them through bounded, visible template-owned legend blocks. The full suite (63 passed, 1 opt-in benchmark ignored), locked check/debug/release builds, and current-user launcher/icon sync pass. Exact-head cross-platform CI passed in [run 45985015963](https://github.com/pskeffington/arch_notebook/actions/runs/45985015963); native visual review remains blocked by the unavailable display. See [CHART-TEMPLATE-CONDITIONAL-RULES-01](evidence/vector-ui/CHART-TEMPLATE-CONDITIONAL-RULES-01-linux.md).
 
 ## Current-user Linux Desktop shortcut — 2026-11-27
 
-The Linux per-user installer now creates an executable Desktop shortcut byte-identical to the application-menu entry. An isolated temporary-HOME smoke passes for executable, desktop files, icons, SQL helper and MIME definition; the current-user release and icon assets are synchronized. Exact-source CI for the new installer smoke is pending. Native launch remains blocked by the unavailable compositor. See [LOCAL-INSTALL-08](evidence/deployment/LOCAL-INSTALL-08-linux.md).
+The Linux per-user installer now creates an executable Desktop shortcut byte-identical to the application-menu entry. An isolated temporary-HOME smoke passes for executable, desktop files, icons, SQL helper and MIME definition; the current-user release and icon assets are synchronized. Exact-head cross-platform CI passed in [run 45985015963](https://github.com/pskeffington/arch_notebook/actions/runs/45985015963), including the Linux installer smoke. Native launch remains blocked by the unavailable compositor. See [LOCAL-INSTALL-08](evidence/deployment/LOCAL-INSTALL-08-linux.md).
 
 
 ## SQL automation and scale recheck — 2026-11-27
