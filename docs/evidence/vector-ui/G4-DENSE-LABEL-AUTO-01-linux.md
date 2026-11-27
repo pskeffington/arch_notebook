@@ -2,6 +2,8 @@
 
 - **Task / owner:** SNG-DELIVERY-002 G4 readability follow-up; implementation session.
 - **Baseline:** `6c283ba63df3abc9570854f440b3f5e6695c0517` on `codex/ui-00-chart-baseline`.
+- **Candidate source:** `993dd560efca942fc4cc4c021d2fbefab1c96eef`.
+- **Release binary:** `/tmp/arch-notebook-target/release/arch-notebook`; SHA-256 `d28f2420fa51680046764546af22be7a850827cc615873eb1633267aea1f3676`.
 - **Review date:** 2026-11-27.
 - **Scope:** Reduce relationship-label collisions in dense chart overviews while retaining route drawing, exact-record picking, and access to every record.
 
@@ -19,7 +21,7 @@ Relationship labels and their attribute callouts now have session-scoped **Auto*
 | Full offline suite: `CARGO_BUILD_JOBS=1 CARGO_TARGET_DIR=/tmp/arch-notebook-target cargo test --locked --offline -- --test-threads=1` | **PASS**, 61 passed, 0 failed, 1 ignored; exit 0 |
 | Offline check: `CARGO_BUILD_JOBS=1 CARGO_TARGET_DIR=/tmp/arch-notebook-target cargo check --locked --offline` | **PASS**, exit 0 |
 | Offline debug build: `CARGO_BUILD_JOBS=1 CARGO_TARGET_DIR=/tmp/arch-notebook-target cargo build --locked --offline` | **PASS**, exit 0 |
-| Offline optimized build: `CARGO_BUILD_JOBS=1 CARGO_TARGET_DIR=/tmp/arch-notebook-target cargo build --release --locked --offline` | **PASS**, exit 0 |
+| Offline optimized build: `CARGO_BUILD_JOBS=1 CARGO_TARGET_DIR=/tmp/arch-notebook-target cargo build --release --locked --offline` | **PASS**, exit 0; candidate binary hash recorded above |
 | `cargo fmt --all -- --check`; `git diff --check` | **PASS**, exit 0 |
 | Independent read-only code review | **PASS**; reviewer did not run tests or edit files |
 | Updated candidate native pointer/visual review | **NOT TESTED**; desktop capture showed the old running app, but native input could not be delivered to that window in this session |
