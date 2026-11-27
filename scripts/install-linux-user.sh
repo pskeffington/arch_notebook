@@ -102,6 +102,17 @@ chmod 644 "$desktop_tmp"
 mv -f "$desktop_tmp" "$desktop_path"
 trap - EXIT
 
+user_desktop_dir="$home_dir/Desktop"
+if command -v xdg-user-dir >/dev/null 2>&1; then
+  configured_desktop_dir="$(HOME="$home_dir" XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$home_dir/.config}" xdg-user-dir DESKTOP 2>/dev/null || true)"
+  case "$configured_desktop_dir" in
+    /*) user_desktop_dir="$configured_desktop_dir" ;;
+  esac
+fi
+mkdir -p "$user_desktop_dir"
+desktop_shortcut_path="$user_desktop_dir/Arch Notebook.desktop"
+install -m 755 "$desktop_path" "$desktop_shortcut_path"
+
 install -m 644 "$icon_svg_source" "$icon_scalable_dir/arch-notebook.svg"
 install -m 644 "$icon_png_source" "$icon_png_dir/arch-notebook.png"
 
@@ -117,6 +128,7 @@ fi
 echo "Installed executable: $binary_path"
 echo "Installed automation installer: $automation_installer_path"
 echo "Installed application menu entry: $desktop_path"
+echo "Installed desktop shortcut: $desktop_shortcut_path"
 echo "Installed application icon: $icon_scalable_dir/arch-notebook.svg"
 echo "Installed case-file MIME definition: $mime_path"
 echo "Add $binary_dir to PATH to run arch-notebook from a terminal."

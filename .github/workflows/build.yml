@@ -40,6 +40,11 @@ jobs:
         run: cargo test --locked --offline
       - name: Build CLI for SQL automation acceptance
         run: cargo build --locked --offline
+      - name: Verify isolated Linux user install and desktop shortcut
+        run: |
+          python3 scripts/test-linux-user-install-acceptance.py \
+            --binary target/debug/arch-notebook \
+            --report /tmp/linux-user-install-acceptance.json
       - name: Verify SQL automation and snapshot comparison
         run: |
           python3 scripts/test-sql-automation-acceptance.py \
