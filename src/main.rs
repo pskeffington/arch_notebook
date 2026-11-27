@@ -891,6 +891,15 @@ struct NetworkAnalysisMethodCard {
 struct CommunityAnalysis {
     groups: Vec<Vec<Uuid>>,
     interactions: Vec<CommunityInteraction>,
+    proxies: Vec<CommunityProxy>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct CommunityProxy {
+    entity_id: Uuid,
+    distinct_neighbor_entities: usize,
+    distinct_community_contacts: usize,
+    relationship_record_count: usize,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -14227,6 +14236,9 @@ fn detected_community_analysis(case: &CaseFile) -> CommunityAnalysis {
         .collect();
     let mut interactions: HashMap<(usize, usize), CommunityInteraction> = HashMap::new();
     let mut endpoint_pairs: HashMap<(usize, usize), HashSet<(Uuid, Uuid)>> = HashMap::new();
+    let mut neighbors_by_entity: HashMap<Uuid, HashSet<Uuid>> = HashMap::new();
+    let mut communities_by_entity: HashMap<Uuid, HashSet<usize>> = HashMap::new();
+    let mut records_by_entity: HashMap<Uuid, usize> = HashMap::new();
 
     for (link_index, link) in case.links.iter().enumerate() {
         let (Some(&from_community), Some(&to_community)) = (
@@ -14235,9 +14247,29 @@ fn detected_community_analysis(case: &CaseFile) -> CommunityAnalysis {
         ) else {
             continue;
         };
+        if link.from != link.to {
+            neighbors_by_entity
+                .entry(link.from)
+                .or_default()
+                .insert(link.to);
+            neighbors_by_entity
+                .entry(link.to)
+                .or_default()
+                .insert(link.from);
+            *records_by_entity.entry(link.from).or_default() += 1;
+            *records_by_entity.entry(link.to).or_default() += 1;
+        }
         if from_community == to_community {
             continue;
         }
+        communities_by_entity
+            .entry(link.from)
+            .or_default()
+            .insert(to_community);
+        communities_by_entity
+            .entry(link.to)
+            .or_default()
+            .insert(from_community);
 
         let (first_community, second_community) = if from_community < to_community {
             (from_community, to_community)
@@ -14289,9 +14321,39 @@ fn detected_community_analysis(case: &CaseFile) -> CommunityAnalysis {
             .then_with(|| first.first_community.cmp(&second.first_community))
             .then_with(|| first.second_community.cmp(&second.second_community))
     });
+    let mut proxies: Vec<CommunityProxy> = communities_by_entity
+        .into_iter()
+        .filter_map(|(entity_id, communities)| {
+            (communities.len() > 1).then(|| CommunityProxy {
+                entity_id,
+                distinct_neighbor_entities: neighbors_by_entity
+                    .get(&entity_id)
+                    .map_or(0, HashSet::len),
+                distinct_community_contacts: communities.len(),
+                relationship_record_count: records_by_entity.get(&entity_id).copied().unwrap_or(0),
+            })
+        })
+        .collect();
+    proxies.sort_by(|first, second| {
+        second
+            .distinct_community_contacts
+            .cmp(&first.distinct_community_contacts)
+            .then_with(|| {
+                second
+                    .distinct_neighbor_entities
+                    .cmp(&first.distinct_neighbor_entities)
+            })
+            .then_with(|| {
+                second
+                    .relationship_record_count
+                    .cmp(&first.relationship_record_count)
+            })
+            .then_with(|| first.entity_id.cmp(&second.entity_id))
+    });
     CommunityAnalysis {
         groups,
         interactions,
+        proxies,
     }
 }
 
@@ -23424,6 +23486,25 @@ impl eframe::App for App {
                                     route_lanes[link_index] * self.chart_zoom,
                                     link.from == link.to,
                                 );
+                                let mid = connection_label_position(
+                                    &points,
+                                    link.from == link.to,
+                                    route_lanes[link_index] * self.chart_zoom,
+                                    self.chart_zoom,
+                                );
+                                let label_rect = egui::Rect::from_center_size(
+                                    mid,
+                                    egui::vec2(110.0, 18.0) * self.chart_zoom,
+                                );
+                                if !chart_link_route_may_intersect_viewport(
+                                    &points,
+                                    label_rect,
+                                    link.attributes.len(),
+                                    rect,
+                                    self.chart_zoom,
+                                ) {
+                                    continue;
+                                }
                                 for (segment_index, segment) in points.windows(2).enumerate() {
                                     match link.confidence.clamp(1, 3) {
                                         1 if segment_index % 2 == 0 => {
@@ -23484,16 +23565,6 @@ impl eframe::App for App {
                                         );
                                     }
                                 }
-                                let mid = connection_label_position(
-                                    &points,
-                                    link.from == link.to,
-                                    route_lanes[link_index] * self.chart_zoom,
-                                    self.chart_zoom,
-                                );
-                                let label_rect = egui::Rect::from_center_size(
-                                    mid,
-                                    egui::vec2(110.0, 18.0) * self.chart_zoom,
-                                );
                                 p.rect_filled(label_rect,3.0,if self.selected_link==Some(link_index){egui::Color32::from_rgb(34,61,70)}else{egui::Color32::from_rgb(19,31,41)});
                                 let visible_label = truncate_chart_label(&link.label, 18);
                                 p.text(mid,egui::Align2::CENTER_CENTER,&visible_label,egui::FontId::proportional(9.0*self.chart_zoom),if !in_time{egui::Color32::from_rgb(45,57,64)}else if in_source{cyan}else if in_group{egui::Color32::from_rgb(190,169,227)}else if has_source_focus||has_group_focus{egui::Color32::from_rgb(65,78,87)}else{muted});
@@ -26013,6 +26084,34 @@ impl eframe::App for App {
                                         });
                                 }
                             }
+                            ui.label(egui::RichText::new("CROSS-COMMUNITY PROXIES").size(9.0).strong().color(cyan));
+                            ui.label(egui::RichText::new(
+                                "Ranked by distinct communities contacted, then distinct neighboring entities. Repeated records are shown separately.",
+                            ).small().color(muted));
+                            if analysis.proxies.is_empty() {
+                                ui.label(egui::RichText::new("No entity contacts more than one detected community.").small().color(muted));
+                            } else {
+                                egui::ScrollArea::vertical()
+                                    .id_salt("community_proxy_entities")
+                                    .max_height(150.0)
+                                    .show_rows(ui, 42.0, analysis.proxies.len(), |ui, rows| {
+                                        for row in rows {
+                                            let proxy = &analysis.proxies[row];
+                                            let Some(entity_name) = self.case.entities.iter().find(|entity| entity.id == proxy.entity_id).map(|entity| entity.name.clone()) else { continue };
+                                            ui.horizontal(|ui| {
+                                                if ui.small_button(&entity_name).on_hover_text("Focus this bridge entity on the chart").clicked() {
+                                                    self.focus_entity_from_chart_search(proxy.entity_id);
+                                                }
+                                                ui.label(egui::RichText::new(format!(
+                                                    "{} communities · {} distinct entities · {} records",
+                                                    proxy.distinct_community_contacts,
+                                                    proxy.distinct_neighbor_entities,
+                                                    proxy.relationship_record_count,
+                                                )).small().color(muted));
+                                            });
+                                        }
+                                    });
+                            }
                             ui.label(egui::RichText::new(
                                 "Method: deterministic greedy modularity local moves · resolution 1 · maximum 50 sweeps · UUID-ordered traversal. Ties collapse to unique pairs; direction/date/type/confidence are ignored; self-links and missing endpoints are excluded. Results are an exploratory partition, not verified social groups.",
                             ).small().color(muted));
@@ -28463,6 +28562,47 @@ fn benchmark_chart_vectors(
         std::hint::black_box((geometry.link_lanes.len(), geometry.route_lanes.len()));
     }
 
+    let geometry = chart_vector_geometry(&case, rect, zoom, pan);
+    let entity_indices = chart_entity_indices(&case);
+    let mut visible_link_records = 0usize;
+    let mut culled_link_records = 0usize;
+    let mut missing_endpoint_link_records = 0usize;
+    for (index, link) in case.links.iter().enumerate() {
+        let (Some(&from_index), Some(&to_index)) =
+            (entity_indices.get(&link.from), entity_indices.get(&link.to))
+        else {
+            missing_endpoint_link_records += 1;
+            continue;
+        };
+        let from = geometry.entity_positions[&case.entities[from_index].id];
+        let to = geometry.entity_positions[&case.entities[to_index].id];
+        let points = connection_curve_points(
+            from,
+            to,
+            geometry.route_lanes[index] * zoom,
+            link.from == link.to,
+        );
+        let label_center = connection_label_position(
+            &points,
+            link.from == link.to,
+            geometry.route_lanes[index] * zoom,
+            zoom,
+        );
+        let label_bounds =
+            egui::Rect::from_center_size(label_center, egui::vec2(110.0, 18.0) * zoom);
+        if chart_link_route_may_intersect_viewport(
+            &points,
+            label_bounds,
+            link.attributes.len(),
+            rect,
+            zoom,
+        ) {
+            visible_link_records += 1;
+        } else {
+            culled_link_records += 1;
+        }
+    }
+
     Ok(serde_json::json!({
         "schema_version": 1,
         "benchmark": "chart_vector_cpu_geometry",
@@ -28483,6 +28623,12 @@ fn benchmark_chart_vectors(
             "ordinary_lanes": case.links.len(),
             "geometric_lanes": case.links.len(),
             "pointer_cycle_candidates_at_canvas_center": final_match,
+            "viewport_link_paint_culling": {
+                "visible_link_records": visible_link_records,
+                "culled_link_records": culled_link_records,
+                "missing_endpoint_link_records": missing_endpoint_link_records,
+                "arrow_route_margin_pixels": 90.0 * zoom + 8.0,
+            },
         },
         "timings": {
             "vector_geometry_prepare": duration_summary(&preparation_samples),
@@ -28846,6 +28992,51 @@ fn connection_curve_points(
             egui::pos2(point.x, point.y)
         })
         .collect()
+}
+
+/// Conservatively keeps a routed record when its line or nearby chart
+/// decorations could touch the viewport. The allowance covers link labels,
+/// attribute rows, arrowheads and stroke width around the sampled route.
+fn chart_link_route_may_intersect_viewport(
+    points: &[egui::Pos2],
+    label_bounds: egui::Rect,
+    attribute_count: usize,
+    viewport: egui::Rect,
+    zoom: f32,
+) -> bool {
+    let Some(first) = points.first().copied() else {
+        return true;
+    };
+    if !first.x.is_finite() || !first.y.is_finite() || !zoom.is_finite() {
+        return true;
+    }
+    let mut minimum = first;
+    let mut maximum = first;
+    for point in points.iter().copied().skip(1) {
+        if !point.x.is_finite() || !point.y.is_finite() {
+            return true;
+        }
+        minimum.x = minimum.x.min(point.x);
+        minimum.y = minimum.y.min(point.y);
+        maximum.x = maximum.x.max(point.x);
+        maximum.y = maximum.y.max(point.y);
+    }
+    if !label_bounds.min.x.is_finite()
+        || !label_bounds.min.y.is_finite()
+        || !label_bounds.max.x.is_finite()
+        || !label_bounds.max.y.is_finite()
+    {
+        return true;
+    }
+    let mut bounds = egui::Rect::from_min_max(minimum, maximum)
+        .union(label_bounds.expand(8.0 * zoom.abs() + 4.0));
+    if attribute_count > 0 {
+        let extra_rows_height = if attribute_count > 2 { 36.0 } else { 24.0 } * zoom.abs();
+        bounds.max.y += extra_rows_height;
+    }
+    // Directed arrow tips extend up to 75 screen points beyond a sampled
+    // endpoint, with wings and stroke width outside that centerline.
+    bounds.expand(90.0 * zoom.abs() + 8.0).intersects(viewport)
 }
 
 fn connection_arrowhead(
@@ -43671,12 +43862,12 @@ fn main() -> eframe::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        AnalysisPacketDisclosure, App, AutomationJob, AutomationParameterOverrides,
-        AutomationWorkerResult, CaseFile, ChartDocument, ConnectionFact, ConnectionSnapshot,
-        Entity, EntityRepresentation, ImportFilterOperator, ImportTransformOperation,
-        ImportValueTransform, Uuid, apply_import_value_transforms, canonical_connection,
-        compare_snapshots, compile_import_value_transforms, entity_type_layout_positions,
-        export_analysis_packet_cli, grid_layout_dimensions, import_filter_matches,
+        AnalysisPacketDisclosure, App, AutomationJob, AutomationParameterOverrides, CaseFile,
+        ChartDocument, ConnectionFact, ConnectionSnapshot, Entity, EntityRepresentation,
+        ImportFilterOperator, ImportTransformOperation, ImportValueTransform, Uuid,
+        apply_import_value_transforms, canonical_connection, compare_snapshots,
+        compile_import_value_transforms, entity_type_layout_positions, export_analysis_packet_cli,
+        grid_layout_dimensions, import_filter_matches,
     };
 
     fn render_headless_app_frame(
@@ -43994,10 +44185,21 @@ mod tests {
         let community_analysis = app
             .community_analysis
             .as_ref()
-            .expect("the actual UI button computes detected communities");
+            .expect("the actual UI button computes detected communities")
+            .clone();
         assert!(!community_analysis.groups.is_empty());
         assert_eq!(community_analysis.interactions.len(), 1);
+        assert!(!community_analysis.proxies.is_empty());
         assert!(find_headless_text_point(&after_communities, "DETECTED COMMUNITIES").is_some());
+        let visible_proxies = scroll_headless_until_text(
+            &context,
+            &mut app,
+            &mut frame,
+            &mut time,
+            "CROSS-COMMUNITY PROXIES",
+        );
+        assert!(find_headless_text_point(&visible_proxies, "CROSS-COMMUNITY PROXIES").is_some());
+        assert!(find_headless_text_point(&visible_proxies, "A3").is_some());
         let (interaction_key, interaction_label, final_group_label, final_group_entity) = {
             let interaction = &community_analysis.interactions[0];
             let interaction_key = (interaction.first_community, interaction.second_community);
@@ -44552,6 +44754,55 @@ mod tests {
         assert_eq!(analysis.groups[interaction.first_community].len(), 4);
         assert_eq!(analysis.groups[interaction.second_community].len(), 4);
         assert_ne!(interaction.first_community, interaction.second_community);
+        assert!(
+            analysis.proxies.is_empty(),
+            "internal ties plus contact with one external community do not make an inter-community proxy"
+        );
+    }
+
+    #[test]
+    fn detected_community_proxy_counts_only_other_communities() {
+        let mut case = super::demo_case();
+        case.entities = (0..12)
+            .map(|index| layout_entity(&format!("Group member {index}"), "PERSON", false))
+            .collect();
+        let ids: Vec<_> = case.entities.iter().map(|entity| entity.id).collect();
+        let make_link = |from, to| super::Link {
+            from,
+            to,
+            connection_id: Uuid::new_v4().to_string(),
+            label: "CONTACTS".into(),
+            date: String::new(),
+            confidence: 2,
+            directed: false,
+            notes: String::new(),
+            source_notes: String::new(),
+            source_reference: String::new(),
+            ingest_source: None,
+            attributes: Vec::new(),
+        };
+        case.links.clear();
+        for start in [0, 4, 8] {
+            for left in start..start + 4 {
+                for right in left + 1..start + 4 {
+                    case.links.push(make_link(ids[left], ids[right]));
+                }
+            }
+        }
+        case.links.push(make_link(ids[3], ids[4]));
+        case.links.push(make_link(ids[3], ids[8]));
+
+        let analysis = super::detected_community_analysis(&case);
+        assert_eq!(
+            analysis.groups.iter().map(Vec::len).collect::<Vec<_>>(),
+            [4, 4, 4]
+        );
+        assert_eq!(analysis.proxies.len(), 1);
+        let proxy = &analysis.proxies[0];
+        assert_eq!(proxy.entity_id, ids[3]);
+        assert_eq!(proxy.distinct_community_contacts, 2);
+        assert_eq!(proxy.distinct_neighbor_entities, 5);
+        assert_eq!(proxy.relationship_record_count, 5);
     }
 
     #[test]
@@ -44986,7 +45237,7 @@ mod tests {
     }
 
     #[test]
-    fn cancelling_desktop_sql_automation_saves_run_and_keeps_prior_checkpoint() {
+    fn headless_ui_cancels_desktop_sql_automation_and_keeps_prior_checkpoint() {
         let root =
             std::env::temp_dir().join(format!("arch-notebook-cancel-test-{}", Uuid::new_v4()));
         std::fs::create_dir(&root).expect("create isolated cancellation fixture directory");
@@ -45040,6 +45291,9 @@ mod tests {
         std::fs::write(&case_path, &saved_json).expect("save the fixture case before automation");
         app.saved_case_json = Some(saved_json.clone());
         app.disk_case_json = Some(saved_json);
+        let context = egui::Context::default();
+        let mut frame = eframe::Frame::_new_kittest();
+        let mut time = 0.0;
         app.start_automation_work(
             job_ids,
             None,
@@ -45069,27 +45323,41 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         std::thread::sleep(std::time::Duration::from_millis(100));
-        app.automation_cancel
-            .store(true, std::sync::atomic::Ordering::Release);
+        let running_ui =
+            render_headless_app_frame(&context, &mut app, &mut frame, time, Vec::new());
+        assert!(find_headless_text_point(&running_ui, "SQL operation is running").is_some());
+        assert!(
+            collect_headless_texts(&running_ui)
+                .iter()
+                .any(|text| text.contains("Running job 2 of 2"))
+        );
+        assert!(find_headless_text_point(&running_ui, "Cancel automation").is_some());
+        let _after_cancel = click_headless_visible_text(
+            &context,
+            &mut app,
+            &mut frame,
+            &mut time,
+            &running_ui,
+            "Cancel automation",
+        );
+        assert!(
+            app.automation_cancel
+                .load(std::sync::atomic::Ordering::Acquire)
+        );
+        assert_eq!(app.status, "CANCELLING AUTOMATION");
 
-        let worker = app
-            .automation_worker
-            .take()
-            .expect("automation worker channel is available");
-        let outcome = worker
-            .recv_timeout(std::time::Duration::from_secs(15))
-            .expect("cancelled SQL worker should finish promptly")
-            .expect("cancelled SQL worker should return its persisted recovery state");
-        let (completed_case, status) = match outcome {
-            AutomationWorkerResult::SavedCase { case, status, .. } => (case, status),
-            AutomationWorkerResult::FailedCase { error, .. } => {
-                panic!("automation worker failed before saving cancellation: {error}")
-            }
-            AutomationWorkerResult::UnsavedCase { status, .. }
-            | AutomationWorkerResult::Validation { status, .. } => {
-                panic!("expected saved cancellation result, got: {status}")
-            }
-        };
+        let cancellation_started = std::time::Instant::now();
+        while app.automation_worker.is_some() {
+            assert!(
+                cancellation_started.elapsed() < std::time::Duration::from_secs(15),
+                "cancelled SQL worker should finish promptly"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            time += 1.0 / 60.0;
+            render_headless_app_frame(&context, &mut app, &mut frame, time, Vec::new());
+        }
+        let completed_case = &app.case;
+        let status = &app.status;
         assert!(status.contains("AUTOMATION CANCELLED"), "{status}");
         assert_eq!(completed_case.automation_runs.len(), 2);
         assert!(completed_case.automation_runs[0].success);
@@ -45517,6 +45785,7 @@ mod tests {
         app.community_analysis = Some(std::sync::Arc::new(super::CommunityAnalysis {
             groups: vec![vec![Uuid::new_v4()]],
             interactions: Vec::new(),
+            proxies: Vec::new(),
         }));
         app.network_proximity_analysis = Some((
             app.case.active_chart_id,
@@ -45760,6 +46029,104 @@ mod tests {
         assert_eq!(prepared.link_lanes, expected_lanes);
         assert_eq!(prepared.entity_positions, expected_positions);
         assert_eq!(prepared.route_lanes, expected_routes);
+    }
+
+    #[test]
+    fn chart_link_route_culling_preserves_crossings_and_nearby_decorations() {
+        let viewport = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(900.0, 600.0));
+        let offscreen_label =
+            egui::Rect::from_center_size(egui::pos2(-10_000.0, -10_000.0), egui::vec2(110.0, 18.0));
+        assert!(super::chart_link_route_may_intersect_viewport(
+            &[egui::pos2(-500.0, 300.0), egui::pos2(1_400.0, 300.0)],
+            offscreen_label,
+            0,
+            viewport,
+            1.0,
+        ));
+        let curved_crossing = super::connection_curve_points(
+            egui::pos2(-300.0, 300.0),
+            egui::pos2(1_200.0, 300.0),
+            150.0,
+            false,
+        );
+        assert!(super::chart_link_route_may_intersect_viewport(
+            &curved_crossing,
+            offscreen_label,
+            0,
+            viewport,
+            1.0,
+        ));
+        assert!(super::chart_link_route_may_intersect_viewport(
+            &[
+                egui::pos2(-300.0, -300.0),
+                egui::pos2(450.0, 300.0),
+                egui::pos2(1_300.0, 900.0),
+            ],
+            offscreen_label,
+            0,
+            viewport,
+            1.0,
+        ));
+        let outside_loop_center = egui::pos2(1_000.0, 300.0);
+        let self_loop =
+            super::connection_curve_points(outside_loop_center, outside_loop_center, 100.0, true);
+        let loop_viewport =
+            egui::Rect::from_min_max(egui::pos2(950.0, -160.0), egui::pos2(1_050.0, -120.0));
+        assert!(super::chart_link_route_may_intersect_viewport(
+            &self_loop,
+            egui::Rect::from_center_size(
+                super::connection_label_position(&self_loop, true, 100.0, 1.0),
+                egui::vec2(110.0, 18.0),
+            ),
+            0,
+            loop_viewport,
+            1.0,
+        ));
+        let high_lane_loop = super::connection_curve_points(
+            egui::pos2(0.0, 300.0),
+            egui::pos2(0.0, 300.0),
+            54.0,
+            true,
+        );
+        let high_lane_label = super::connection_label_position(&high_lane_loop, true, 54.0, 1.0);
+        let high_lane_viewport = egui::Rect::from_min_max(
+            egui::pos2(high_lane_label.x - 2.0, high_lane_label.y - 2.0),
+            egui::pos2(high_lane_label.x + 2.0, high_lane_label.y + 2.0),
+        );
+        assert!(
+            super::chart_link_route_may_intersect_viewport(
+                &high_lane_loop,
+                egui::Rect::from_center_size(high_lane_label, egui::vec2(110.0, 18.0)),
+                0,
+                high_lane_viewport,
+                1.0,
+            ),
+            "a high lane cannot cull its visible self-loop label"
+        );
+        assert!(
+            super::chart_link_route_may_intersect_viewport(
+                &[egui::pos2(1_020.0, 300.0), egui::pos2(1_040.0, 310.0)],
+                egui::Rect::from_center_size(egui::pos2(940.0, 300.0), egui::vec2(110.0, 18.0),),
+                4,
+                viewport,
+                1.0,
+            ),
+            "the conservative margin retains a nearby label or attribute row"
+        );
+        assert!(!super::chart_link_route_may_intersect_viewport(
+            &[egui::pos2(1_300.0, 300.0), egui::pos2(1_400.0, 310.0)],
+            egui::Rect::from_center_size(egui::pos2(1_350.0, 300.0), egui::vec2(110.0, 18.0)),
+            0,
+            viewport,
+            1.0,
+        ));
+        assert!(super::chart_link_route_may_intersect_viewport(
+            &[],
+            offscreen_label,
+            0,
+            viewport,
+            1.0,
+        ));
     }
 
     #[test]

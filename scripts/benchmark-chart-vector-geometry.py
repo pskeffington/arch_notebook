@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import platform
 import subprocess
@@ -20,6 +21,8 @@ def main() -> int:
     parser.add_argument("--output", type=Path, required=True, help="JSON report path")
     parser.add_argument("--iterations", type=int, default=7)
     parser.add_argument("--sizes", type=int, nargs="+", default=[100, 1_000, 10_000])
+    parser.add_argument("--pan", type=float, nargs=2, default=(0.0, 0.0), metavar=("X", "Y"))
+    parser.add_argument("--zoom", type=float, default=None)
     parser.add_argument(
         "--families",
         nargs="+",
@@ -30,6 +33,7 @@ def main() -> int:
     binary = args.binary.resolve(strict=True)
     if not binary.is_file():
         parser.error(f"not a file: {binary}")
+    binary_sha256 = hashlib.sha256(binary.read_bytes()).hexdigest()
     if args.iterations < 5:
         parser.error("--iterations must be at least 5")
     if any(size < 10 or size > 10_000 for size in args.sizes):
@@ -56,6 +60,15 @@ def main() -> int:
                     capture_output=True,
                     text=True,
                 )
+                if args.zoom is not None or args.pan != (0.0, 0.0):
+                    case = json.loads(fixture.read_text(encoding="utf-8"))
+                    if args.zoom is not None:
+                        case["active_chart_zoom"] = args.zoom
+                    case["active_chart_pan"] = list(args.pan)
+                    fixture.write_text(
+                        json.dumps(case, ensure_ascii=False, indent=2) + "\n",
+                        encoding="utf-8",
+                    )
                 completed = subprocess.run(
                     [
                         str(binary),
@@ -77,10 +90,12 @@ def main() -> int:
         "benchmark_suite": "arch_notebook_chart_vector_cpu_geometry",
         "host": {"platform": platform.platform(), "machine": platform.machine()},
         "binary": str(binary),
+        "binary_sha256": binary_sha256,
         "results": results,
+        "view_transform": {"zoom": args.zoom, "pan": list(args.pan)},
         "limitations": [
             "Synthetic fictional graph fixtures only.",
-            "Measures CPU geometry preparation and nearest-link hit testing only.",
+            "Measures CPU geometry preparation and nearest-link hit testing; viewport cull counts estimate records omitted from link paint submission.",
             "Does not measure painting, text shaping, GPU work, compositor or presentation latency, or FPS.",
             "Timing values are host-specific and are not universal performance targets.",
         ],

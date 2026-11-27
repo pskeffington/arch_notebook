@@ -23,4 +23,4 @@ The regression executes one successful synthetic SQL job, starts a long-running 
 
 ## Limits and next action
 
-This is headless worker-level coverage; it does not verify clicking the native cancel button. Actual systemd timer dispatch also remains unverified because the user-scope systemd bus denies access, as recorded in `SQL-SCHED-01-linux.md`. Continue native desktop automation interaction and visual acceptance when the display is available.
+**Follow-up:** the cancellation regression now drives the actual Automation cancel button through a headless egui event test and verifies the running UI, cancellation state, retained checkpoint, and unchanged SQLite source. See [SQL-CANCEL-02 headless UI evidence](SQL-CANCEL-02-headless-ui-linux.md). Native pointer/visual acceptance and live systemd timer dispatch remain unverified; the user-scope systemd bus denies access as recorded in `SQL-SCHED-01-linux.md`.
