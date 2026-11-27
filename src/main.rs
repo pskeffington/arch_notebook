@@ -1574,6 +1574,10 @@ struct ChartTemplate {
     name: String,
     entity_styles: Vec<ChartTemplateEntityStyle>,
     relationship_types: Vec<String>,
+    #[serde(default)]
+    conditional_rules: Vec<ChartLegendEntry>,
+    #[serde(default)]
+    conditional_rules_truncated: bool,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -1599,13 +1603,32 @@ struct ChartLabel {
     legend_entries: Vec<ChartLegendEntry>,
     #[serde(default)]
     legend_entries_truncated: bool,
+    #[serde(default)]
+    template_rules_for: Option<Uuid>,
 }
 
 const MAX_CHART_LEGEND_ENTRIES: usize = 24;
 const MAX_CHART_LEGEND_DESCRIPTION_BYTES: usize = 4_096;
 const MAX_CHART_LEGEND_CONDITIONS: usize = 8;
+const MAX_CHART_TEMPLATE_CONDITIONAL_RULES: usize = MAX_CHART_LEGEND_ENTRIES * 4;
 
-#[derive(Clone, Serialize, Deserialize)]
+fn chart_template_saved_status(
+    action: &str,
+    name: &str,
+    conditional_rule_count: usize,
+    conditional_rules_truncated: bool,
+) -> String {
+    let mut status = format!("CHART TEMPLATE {action} · {name}");
+    if conditional_rule_count > 0 {
+        status.push_str(&format!(" · {conditional_rule_count} CONDITIONAL RULES"));
+    }
+    if conditional_rules_truncated {
+        status.push_str(" · RULE LIMIT REACHED");
+    }
+    status
+}
+
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 struct ChartLegendEntry {
     description: String,
     #[serde(default)]
@@ -1632,7 +1655,7 @@ struct ChartLegendEntry {
     conditional_line_width: Option<f32>,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 struct ChartLegendConditionRule {
     #[serde(default)]
     attribute_class: String,
@@ -2013,11 +2036,15 @@ fn chart_matching_conditional_entry<'a>(
     attributes: &[(String, String)],
     labels: &'a [ChartLabel],
 ) -> Option<&'a ChartLegendEntry> {
-    for entry in labels
+    let template_entries = labels
         .iter()
-        .filter(|label| label.is_legend)
-        .flat_map(|label| &label.legend_entries)
-    {
+        .filter(|label| label.is_legend && label.template_rules_for.is_some())
+        .flat_map(|label| &label.legend_entries);
+    let chart_entries = labels
+        .iter()
+        .filter(|label| label.is_legend && label.template_rules_for.is_none())
+        .flat_map(|label| &label.legend_entries);
+    for entry in template_entries.chain(chart_entries) {
         if !entry.conditional_color || !entry.symbol.is_attribute() {
             continue;
         }
@@ -3884,8 +3911,33 @@ impl App {
                 break;
             }
         }
-        if entity_styles.is_empty() && relationship_types.is_empty() {
-            self.status = "ADD A TYPED ITEM BEFORE SAVING A CHART TEMPLATE".into();
+        let mut conditional_rules = Vec::new();
+        for entry in self
+            .case
+            .labels
+            .iter()
+            .filter(|label| label.is_legend)
+            .flat_map(|label| &label.legend_entries)
+        {
+            let has_attribute_class = entry
+                .attribute_class
+                .as_deref()
+                .is_some_and(|attribute_class| !attribute_class.trim().is_empty());
+            if entry.conditional_color
+                && entry.symbol.is_attribute()
+                && has_attribute_class
+                && !conditional_rules.contains(entry)
+            {
+                conditional_rules.push(entry.clone());
+            }
+        }
+        let conditional_rules_truncated =
+            conditional_rules.len() > MAX_CHART_TEMPLATE_CONDITIONAL_RULES;
+        conditional_rules.truncate(MAX_CHART_TEMPLATE_CONDITIONAL_RULES);
+        if entity_styles.is_empty() && relationship_types.is_empty() && conditional_rules.is_empty()
+        {
+            self.status =
+                "ADD A TYPED ITEM OR CONDITIONAL RULE BEFORE SAVING A CHART TEMPLATE".into();
             return;
         }
         let name: String = self
@@ -3907,8 +3959,15 @@ impl App {
         {
             existing.entity_styles = entity_styles;
             existing.relationship_types = relationship_types;
+            existing.conditional_rules = conditional_rules;
+            existing.conditional_rules_truncated = conditional_rules_truncated;
             self.case.active_chart_template = Some(existing.id);
-            self.status = format!("CHART TEMPLATE UPDATED · {name}");
+            self.status = chart_template_saved_status(
+                "UPDATED",
+                &name,
+                existing.conditional_rules.len(),
+                existing.conditional_rules_truncated,
+            );
             return;
         }
         if self.case.chart_templates.len() >= 32 {
@@ -3920,10 +3979,18 @@ impl App {
             name: name.clone(),
             entity_styles,
             relationship_types,
+            conditional_rules,
+            conditional_rules_truncated,
         };
+        let status = chart_template_saved_status(
+            "SAVED",
+            &name,
+            template.conditional_rules.len(),
+            template.conditional_rules_truncated,
+        );
         self.case.active_chart_template = Some(template.id);
         self.case.chart_templates.push(template);
-        self.status = format!("CHART TEMPLATE SAVED · {name}");
+        self.status = status;
     }
 
     fn apply_chart_template(&mut self, template_id: Uuid) {
@@ -3947,9 +4014,63 @@ impl App {
                 entity.color = style.color;
             }
         }
+        self.case
+            .labels
+            .retain(|label| label.template_rules_for.is_none());
+        let existing_rules = self
+            .case
+            .labels
+            .iter()
+            .filter(|label| label.is_legend)
+            .flat_map(|label| &label.legend_entries)
+            .collect::<Vec<_>>();
+        let missing_rules = template
+            .conditional_rules
+            .iter()
+            .filter(|rule| !existing_rules.iter().any(|existing| *existing == *rule))
+            .cloned()
+            .collect::<Vec<_>>();
+        let rule_chunks = missing_rules
+            .chunks(MAX_CHART_LEGEND_ENTRIES)
+            .collect::<Vec<_>>();
+        for (chunk_index, rules) in rule_chunks.iter().enumerate() {
+            let truncated =
+                template.conditional_rules_truncated && chunk_index + 1 == rule_chunks.len();
+            let [x, y] = chart_legend_initial_position(&self.case, rules, truncated);
+            self.case.labels.push(ChartLabel {
+                id: Uuid::new_v4(),
+                text: if rule_chunks.len() == 1 {
+                    format!("{} · Rules", template.name)
+                } else {
+                    format!(
+                        "{} · Rules {}/{}",
+                        template.name,
+                        chunk_index + 1,
+                        rule_chunks.len()
+                    )
+                },
+                x,
+                y,
+                font_size: 12.0,
+                color: default_chart_label_color(),
+                is_legend: true,
+                legend_entries: rules.to_vec(),
+                legend_entries_truncated: truncated,
+                template_rules_for: Some(template_id),
+            });
+        }
         self.case.active_chart_template = Some(template_id);
         self.invalidate_network_groups();
-        self.status = format!("CHART TEMPLATE APPLIED · {}", template.name);
+        self.status = format!(
+            "CHART TEMPLATE APPLIED · {} · {} CONDITIONAL RULES ACTIVE{}",
+            template.name,
+            template.conditional_rules.len(),
+            if template.conditional_rules_truncated {
+                " · SAVED RULE LIMIT REACHED"
+            } else {
+                ""
+            }
+        );
     }
 
     fn delete_chart_template(&mut self, template_id: Uuid) {
@@ -3965,6 +4086,9 @@ impl App {
         self.case
             .chart_templates
             .retain(|template| template.id != template_id);
+        self.case
+            .labels
+            .retain(|label| label.template_rules_for != Some(template_id));
         if self.case.active_chart_template == Some(template_id) {
             self.case.active_chart_template = None;
         }
@@ -3972,6 +4096,9 @@ impl App {
             if chart.template_id == Some(template_id) {
                 chart.template_id = None;
             }
+            chart
+                .labels
+                .retain(|label| label.template_rules_for != Some(template_id));
         }
         self.status = format!("CHART TEMPLATE DELETED · {template}");
     }
@@ -18778,6 +18905,7 @@ impl eframe::App for App {
                             is_legend: true,
                             legend_entries,
                             legend_entries_truncated,
+                            template_rules_for: None,
                         };
                         self.page = WorkspacePage::Chart;
                         self.show_timeline = false;
@@ -19124,7 +19252,10 @@ impl eframe::App for App {
                     });
                     ui.menu_button("View…", |ui| {
                         ui.menu_button("Chart templates", |ui| {
-                            if ui.button("Save current chart as template").clicked() {
+                            if ui.button("Save current chart as template")
+                                .on_hover_text("Save entity styles, relationship vocabulary, and conditional attribute formatting rules for reuse in this case.")
+                                .clicked()
+                            {
                                 self.save_chart_template();
                                 ui.close_menu();
                             }
@@ -19136,9 +19267,24 @@ impl eframe::App for App {
                             for template in templates {
                                 let selected = self.case.active_chart_template == Some(template.id);
                                 ui.horizontal(|ui| {
-                                    if ui.selectable_label(selected, &template.name).clicked() {
+                                    if ui
+                                        .selectable_label(selected, &template.name)
+                                        .on_hover_text(format!(
+                                            "Apply entity styles and relationship vocabulary, plus {} conditional attribute rules{}.",
+                                            template.conditional_rules.len(),
+                                            if template.conditional_rules_truncated { " (saved rules were capped)" } else { "" }
+                                        ))
+                                        .clicked()
+                                    {
                                         self.apply_chart_template(template.id);
                                         ui.close_menu();
+                                    }
+                                    if !template.conditional_rules.is_empty() {
+                                        ui.label(egui::RichText::new(format!(
+                                            "{} rules{}",
+                                            template.conditional_rules.len(),
+                                            if template.conditional_rules_truncated { "+" } else { "" }
+                                        )).small().color(muted));
                                     }
                                     if ui.small_button("×").on_hover_text("Delete this case template").clicked() {
                                         self.delete_chart_template(template.id);
@@ -24288,6 +24434,7 @@ impl eframe::App for App {
                                         is_legend: false,
                                         legend_entries: Vec::new(),
                                         legend_entries_truncated: false,
+                                        template_rules_for: None,
                                     };
                                     self.selected_chart_label = Some(label.id);
                                     self.case.labels.push(label);
@@ -31879,6 +32026,7 @@ fn anx_item_to_graphml(
                     is_legend,
                     legend_entries,
                     legend_entries_truncated,
+                    template_rules_for: None,
                 },
                 x: label_x.or_else(|| {
                     item.end_x
@@ -47457,6 +47605,232 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn chart_templates_save_apply_and_replace_conditional_attribute_rules() {
+        let mut case = super::demo_case();
+        case.active_chart_title = "Conditional rules".into();
+        case.entities.clear();
+        case.links.clear();
+        let rule = super::ChartLegendEntry {
+            description: "Active priority contacts".into(),
+            symbol: super::ChartLegendSymbol::AttributeCircle,
+            color: [220, 45, 60],
+            attribute_class: Some("Status".into()),
+            show_on_chart: true,
+            conditional_color: true,
+            match_exact_value: false,
+            condition: super::ChartLegendCondition::Equal,
+            conditional_value: "ACTIVE".into(),
+            additional_conditions: vec![super::ChartLegendConditionRule {
+                attribute_class: "Priority".into(),
+                condition: super::ChartLegendCondition::GreaterThan,
+                value: "5".into(),
+            }],
+            additional_conditions_match_any: false,
+            conditional_line_width: Some(3.5),
+        };
+        case.labels.push(super::ChartLabel {
+            id: Uuid::from_u128(10),
+            text: "Chart legend".into(),
+            x: 0.5,
+            y: 0.5,
+            font_size: 12.0,
+            color: [240, 240, 240],
+            is_legend: true,
+            legend_entries: vec![rule.clone()],
+            legend_entries_truncated: false,
+            template_rules_for: None,
+        });
+
+        let mut app = super::App::automation_context(case, "/tmp/chart-template-rules.case.json");
+        app.save_chart_template();
+        let template_id = app.case.chart_templates[0].id;
+        assert!(app.case.chart_templates[0].conditional_rules == [rule.clone()]);
+        assert!(!app.case.chart_templates[0].conditional_rules_truncated);
+        assert!(app.status.contains("1 CONDITIONAL RULES"));
+
+        let legacy_template: super::ChartTemplate = serde_json::from_value(serde_json::json!({
+            "id": Uuid::from_u128(11),
+            "name": "Legacy template",
+            "entity_styles": [],
+            "relationship_types": []
+        }))
+        .expect("older templates without conditional rule fields remain readable");
+        assert!(legacy_template.conditional_rules.is_empty());
+        assert!(!legacy_template.conditional_rules_truncated);
+        let legacy_label: super::ChartLabel = serde_json::from_value(serde_json::json!({
+            "id": Uuid::from_u128(13),
+            "text": "Legacy legend",
+            "x": 0.5,
+            "y": 0.5,
+            "font_size": 12.0,
+            "color": [240, 240, 240],
+            "is_legend": true,
+            "legend_entries": [],
+            "legend_entries_truncated": false
+        }))
+        .expect("older chart labels without generated-template ownership remain readable");
+        assert_eq!(legacy_label.template_rules_for, None);
+
+        let mut entity = layout_entity("Analyst target", "PERSON", false);
+        entity.attributes = vec![
+            ("Status".into(), "ACTIVE".into()),
+            ("Priority".into(), "9".into()),
+        ];
+        app.case.entities = vec![entity];
+        let mut local_rule = rule.clone();
+        local_rule.color = [20, 80, 200];
+        local_rule.conditional_line_width = Some(1.0);
+        app.case.labels = vec![super::ChartLabel {
+            id: Uuid::from_u128(12),
+            text: "Local rules".into(),
+            x: 0.25,
+            y: 0.25,
+            font_size: 12.0,
+            color: [240, 240, 240],
+            is_legend: true,
+            legend_entries: vec![local_rule],
+            legend_entries_truncated: false,
+            template_rules_for: None,
+        }];
+        app.apply_chart_template(template_id);
+
+        assert_eq!(
+            super::chart_conditional_attribute_color(
+                &app.case.entities[0].attributes,
+                &app.case.labels
+            ),
+            Some([220, 45, 60]),
+            "template rules take precedence over conflicting chart rules"
+        );
+        assert_eq!(
+            super::chart_conditional_attribute_line_width(
+                &app.case.entities[0].attributes,
+                &app.case.labels
+            ),
+            Some(3.5)
+        );
+        assert_eq!(
+            app.case
+                .labels
+                .iter()
+                .filter(|label| label.template_rules_for == Some(template_id))
+                .count(),
+            1
+        );
+
+        let saved_case = serde_json::to_string(&app.case).expect("case serialization succeeds");
+        let restored_case: super::CaseFile =
+            serde_json::from_str(&saved_case).expect("template rules survive case persistence");
+        assert!(
+            restored_case
+                .labels
+                .iter()
+                .any(|label| label.template_rules_for == Some(template_id))
+        );
+        assert!(restored_case.chart_templates[0].conditional_rules == [rule]);
+
+        app.apply_chart_template(template_id);
+        assert_eq!(
+            app.case
+                .labels
+                .iter()
+                .filter(|label| label.template_rules_for == Some(template_id))
+                .count(),
+            1,
+            "reapplying a template replaces its generated rules instead of duplicating them"
+        );
+        app.delete_chart_template(template_id);
+        assert!(
+            !app.case
+                .labels
+                .iter()
+                .any(|label| label.template_rules_for == Some(template_id))
+        );
+        assert!(app.case.chart_templates.is_empty());
+    }
+
+    #[test]
+    fn chart_template_conditional_rule_limit_is_visible_and_bounded() {
+        let mut case = super::demo_case();
+        case.active_chart_title = "Bounded rules".into();
+        case.entities.clear();
+        case.links.clear();
+        let entries = (0..=super::MAX_CHART_TEMPLATE_CONDITIONAL_RULES)
+            .map(|index| super::ChartLegendEntry {
+                description: format!("Rule {index}"),
+                symbol: super::ChartLegendSymbol::AttributeSquare,
+                color: [index as u8, 30, 60],
+                attribute_class: Some(format!("Attribute {index}")),
+                show_on_chart: true,
+                conditional_color: true,
+                match_exact_value: true,
+                condition: super::ChartLegendCondition::Equal,
+                conditional_value: "active".into(),
+                additional_conditions: Vec::new(),
+                additional_conditions_match_any: false,
+                conditional_line_width: None,
+            })
+            .collect::<Vec<_>>();
+        case.labels = entries
+            .chunks(super::MAX_CHART_LEGEND_ENTRIES)
+            .enumerate()
+            .map(|(index, legend_entries)| super::ChartLabel {
+                id: Uuid::from_u128(100 + index as u128),
+                text: format!("Legend {index}"),
+                x: 0.5,
+                y: 0.5,
+                font_size: 12.0,
+                color: [240, 240, 240],
+                is_legend: true,
+                legend_entries: legend_entries.to_vec(),
+                legend_entries_truncated: false,
+                template_rules_for: None,
+            })
+            .collect();
+
+        let mut app =
+            super::App::automation_context(case, "/tmp/chart-template-rule-limit.case.json");
+        app.save_chart_template();
+        let template_id = app.case.chart_templates[0].id;
+        assert_eq!(
+            app.case.chart_templates[0].conditional_rules.len(),
+            super::MAX_CHART_TEMPLATE_CONDITIONAL_RULES
+        );
+        assert!(app.case.chart_templates[0].conditional_rules_truncated);
+        assert!(app.status.contains("RULE LIMIT REACHED"));
+
+        app.case.labels.clear();
+        app.apply_chart_template(template_id);
+        let generated = app
+            .case
+            .labels
+            .iter()
+            .filter(|label| label.template_rules_for == Some(template_id))
+            .collect::<Vec<_>>();
+        assert_eq!(generated.len(), 4);
+        assert_eq!(
+            generated
+                .iter()
+                .map(|label| label.legend_entries.len())
+                .sum::<usize>(),
+            super::MAX_CHART_TEMPLATE_CONDITIONAL_RULES
+        );
+        assert!(generated.last().unwrap().legend_entries_truncated);
+        assert!(app.status.contains("SAVED RULE LIMIT REACHED"));
+
+        app.apply_chart_template(template_id);
+        assert_eq!(
+            app.case
+                .labels
+                .iter()
+                .filter(|label| label.template_rules_for == Some(template_id))
+                .count(),
+            4,
+            "reapplying does not multiply generated rule legends"
+        );
     }
 
     #[test]
