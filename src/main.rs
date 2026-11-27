@@ -1620,6 +1620,10 @@ const PROXIMITY_MAP_MAX_NODE_RADIUS: f32 = 15.0;
 const PROXIMITY_MAP_LABEL_OFFSET: f32 = 5.0;
 const PROXIMITY_MAP_SELECTED_EDGE_COLOR: egui::Color32 = egui::Color32::from_rgb(244, 224, 166);
 
+fn count_with_noun(count: usize, singular: &str, plural: &str) -> String {
+    format!("{count} {}", if count == 1 { singular } else { plural })
+}
+
 fn chart_template_saved_status(
     action: &str,
     name: &str,
@@ -26106,10 +26110,10 @@ impl eframe::App for App {
                             if let Some(center) = self.case.entities.iter().find(|entity| entity.id == origin) {
                                 let reached_count: usize = layers.iter().map(Vec::len).sum();
                                 ui.label(egui::RichText::new(format!(
-                                    "Computed from {} · {} reachable entities across {} hop layers",
+                                    "Computed from {} · {} reachable entities across {}",
                                     center.name,
                                     reached_count,
-                                    layers.len(),
+                                    count_with_noun(layers.len(), "hop layer", "hop layers"),
                                 )).small().color(muted));
                                 for (index, layer) in layers.iter().enumerate() {
                                     let names = layer
@@ -26119,7 +26123,11 @@ impl eframe::App for App {
                                         .collect::<Vec<_>>()
                                         .join(" · ");
                                     ui.horizontal(|ui| {
-                                        ui.label(format!("{} hop · {} entities", index + 1, layer.len()));
+                                        ui.label(format!(
+                                            "{} · {}",
+                                            count_with_noun(index + 1, "hop", "hops"),
+                                            count_with_noun(layer.len(), "entity", "entities"),
+                                        ));
                                         if ui.small_button("Show layer").clicked() {
                                             let mut fit_entities = Vec::with_capacity(layer.len() + 1);
                                             fit_entities.push(origin);
@@ -26151,11 +26159,11 @@ impl eframe::App for App {
                             ui.add_space(8.0);
                             ui.label(egui::RichText::new("CONTACT GROUPS BY HOP").size(9.0).strong().color(cyan));
                             ui.label(egui::RichText::new(format!(
-                                "{} within-layer contact groups · {} cross-group records · {} reachable · {} outside the origin component",
-                                analysis.groups.len(),
-                                analysis.cross_group_relationship_record_count,
+                                "{} · {} · {} reachable · {} outside the origin component",
+                                count_with_noun(analysis.groups.len(), "within-layer contact group", "within-layer contact groups"),
+                                count_with_noun(analysis.cross_group_relationship_record_count, "cross-group record", "cross-group records"),
                                 analysis.reachable_entity_count,
-                                analysis.unreachable_entity_count,
+                                count_with_noun(analysis.unreachable_entity_count, "entity", "entities"),
                             )).small().color(muted));
                             ui.label(egui::RichText::new(
                                 "Entities at the same hop are grouped when they contact within that layer. Group links retain record counts and direction; parallel records remain individually inspectable.",
@@ -26302,9 +26310,13 @@ impl eframe::App for App {
                                                 + egui::vec2(0.0, radius + PROXIMITY_MAP_LABEL_OFFSET),
                                             egui::Align2::CENTER_TOP,
                                             format!(
-                                                "{} entities · {} internal",
-                                                group.members.len(),
-                                                group.internal_record_count,
+                                                "{} · {}",
+                                                count_with_noun(group.members.len(), "entity", "entities"),
+                                                count_with_noun(
+                                                    group.internal_record_count,
+                                                    "internal record",
+                                                    "internal records",
+                                                ),
                                             ),
                                             egui::FontId::proportional(9.0),
                                             muted,
@@ -26319,11 +26331,11 @@ impl eframe::App for App {
                                             egui::Sense::click(),
                                         );
                                         response.clone().on_hover_text(format!(
-                                            "Group {} · hop {} · {} entities · {} internal records{}\nClick to show this group on the chart.",
+                                            "Group {} · hop {} · {} · {}{}\nClick to show this group on the chart.",
                                             group_index + 1,
                                             group.hop_distance,
-                                            group.members.len(),
-                                            group.internal_record_count,
+                                            count_with_noun(group.members.len(), "entity", "entities"),
+                                            count_with_noun(group.internal_record_count, "internal record", "internal records"),
                                             if contains_proxy { " · contains a cross-group proxy" } else { "" },
                                         ));
                                         if response.clicked() {
@@ -26394,11 +26406,11 @@ impl eframe::App for App {
                                 .and_then(|index| analysis.interactions.get(index))
                                 .map(|interaction| {
                                     format!(
-                                        "Group {} ↔ Group {} · {} records · {} endpoint pairs · →{} ←{} ↔{}",
+                                        "Group {} ↔ Group {} · {} · {} · →{} ←{} ↔{}",
                                         interaction.first_group + 1,
                                         interaction.second_group + 1,
-                                        interaction.relationship_record_count,
-                                        interaction.distinct_endpoint_pair_count,
+                                        count_with_noun(interaction.relationship_record_count, "record", "records"),
+                                        count_with_noun(interaction.distinct_endpoint_pair_count, "endpoint pair", "endpoint pairs"),
                                         interaction.first_to_second_record_count,
                                         interaction.second_to_first_record_count,
                                         interaction.undirected_record_count,
@@ -26416,9 +26428,10 @@ impl eframe::App for App {
                                 || displayed_hops.len() < hop_count
                             {
                                 ui.label(egui::RichText::new(format!(
-                                    "Map shows {visible_group_count} of {} groups across {} of {hop_count} hop layers; all groups and interaction records remain listed below.",
-                                    analysis.groups.len(),
-                                    displayed_hops.len(),
+                                    "Map shows {} of {} across {}; all groups and interaction records remain listed below.",
+                                    count_with_noun(visible_group_count, "group", "groups"),
+                                    count_with_noun(analysis.groups.len(), "group", "groups"),
+                                    count_with_noun(displayed_hops.len(), "hop layer", "hop layers"),
                                 )).small().color(muted));
                             }
                             ui.horizontal(|ui| {
@@ -26444,8 +26457,11 @@ impl eframe::App for App {
                                             .collect::<Vec<_>>().join(" · ");
                                         ui.horizontal(|ui| {
                                             ui.label(format!(
-                                                "Group {:02} · hop {} · {} entities · {} internal records",
-                                                index + 1, group.hop_distance, group.members.len(), group.internal_record_count,
+                                    "Group {:02} · hop {} · {} · {}",
+                                    index + 1,
+                                    group.hop_distance,
+                                    count_with_noun(group.members.len(), "entity", "entities"),
+                                    count_with_noun(group.internal_record_count, "internal record", "internal records"),
                                             )).on_hover_text(sample_names);
                                             if ui.small_button("Show").clicked() {
                                                 self.chart_fit_entities = Some(group.members.clone());
@@ -26473,11 +26489,11 @@ impl eframe::App for App {
                                             let interaction = &analysis.interactions[row];
                                             let key = (interaction.first_group, interaction.second_group);
                                             let label = format!(
-                                                "G{} ↔ G{} · {} records / {} endpoint pairs · →{} ←{} ↔{}",
+                                                "G{} ↔ G{} · {} / {} · →{} ←{} ↔{}",
                                                 interaction.first_group + 1,
                                                 interaction.second_group + 1,
-                                                interaction.relationship_record_count,
-                                                interaction.distinct_endpoint_pair_count,
+                                                count_with_noun(interaction.relationship_record_count, "record", "records"),
+                                                count_with_noun(interaction.distinct_endpoint_pair_count, "endpoint pair", "endpoint pairs"),
                                                 interaction.first_to_second_record_count,
                                                 interaction.second_to_first_record_count,
                                                 interaction.undirected_record_count,
@@ -26556,7 +26572,11 @@ impl eframe::App for App {
                                         self.page = WorkspacePage::Chart;
                                         self.show_timeline = false;
                                     }
-                                    ui.label(format!("{} distinct entities · {} records", proxy.distinct_counterpart_entities, proxy.relationship_record_count));
+                                    ui.label(format!(
+                                        "{} · {}",
+                                        count_with_noun(proxy.distinct_counterpart_entities, "distinct entity", "distinct entities"),
+                                        count_with_noun(proxy.relationship_record_count, "record", "records"),
+                                    ));
                                 });
                             }
                         }
@@ -45355,7 +45375,18 @@ mod tests {
             .expect("fixture has an outer contact group")
             .members
             .clone();
-        assert!(find_headless_text_rect(&visible_contact_map, "3 entities · 3 internal").is_some());
+        assert!(
+            find_headless_text_rect(&visible_contact_map, "3 entities · 3 internal records")
+                .is_some()
+        );
+        assert!(
+            find_headless_text_rect(&visible_contact_map, "1 entity · 0 internal records")
+                .is_some()
+        );
+        assert!(
+            find_headless_text_rect(&visible_contact_map, "G2 ↔ G4 · 1 record / 1 endpoint pair")
+                .is_some()
+        );
         assert!(find_headless_text_rect(&visible_contact_map, "HOP 0").is_some());
         assert_eq!(
             count_strokes_with_color(&visible_contact_map, egui::Color32::from_rgb(84, 194, 205),),
@@ -45399,11 +45430,19 @@ mod tests {
             })
             .expect("painted line resolves to its exact interaction counts");
         let expected_hover_summary = format!(
-            "Group {} ↔ Group {} · {} records · {} endpoint pairs",
+            "Group {} ↔ Group {} · {} · {}",
             first_map_interaction.0 + 1,
             first_map_interaction.1 + 1,
-            hover_interaction.relationship_record_count,
-            hover_interaction.distinct_endpoint_pair_count,
+            super::count_with_noun(
+                hover_interaction.relationship_record_count,
+                "record",
+                "records"
+            ),
+            super::count_with_noun(
+                hover_interaction.distinct_endpoint_pair_count,
+                "endpoint pair",
+                "endpoint pairs"
+            ),
         );
         time += 1.0;
         render_headless_app_frame_at(
