@@ -44031,6 +44031,109 @@ mod tests {
             .shapes
     }
 
+    #[test]
+    #[ignore = "opt-in headless UI/tessellation CPU benchmark; see SNG-DELIVERY-002 G4 evidence"]
+    fn benchmark_headless_chart_ui_and_tessellation_cpu() {
+        use std::time::Instant;
+
+        let case_path = std::env::var("ARCH_NOTEBOOK_CHART_RENDER_BENCH_CASE")
+            .expect("set ARCH_NOTEBOOK_CHART_RENDER_BENCH_CASE to a fictional case JSON path");
+        let iterations = std::env::var("ARCH_NOTEBOOK_CHART_RENDER_BENCH_ITERATIONS")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(30);
+        assert!((5..=1000).contains(&iterations));
+        let contents = std::fs::read_to_string(&case_path).expect("read benchmark case");
+        let case = serde_json::from_str::<CaseFile>(&contents).expect("parse benchmark case");
+        let mut app = App::automation_context(case, &case_path);
+        app.page = super::WorkspacePage::Chart;
+
+        let context = egui::Context::default();
+        let mut frame = eframe::Frame::_new_kittest();
+        let warmup_runs = 5;
+        let mut update_samples = Vec::with_capacity(iterations);
+        let mut tessellation_samples = Vec::with_capacity(iterations);
+        let mut shape_count = 0usize;
+        let mut primitive_count = 0usize;
+        let mut mesh_vertex_count = 0usize;
+        let mut mesh_index_count = 0usize;
+
+        for sample in 0..warmup_runs + iterations {
+            let update_started = Instant::now();
+            let output = context.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1440.0, 900.0),
+                    )),
+                    time: Some(sample as f64 / 60.0),
+                    ..Default::default()
+                },
+                |context| eframe::App::update(&mut app, context, &mut frame),
+            );
+            let update_elapsed = update_started.elapsed().as_nanos();
+            let current_shape_count = output.shapes.len();
+
+            let tessellation_started = Instant::now();
+            let primitives = context.tessellate(output.shapes, output.pixels_per_point);
+            let tessellation_elapsed = tessellation_started.elapsed().as_nanos();
+
+            if sample + 1 == warmup_runs {
+                shape_count = current_shape_count;
+                primitive_count = primitives.len();
+                mesh_vertex_count = primitives
+                    .iter()
+                    .filter_map(|primitive| match &primitive.primitive {
+                        egui::epaint::Primitive::Mesh(mesh) => Some(mesh.vertices.len()),
+                        egui::epaint::Primitive::Callback(_) => None,
+                    })
+                    .sum();
+                mesh_index_count = primitives
+                    .iter()
+                    .filter_map(|primitive| match &primitive.primitive {
+                        egui::epaint::Primitive::Mesh(mesh) => Some(mesh.indices.len()),
+                        egui::epaint::Primitive::Callback(_) => None,
+                    })
+                    .sum();
+            } else if sample >= warmup_runs {
+                assert_eq!(
+                    current_shape_count, shape_count,
+                    "shape count changed between frames"
+                );
+                update_samples.push(update_elapsed);
+                tessellation_samples.push(tessellation_elapsed);
+            }
+        }
+
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "schema_version": 1,
+                "benchmark": "headless_chart_ui_and_egui_tessellation_cpu",
+                "fixture_path": case_path,
+                "fixture_sha256": super::sha256_hex(contents.as_bytes()),
+                "viewport_points": { "width": 1440, "height": 900 },
+                "entities": app.case.entities.len(),
+                "relationship_records": app.case.links.len(),
+                "labels": app.case.labels.len(),
+                "warmup_runs": warmup_runs,
+                "iterations": iterations,
+                "draw_output": {
+                    "clipped_shapes": shape_count,
+                    "tessellated_primitives": primitive_count,
+                    "mesh_vertices": mesh_vertex_count,
+                    "mesh_indices": mesh_index_count,
+                },
+                "timings": {
+                    "app_update_shape_generation": super::duration_summary(&update_samples),
+                    "egui_cpu_tessellation": super::duration_summary(&tessellation_samples),
+                },
+                "scope": "headless full-app App::update CPU shape generation and egui CPU tessellation for one deterministic fictional chart; excludes GPU, compositor, presentation, input-to-display latency, and FPS"
+            }))
+            .expect("serialize benchmark report")
+        );
+    }
+
     fn find_headless_text_point(
         shapes: &[egui::epaint::ClippedShape],
         target: &str,
