@@ -1617,6 +1617,7 @@ const MAX_CHART_LEGEND_CONDITIONS: usize = 8;
 const MAX_CHART_TEMPLATE_CONDITIONAL_RULES: usize = MAX_CHART_LEGEND_ENTRIES * 4;
 const PROXIMITY_MAP_SELECTED_EDGE_COLOR: egui::Color32 = egui::Color32::from_rgb(244, 224, 166);
 const PROXIMITY_MAP_SELECTED_NODE_COLOR: egui::Color32 = egui::Color32::from_rgb(244, 224, 166);
+const PROXIMITY_MAP_ROUTE_SEGMENTS: usize = 12;
 
 fn proximity_map_node_radius(member_count: usize) -> f32 {
     (15.0 + (member_count as f32).max(1.0).log2() * 2.0).clamp(15.0, 23.0)
@@ -1628,6 +1629,94 @@ fn proximity_map_node_hit_radius(member_count: usize, is_proxy: bool) -> f32 {
 
 fn proximity_map_node_position(column: usize, row: usize) -> egui::Pos2 {
     egui::pos2(74.0 + column as f32 * 148.0, 50.0 + row as f32 * 64.0)
+}
+
+fn proximity_map_edge_route(
+    first: egui::Pos2,
+    second: egui::Pos2,
+    interaction_index: usize,
+) -> [egui::Pos2; PROXIMITY_MAP_ROUTE_SEGMENTS + 1] {
+    let delta = second - first;
+    let length = delta.length();
+    let normal = if length > f32::EPSILON {
+        egui::vec2(-delta.y / length, delta.x / length)
+    } else {
+        egui::Vec2::ZERO
+    };
+    let lane = (interaction_index % 9) as f32 - 4.0;
+    let control = first + delta * 0.5 + normal * lane * 5.0;
+    std::array::from_fn(|step| {
+        let t = step as f32 / PROXIMITY_MAP_ROUTE_SEGMENTS as f32;
+        let inverse = 1.0 - t;
+        let point = first.to_vec2() * (inverse * inverse)
+            + control.to_vec2() * (2.0 * inverse * t)
+            + second.to_vec2() * (t * t);
+        egui::pos2(point.x, point.y)
+    })
+}
+
+fn proximity_map_route_length(route: &[egui::Pos2]) -> f32 {
+    route
+        .windows(2)
+        .map(|segment| segment[0].distance(segment[1]))
+        .sum()
+}
+
+fn proximity_map_route_point_with_offset(
+    route: &[egui::Pos2],
+    distance: f32,
+    offset: f32,
+) -> egui::Pos2 {
+    let mut remaining = distance.max(0.0);
+    for segment in route.windows(2) {
+        let length = segment[0].distance(segment[1]);
+        if remaining <= length {
+            let t = if length > f32::EPSILON {
+                remaining / length
+            } else {
+                0.0
+            };
+            let direction = (segment[1] - segment[0]).normalized();
+            let normal = egui::vec2(-direction.y, direction.x);
+            return segment[0].lerp(segment[1], t) + normal * offset;
+        }
+        remaining -= length;
+    }
+    route.last().copied().unwrap_or(egui::Pos2::ZERO)
+}
+
+fn proximity_map_route_tangent(route: &[egui::Pos2], distance: f32) -> egui::Vec2 {
+    let mut remaining = distance.max(0.0);
+    for segment in route.windows(2) {
+        let delta = segment[1] - segment[0];
+        let length = delta.length();
+        if remaining <= length && length > f32::EPSILON {
+            return delta / length;
+        }
+        remaining -= length;
+    }
+    route
+        .windows(2)
+        .rev()
+        .find_map(|segment| {
+            let delta = segment[1] - segment[0];
+            (delta.length_sq() > f32::EPSILON).then(|| delta.normalized())
+        })
+        .unwrap_or(egui::Vec2::ZERO)
+}
+
+fn proximity_map_distance_to_segment(
+    point: egui::Pos2,
+    first: egui::Pos2,
+    second: egui::Pos2,
+) -> f32 {
+    let segment = second - first;
+    let length_sq = segment.length_sq();
+    if length_sq <= f32::EPSILON {
+        return point.distance(first);
+    }
+    let t = ((point - first).dot(segment) / length_sq).clamp(0.0, 1.0);
+    point.distance(first + segment * t)
 }
 
 fn proximity_map_height(row_count: usize) -> f32 {
@@ -26305,62 +26394,79 @@ impl eframe::App for App {
                                                 && positions.contains_key(&interaction.second_group)
                                         })
                                         .collect();
-                                    let mut edge_lanes = HashMap::<(usize, usize), usize>::new();
+                                    let mut visible_routes =
+                                        Vec::with_capacity(visible_interactions.len());
                                     for interaction_index in &visible_interactions {
                                         let interaction = &analysis.interactions[*interaction_index];
                                         let is_selected = self.selected_proximity_interaction
                                             == Some((interaction.first_group, interaction.second_group));
                                         let first = positions[&interaction.first_group];
                                         let second = positions[&interaction.second_group];
-                                        let lane = edge_lanes
-                                            .entry((interaction.first_group, interaction.second_group))
-                                            .or_default();
-                                        let lane_offset = (*lane as f32 - 1.0) * 5.0;
-                                        *lane += 1;
-                                        let delta = second - first;
-                                        let length = delta.length();
-                                        let normal = if length > f32::EPSILON {
-                                            egui::vec2(-delta.y / length, delta.x / length)
-                                        } else {
-                                            egui::Vec2::ZERO
-                                        };
-                                        let edge_start = first + normal * lane_offset;
-                                        let edge_end = second + normal * lane_offset;
+                                        let route = proximity_map_edge_route(
+                                            first,
+                                            second,
+                                            *interaction_index,
+                                        );
                                         let edge_width = (1.0_f32
                                             + (interaction.relationship_record_count as f32).log2())
                                         .clamp(1.0, 4.0);
-                                        painter.line_segment(
-                                            [edge_start, edge_end],
-                                            egui::Stroke::new(
+                                        let base_stroke = egui::Stroke::new(
                                                 edge_width,
                                                 egui::Color32::from_rgb(66, 111, 129),
-                                            ),
-                                        );
-                                        if is_selected {
-                                            painter.line_segment(
-                                                [edge_start, edge_end],
-                                                egui::Stroke::new(
-                                                    edge_width + 2.0,
-                                                    PROXIMITY_MAP_SELECTED_EDGE_COLOR,
-                                                ),
                                             );
+                                        let selected_stroke = egui::Stroke::new(
+                                            edge_width + 2.0,
+                                            PROXIMITY_MAP_SELECTED_EDGE_COLOR,
+                                        );
+                                        for segment in route.windows(2) {
+                                            painter.line_segment([segment[0], segment[1]], base_stroke);
+                                            if is_selected {
+                                                painter.line_segment(
+                                                    [segment[0], segment[1]],
+                                                    selected_stroke,
+                                                );
+                                            }
                                         }
-                                        if length > f32::EPSILON {
-                                            let direction = delta / length;
+                                        let route_length = proximity_map_route_length(&route);
+                                        if route_length > f32::EPSILON {
                                             let direction_color = egui::Color32::from_rgb(84, 194, 205);
+                                            let reciprocal = interaction.first_to_second_record_count > 0
+                                                && interaction.second_to_first_record_count > 0;
+                                            let lane = if reciprocal { 2.0 } else { 0.0 };
+                                            let midpoint = route_length * 0.5;
+                                            let arrow_half_length = (route_length * 0.08).clamp(4.0, 6.0);
+                                            let arrow_center = proximity_map_route_point_with_offset(
+                                                &route,
+                                                midpoint,
+                                                lane,
+                                            );
+                                            let tangent = proximity_map_route_tangent(&route, midpoint);
                                             if interaction.first_to_second_record_count > 0 {
-                                                let offset = if interaction.second_to_first_record_count > 0 { 2.0 } else { 0.0 };
-                                                let start = edge_start + direction * 25.0 + normal * offset;
-                                                let end = edge_end - direction * 25.0 + normal * offset;
-                                                painter.arrow(start, end - start, egui::Stroke::new(1.2_f32, direction_color));
+                                                let start = arrow_center - tangent * arrow_half_length;
+                                                let end = arrow_center + tangent * arrow_half_length;
+                                                painter.arrow(
+                                                    start,
+                                                    end - start,
+                                                    egui::Stroke::new(1.2_f32, direction_color),
+                                                );
                                             }
                                             if interaction.second_to_first_record_count > 0 {
-                                                let offset = if interaction.first_to_second_record_count > 0 { -2.0 } else { 0.0 };
-                                                let start = edge_end - direction * 25.0 + normal * offset;
-                                                let end = edge_start + direction * 25.0 + normal * offset;
-                                                painter.arrow(start, end - start, egui::Stroke::new(1.2_f32, direction_color));
+                                                let reverse_center = proximity_map_route_point_with_offset(
+                                                    &route,
+                                                    midpoint,
+                                                    -lane,
+                                                );
+                                                let reverse_tangent = -tangent;
+                                                let reverse_start = reverse_center - reverse_tangent * arrow_half_length;
+                                                let reverse_end = reverse_center + reverse_tangent * arrow_half_length;
+                                                painter.arrow(
+                                                    reverse_start,
+                                                    reverse_end - reverse_start,
+                                                    egui::Stroke::new(1.2_f32, direction_color),
+                                                );
                                             }
                                         }
+                                        visible_routes.push((*interaction_index, route));
                                     }
                                     let mut node_clicked = false;
                                     for group_index in analysis.map_group_indices.iter().copied() {
@@ -26414,22 +26520,26 @@ impl eframe::App for App {
                                             self.selected_proximity_interaction = None;
                                         }
                                     }
-                                    let pointer = ui.input(|input| input.pointer.interact_pos());
-                                    let nearest = pointer.and_then(|pointer| {
-                                        visible_interactions
+                                    let nearest = response
+                                        .clicked()
+                                        .then(|| ui.input(|input| input.pointer.interact_pos()))
+                                        .flatten()
+                                        .and_then(|pointer| {
+                                        visible_routes
                                             .iter()
-                                            .filter_map(|interaction_index| {
-                                                let interaction = &analysis.interactions[*interaction_index];
-                                                let first = positions[&interaction.first_group];
-                                                let second = positions[&interaction.second_group];
-                                                let segment = second - first;
-                                                let length_sq = segment.length_sq();
-                                                if length_sq <= f32::EPSILON { return None; }
-                                                let t = ((pointer - first).dot(segment) / length_sq).clamp(0.0, 1.0);
-                                                Some((pointer.distance(first + segment * t), *interaction_index))
+                                            .filter_map(|(interaction_index, route)| {
+                                                let distance = route
+                                                    .windows(2)
+                                                    .map(|segment| proximity_map_distance_to_segment(
+                                                        pointer,
+                                                        segment[0],
+                                                        segment[1],
+                                                    ))
+                                                    .fold(f32::INFINITY, f32::min);
+                                                Some((distance, *interaction_index))
                                             })
                                             .min_by(|left, right| left.0.total_cmp(&right.0))
-                                    });
+                                        });
                                     if !node_clicked && response.clicked()
                                         && let Some((distance, interaction_index)) = nearest
                                         && distance <= 8.0
@@ -44886,6 +44996,26 @@ mod tests {
         find_headless_text_rect(shapes, target).map(|rect| rect.center())
     }
 
+    fn find_headless_text_anchor_center(
+        shapes: &[egui::epaint::ClippedShape],
+        target: &str,
+    ) -> Option<egui::Pos2> {
+        fn in_shape(shape: &egui::epaint::Shape, target: &str) -> Option<egui::Pos2> {
+            match shape {
+                egui::epaint::Shape::Text(text) if text.galley.text().contains(target) => {
+                    Some(text.pos + text.galley.size() * 0.5)
+                }
+                egui::epaint::Shape::Vec(children) => {
+                    children.iter().find_map(|child| in_shape(child, target))
+                }
+                _ => None,
+            }
+        }
+        shapes
+            .iter()
+            .find_map(|clipped| in_shape(&clipped.shape, target))
+    }
+
     fn find_headless_text_rect(
         shapes: &[egui::epaint::ClippedShape],
         target: &str,
@@ -44906,6 +45036,44 @@ mod tests {
                 .filter(|rect| clipped.clip_rect.intersects(*rect))
                 .map(|rect| rect.intersect(clipped.clip_rect))
         })
+    }
+
+    #[test]
+    fn proximity_map_edge_routes_are_curved_deterministic_and_pickable() {
+        let first = egui::pos2(100.0, 80.0);
+        let second = egui::pos2(100.0, 144.0);
+        let first_route = super::proximity_map_edge_route(first, second, 2);
+        let repeated_route = super::proximity_map_edge_route(first, second, 2);
+        let adjacent_route = super::proximity_map_edge_route(first, second, 3);
+
+        assert_eq!(first_route, repeated_route);
+        assert_eq!(first_route.first(), Some(&first));
+        assert_eq!(first_route.last(), Some(&second));
+        assert!(super::proximity_map_route_length(&first_route) > first.distance(second));
+        assert_ne!(first_route[6], adjacent_route[6]);
+        let forward_arrow = super::proximity_map_route_point_with_offset(&first_route, 28.0, 2.0);
+        let reverse_arrow = super::proximity_map_route_point_with_offset(&first_route, 28.0, -2.0);
+        assert!(forward_arrow.distance(reverse_arrow) > 3.9);
+        let tangent = super::proximity_map_route_tangent(&first_route, 28.0);
+        assert!((tangent.length() - 1.0).abs() < 0.001);
+        assert!(
+            tangent.y > 0.0,
+            "forward marker must follow source-to-target route"
+        );
+        assert!(
+            first_route
+                .windows(2)
+                .all(|segment| segment[0].distance(segment[1]) > 0.0)
+        );
+        assert_eq!(
+            super::proximity_map_distance_to_segment(
+                first_route[6],
+                first_route[5],
+                first_route[6],
+            ),
+            0.0,
+            "line picking should hit the rendered route itself"
+        );
     }
 
     fn count_proximity_selection_strokes(
@@ -45537,11 +45705,86 @@ mod tests {
             "contact selection should show its exact record total: {selected_summary}"
         );
         assert!(
-            count_proximity_selection_strokes(&selected_map_view, false) > 0,
-            "selected contact should have a rendered highlight stroke"
+            count_proximity_selection_strokes(&selected_map_view, false) >= 12,
+            "selected contact should highlight every segment of its routed polyline"
         );
+        let hop_zero_center = find_headless_text_anchor_center(&selected_map_view, "HOP 0")
+            .expect("sampled map's first hop label is visible");
+        let map_origin = egui::pos2(hop_zero_center.x - 74.0, hop_zero_center.y - 12.0);
+        let (click_pair, route_click) = {
+            let analysis = &app.network_proximity_analysis.as_ref().unwrap().1;
+            let group_position = |group_index: usize| {
+                let group = &analysis.groups[group_index];
+                let column = analysis
+                    .map_hops
+                    .iter()
+                    .position(|hop| *hop == group.hop_distance)
+                    .expect("sample contains the selected group's hop");
+                let row = analysis
+                    .map_group_indices
+                    .iter()
+                    .filter(|candidate| {
+                        analysis.groups[**candidate].hop_distance == group.hop_distance
+                    })
+                    .position(|candidate| *candidate == group_index)
+                    .expect("selected group has a sampled row");
+                super::proximity_map_node_position(column, row)
+            };
+            analysis
+                .map_interaction_indices
+                .iter()
+                .copied()
+                .find_map(|interaction_index| {
+                    let interaction = &analysis.interactions[interaction_index];
+                    let route = super::proximity_map_edge_route(
+                        group_position(interaction.first_group),
+                        group_position(interaction.second_group),
+                        interaction_index,
+                    );
+                    let click = map_origin + route[6].to_vec2();
+                    (click.x >= map_origin.x
+                        && click.x < 1_432.0
+                        && click.y >= map_origin.y
+                        && click.y < map_origin.y + 180.0)
+                        .then_some(((interaction.first_group, interaction.second_group), click))
+                })
+                .expect("at least one sampled contact route is visible for map picking")
+        };
+        app.selected_proximity_interaction = None;
+        time += 1.0 / 60.0;
+        render_headless_app_frame_at(
+            &context,
+            &mut app,
+            &mut frame,
+            time,
+            vec![
+                egui::Event::PointerMoved(route_click),
+                egui::Event::PointerButton {
+                    pos: route_click,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::default(),
+                },
+            ],
+            map_viewport,
+        );
+        time += 1.0 / 60.0;
+        render_headless_app_frame_at(
+            &context,
+            &mut app,
+            &mut frame,
+            time,
+            vec![egui::Event::PointerButton {
+                pos: route_click,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::default(),
+            }],
+            map_viewport,
+        );
+        assert_eq!(app.selected_proximity_interaction, Some(click_pair));
         assert_eq!(expected_group_members.len(), 3);
-        assert_eq!(app.selected_proximity_group, Some(1));
+        assert_eq!(app.selected_proximity_group, Some(click_pair.0));
 
         let mut app = super::App::automation_context(
             app.case.clone(),

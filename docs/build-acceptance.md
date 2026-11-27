@@ -4,6 +4,10 @@
 
 The sampled map now draws the selected group with a clear outer ring and the selected sampled contact pair with a contrasting wider stroke. Full-index selections outside the bounded sample are labeled accurately while exact-contact records remain available. The 70-test suite and retained Clinton topology UI/sampler pass, including omitted group/pair selections. Native pointer/contrast review remains blocked; exact-head CI is pending. See [PROXIMITY-MAP-SELECTION-FEEDBACK-01](evidence/vector-ui/PROXIMITY-MAP-SELECTION-FEEDBACK-01.md).
 
+## Topology tie routing — 2026-11-27
+
+Sampled contact ties now follow deterministic curved routes; reciprocal direction arrows are offset and tangent-aligned, foreground nodes mask route ends, and pointer picking follows the painted segments. Per-frame route geometry is reused between painting and picking. An independent topology spot-check passes. The 71-test suite, retained Clinton topology UI/sampling checks, locked offline check/debug build, and format checks pass. Exact-head CI could not be dispatched because the GitHub API connection failed; native review and dense-map frame cost remain unverified. See [PROXIMITY-MAP-EDGE-ROUTING-01](evidence/vector-ui/PROXIMITY-MAP-EDGE-ROUTING-01.md).
+
 ## Topology pointer-target geometry — 2026-11-27
 
 Named map-geometry helpers size group nodes and their proxy-ring hit targets, place rows at a measured pitch, and include the last target in the scroll content. The sampled map now reports group, pair, and record coverage plus omitted totals. Production UI regression checks geometry, calculated coverage, and navigation; retained Clinton production UI and sampling checks pass. Exact-head CI [46076464039](https://github.com/pskeffington/arch_notebook/actions/runs/46076464039) passed all six jobs for `25ff6b6`. Native review remains open. See [PROXIMITY-MAP-HIT-GEOMETRY-01](evidence/vector-ui/PROXIMITY-MAP-HIT-GEOMETRY-01.md).
