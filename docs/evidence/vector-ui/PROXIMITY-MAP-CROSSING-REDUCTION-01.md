@@ -20,6 +20,6 @@ The map keeps the existing proxy-prioritized, larger-group-first sample. Within 
 | Full Rust suite | PASS | 70 passed, 0 failed, 3 ignored. |
 | Locked offline check/debug build and format | PASS | `cargo check`, `cargo build`, `cargo fmt --all -- --check`, and `git diff --check` pass. |
 | Native visual review | BLOCKED | No native display access; reduced synthetic crossing count is not a substitute for visual acceptance. |
-| Cross-platform CI | PENDING | Exact-head run must target the final committed candidate. |
+| Cross-platform CI | PASS | Exact-head run [46078780061](https://github.com/pskeffington/arch_notebook/actions/runs/46078780061) for source `155dde0a450e9330b8a24fda30c7c46bf7c2eccc` passed Linux tests, Linux x86_64, Linux ARM64, Arch package, macOS Intel, and macOS Apple Silicon. |
 
 The row-ordering heuristic improves a stated geometric metric on the fixture; it does not claim globally minimal crossings for arbitrary graphs.
