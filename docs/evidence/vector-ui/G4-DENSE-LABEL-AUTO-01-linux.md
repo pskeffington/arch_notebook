@@ -24,13 +24,16 @@ Relationship labels and their attribute callouts now have session-scoped **Auto*
 | Offline optimized build: `CARGO_BUILD_JOBS=1 CARGO_TARGET_DIR=/tmp/arch-notebook-target cargo build --release --locked --offline` | **PASS**, exit 0; candidate binary hash recorded above |
 | `cargo fmt --all -- --check`; `git diff --check` | **PASS**, exit 0 |
 | Independent read-only code review | **PASS**; reviewer did not run tests or edit files |
-| Updated candidate native pointer/visual review | **NOT TESTED**; desktop capture showed the old running app, but native input could not be delivered to that window in this session |
+| Current-user candidate install | **PASS**; `/home/sysadmin/.local/bin/arch-notebook` hash matches the release binary, `--version --json` and `desktop-file-validate` passed, and the case MIME default resolves to `arch-notebook.desktop` |
+| Fictional sparse-30 review fixture | **PASS**; generator reported 30 entities and 90 records, SHA-256 `bf88b5df8c2c8e259e41a52486d8f09a12f6a6665d3a60892c802d8c06fa872d` |
+| Updated candidate native launch | **BLOCKED**; `/home/sysadmin/.local/bin/arch-notebook /tmp/arch-notebook-review-sparse30.case.json` exited 1 with `WaylandError(Connection(NoCompositor))` |
+| Updated candidate pointer/visual review | **NOT TESTED**; launch failed before a window appeared. The earlier desktop capture shows the old running app only |
 | GPU, compositor, presentation, frame-rate, and input-to-display measurements | **NOT MEASURED** |
 
-The existing screen capture was stored temporarily at `/tmp/arch-notebook-review-screen.png`; it is not committed because it also contains unrelated desktop content. Use the [G3/G4 native acceptance runbook](G3-G4-native-acceptance-runbook.md) to review the updated release binary with a fictional sparse-30 fixture and record screenshots, binary hash, and actual pointer actions. Native G4 remains open until that review passes.
+The original screen capture was stored temporarily at `/tmp/arch-notebook-review-screen.png`; it is not committed because it also contains unrelated desktop content. The installed candidate and sparse-30 fixture are ready for review when a Wayland compositor/input session is available. Use the [G3/G4 native acceptance runbook](G3-G4-native-acceptance-runbook.md) to record screenshots, binary hash, and actual pointer actions. Native G4 remains open until that review passes.
 
 ## Reviewer handoff
 
 - The reviewer checked source behavior after the candidate changes and returned PASS. In particular, Auto uses the post-culling visible-route count, source focus does not match two absent source values, and selection/picking remains independent of label presence.
-- This report records headless and build evidence only for the updated candidate. The running-screen capture is evidence of the original display problem, not proof that the updated binary is running or accepted natively.
+- This report records headless, build, and per-user install evidence only for the updated candidate. The running-screen capture is evidence of the original display problem, not proof that the updated binary rendered or was accepted natively.
 - **Gate status:** headless label behavior PASS; native G4 visual/input acceptance NOT TESTED; G3 Arrange/Restore native acceptance remains open; release/deployment readiness is not claimed.
