@@ -2,7 +2,7 @@
 
 - **Task/owner:** Native review of detected communities, community interaction drilldown, and hop-layer contact map; owner `/root`.
 - **Source baseline:** `37c17ba72880744dfaf79616644d023c7c17d71e` on `codex/ui-00-chart-baseline`, plus the currently uncommitted compact-label UI patch in `src/main.rs`.
-- **Release binary SHA-256:** `b02662cde4d789893b7607ac8a78d574fac27a57d4251f9e8780a750b074d929`.
+- **Native-review release binary SHA-256:** `b02662cde4d789893b7607ac8a78d574fac27a57d4251f9e8780a750b074d929`.
 - **Fixture:** disposable copy of `fixtures/chart/correctness.case.json`, SHA-256 `3170844fdc9db636dcb8dc9505075e486ec060790692bf6dc76cc9b32afe7f5f`; the copy was kept in `/tmp` and not saved from the application.
 - **Display:** KDE X11/XWayland, 2560×1440 desktop; application window 1440×900. Winit's Wayland launch returned `NoCompositor`; the same built binary launched through X11 successfully.
 
@@ -15,13 +15,13 @@ The test used actual pointer and wheel input against the release application win
 3. Selected the **Community 1 ↔ 2** interaction row, scrolled its record list, and clicked **Inspect #3 · REVERSED TEST RECORD**. The chart focused the two endpoints, **Avery North Coincident** and **Cedarline Fictional Cooperative**, and selected the specific relationship record.
 4. Clicked **Measure hop layers** for a selected entity. The pane displayed hop layers, the bounded contact-group map, group-to-group relationship totals, and proxy summaries.
 
-The narrow-sidebar review exposed clipped long action and record labels. The current candidate shortens the detection and inspect actions, places directional counts on a separate line, and displays endpoint details beneath each inspect action. In the captured 1440×900 window, the community counts and record details are readable without widening the pane.
+The narrow-sidebar review exposed clipped long action and record labels. The native-reviewed candidate shortened the detection and inspect actions, placed directional counts on a separate line, and displayed endpoint details beneath each inspect action. The current source truncates count and endpoint labels to one line and retains their complete text in hover tooltips, keeping the virtualized rows fixed-height. This follow-up passes the focused headless action test, all 52 tests, formatting, offline check, and offline debug build. The optimized release build for this follow-up remains unverified. The screenshots predate this truncation/tooltip adjustment, so they prove native actions and the prior compact layout, not the exact final text rendering.
 
 ## Evidence and result
 
 - [Community interaction and exact-record focus screenshot](artifacts/SNG-DELIVERY-002-G1-G2-native-inspect-20261126.png), SHA-256 `2a83d25c4a008f3f16f2155c0fdaeab3b1b417e80c14ad660df8292dcf5e119c`.
 - [Hop-layer contact-map screenshot](artifacts/SNG-DELIVERY-002-G1-G2-native-contact-map-20261126.png), SHA-256 `32a7cb89c5f652def8c009bee0ddb9e9bf2fd47fc5ad81dd0fe569ee5a9e5c4c`.
-- **G1/G2 native action gate: PASS for this fictional chart and tested path.** The detected partition, late-community selection, interaction selection, exact record drilldown, chart focus, and contact-map rendering worked with real pointer/wheel input.
+- **G1/G2 native action gate: PASS for this fictional chart and tested path.** The detected partition, singleton selection, interaction selection, exact record drilldown, chart focus, and contact-map rendering worked with real pointer/wheel input. The final text-truncation follow-up is independently reviewed and headless-tested but was not recaptured natively.
 - The desktop command was started as `env -u WAYLAND_DISPLAY DISPLAY=:0 /tmp/arch-notebook-target/release/arch-notebook /tmp/arch-notebook-native-g5.case.json`; it remained live during review and was stopped with Ctrl+C afterward (exit 130, deliberate termination).
 
 ## Limits and remaining gates
