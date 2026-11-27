@@ -17,6 +17,7 @@
 | Release build | NOT VERIFIED | Offline release compilation stopped progressing in the application crate and was interrupted; no release result is claimed. |
 | Native Clinton graph review / Qwen / human content review | BLOCKED / NOT RUN | X11 and Wayland access are denied in this session; semantic reviews were outside the structural UI regression. See [PROXIMITY-MAP-CLINTON-01](evidence/vector-ui/PROXIMITY-MAP-CLINTON-01-linux.md) and [PROXIMITY-MAP-CLINTON-UI-01](evidence/vector-ui/PROXIMITY-MAP-CLINTON-UI-01-linux.md). |
 | Exact-head CI for product implementation | PASS | Workflow run [46072141894](https://github.com/pskeffington/arch_notebook/actions/runs/46072141894) for product source `8e796bc8794e4865a3ec509703ae7ca3d8b581f4` passed Linux tests, Linux x86_64, Linux ARM64, Arch package, macOS Intel, and macOS Apple Silicon. The additional opt-in corpus UI regression and its evidence/docs are a later follow-up and are not covered by that run. |
+| Exact-head CI for corpus UI harness and evidence | PASS | Workflow run [46073375126](https://github.com/pskeffington/arch_notebook/actions/runs/46073375126) for source `d3ee05fda2277e76ed9a5cf66cb2e7b9408ee2c3` passed Linux tests, Linux x86_64, Linux ARM64, Arch package, macOS Intel, and macOS Apple Silicon. CI compiles the added opt-in regression but cannot execute it because the retained Clinton case is local-only; its local focused run passed separately. |
 
 See [PROXIMITY-MAP-CLINTON-01](evidence/vector-ui/PROXIMITY-MAP-CLINTON-01-linux.md) for exact commands and topology-specific assertions.
 
