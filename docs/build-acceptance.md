@@ -10,6 +10,7 @@
 | --- | --- | --- |
 | Offline Rust suite, check and formatting | PASS | 55 tests pass; `cargo check --locked --offline`, formatting, and diff validation exit 0. |
 | Debug and release builds | PASS | Locked offline builds exit 0. |
+| Remote CI for exact source commit | NOT RUN | GitHub Actions branch history has no run for `4c132cf`; the commit check-runs endpoint returned zero checks. Local acceptance is recorded separately. |
 | Current-user desktop/launcher install | PASS, scoped | Installed binary matches the release artifact. Menu entry and Desktop shortcut validate and compare byte-for-byte; MIME registration, automation helper, SVG and PNG match. See [LOCAL-INSTALL-03](evidence/deployment/LOCAL-INSTALL-03-linux.md). |
 | Native window interaction and visual review | NOT RUN | `wayland-info` returns `failed to create display: Operation not permitted`; install checks do not establish a rendered or interactive window. |
 | IBM ANX/XSD/application validation | NOT TESTED | The IBM schema and application were unavailable; internal interoperability checks do not replace vendor validation. |
