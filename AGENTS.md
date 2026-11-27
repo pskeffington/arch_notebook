@@ -18,3 +18,9 @@
 - Validate IBM i2 CSV/TSV handoff with an actual receiving installation before claiming interoperability acceptance. Native ANX remains unimplemented; obtain vendor schema and fixtures first.
 - Preserve read-only source access, immutable captures, stable IDs and atomic writes. Do not publish a release or imply notarization without explicit approval and evidence.
 - Refresh README.md and RELEASING.md when acceptance or release evidence changes.
+
+## Operational corpus intake (2026-11-26)
+
+- On the corpus/ma-energy-intake branch, execute [the SMB corpus intake runbook](docs/corpus-smb-intake.md) on the network-enabled operator host. This is an actual bulk acquisition task, not a request for synthetic fixtures or a research outline.
+- Preserve fictional checked-in examples. Operational public evidence belongs exclusively in the verified archive SMB location; commit only acquisition code, schemas, tests and redacted aggregate status. The existing small termination seed is provisional until reconciled with original orders.
+- Do not download until the SMB mount and capacity are verified. Continue independent source pulls on individual source failures and report actual acquisition totals. Do not change the offline Rust application architecture or publish a release.
