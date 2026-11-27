@@ -25856,7 +25856,10 @@ impl eframe::App for App {
                             "All entities and records in the active chart · display selections and timeline filters do not change this exploratory partition. It does not identify real-world groups.",
                         ).small().color(muted));
                         if community_analysis.is_none()
-                            && ui.button("Detect communities and summarize cross-group links").clicked()
+                            && ui
+                                .button("Detect communities")
+                                .on_hover_text("Detect structural communities and summarize recorded cross-community links.")
+                                .clicked()
                         {
                             self.community_analysis =
                                 Some(std::sync::Arc::new(detected_community_analysis(&self.case)));
@@ -25882,53 +25885,76 @@ impl eframe::App for App {
                                     for index in rows {
                                         let group = &analysis.groups[index];
                                         let group_ids = group.clone();
-                                        ui.horizontal(|ui| {
-                                            let member_names = group.iter().take(3)
-                                                .filter_map(|id| self.case.entities.iter().find(|entity| entity.id == *id).map(|entity| entity.name.as_str()))
-                                                .collect::<Vec<_>>().join(" · ");
-                                            ui.label(format!("Community {:02} · {} entities", index + 1, group.len()))
-                                                .on_hover_text(member_names);
-                                            if ui.small_button("Show").clicked() {
-                                                self.chart_fit_entities = Some(group_ids.clone());
-                                                self.chart_fit_path = None;
-                                                self.chart_focus_group = Some(group_ids.iter().copied().collect());
-                                                self.chart_focus = None;
-                                                self.chart_focus_link = None;
-                                                self.clear_path_result();
-                                                self.selected = group_ids.first().copied();
-                                                self.selected_link = None;
-                                                self.sql_source_focus = None;
-                                                self.page = WorkspacePage::Chart;
-                                                self.show_timeline = false;
-                                            }
+                                        ui.push_id(index, |ui| {
+                                            ui.horizontal(|ui| {
+                                                let member_names = group.iter().take(3)
+                                                    .filter_map(|id| self.case.entities.iter().find(|entity| entity.id == *id).map(|entity| entity.name.as_str()))
+                                                    .collect::<Vec<_>>().join(" · ");
+                                                ui.label(format!("Community {:02} · {} entities", index + 1, group.len()))
+                                                    .on_hover_text(member_names);
+                                                if ui.small_button("Show").clicked() {
+                                                    self.chart_fit_entities = Some(group_ids.clone());
+                                                    self.chart_fit_path = None;
+                                                    self.chart_focus_group = Some(group_ids.iter().copied().collect());
+                                                    self.chart_focus = None;
+                                                    self.chart_focus_link = None;
+                                                    self.clear_path_result();
+                                                    self.selected = group_ids.first().copied();
+                                                    self.selected_link = None;
+                                                    self.sql_source_focus = None;
+                                                    self.page = WorkspacePage::Chart;
+                                                    self.show_timeline = false;
+                                                }
+                                            });
                                         });
                                     }
                                 });
                             if analysis.interactions.is_empty() {
                                 ui.label(egui::RichText::new("No recorded relationships cross detected communities.").small().color(muted));
                             } else {
-                                ui.label(egui::RichText::new(format!("CROSS-COMMUNITY RECORDS · {} group pairs · select any row to inspect exact records", analysis.interactions.len())).size(9.0).strong().color(cyan));
+                                ui.label(egui::RichText::new(format!("CROSS-COMMUNITY RECORDS · {} pairs", analysis.interactions.len())).size(9.0).strong().color(cyan));
                                 egui::ScrollArea::vertical()
                                     .id_salt("community_interactions_list")
                                     .max_height(175.0)
-                                    .show_rows(ui, 35.0, analysis.interactions.len(), |ui, rows| {
+                                    .show_rows(ui, 43.0, analysis.interactions.len(), |ui, rows| {
                                         for row in rows {
                                             let interaction = &analysis.interactions[row];
                                             let first_number = interaction.first_community + 1;
                                             let second_number = interaction.second_community + 1;
                                             let key = (interaction.first_community, interaction.second_community);
                                             let selected = self.selected_community_interaction == Some(key);
-                                            let label = format!(
-                                                "Community {first_number} ↔ {second_number} · {} records / {} pairs · →{} ←{} ↔{}",
+                                            let counts_summary = format!(
+                                                "{} records · {} pairs · →{} ←{} ↔{}",
                                                 interaction.relationship_record_count,
                                                 interaction.distinct_endpoint_pair_count,
                                                 interaction.first_to_second_record_count,
                                                 interaction.second_to_first_record_count,
                                                 interaction.undirected_record_count,
                                             );
-                                            if ui.selectable_label(selected, label).clicked() {
-                                                self.selected_community_interaction = Some(key);
-                                            }
+                                            ui.vertical(|ui| {
+                                                let selection = ui
+                                                    .selectable_label(
+                                                        selected,
+                                                        format!("Community {first_number} ↔ {second_number}"),
+                                                    )
+                                                    .on_hover_text(format!(
+                                                        "{} relationship records · {} distinct endpoint pairs",
+                                                        interaction.relationship_record_count,
+                                                        interaction.distinct_endpoint_pair_count,
+                                                    ));
+                                                if selection.clicked() {
+                                                    self.selected_community_interaction = Some(key);
+                                                }
+                                                ui.add(
+                                                    egui::Label::new(
+                                                        egui::RichText::new(counts_summary.clone())
+                                                            .small()
+                                                            .color(muted),
+                                                    )
+                                                    .truncate(),
+                                                )
+                                                .on_hover_text(counts_summary);
+                                            });
                                         }
                                     });
                                 if let Some(key) = self.selected_community_interaction
@@ -25941,26 +25967,45 @@ impl eframe::App for App {
                                     egui::ScrollArea::vertical()
                                         .id_salt("community_interaction_records")
                                         .max_height(145.0)
-                                        .show_rows(ui, 24.0, interaction.link_indices.len(), |ui, rows| {
+                                        .show_rows(ui, 56.0, interaction.link_indices.len(), |ui, rows| {
                                             for row in rows {
                                                 let Some(link_index) = interaction.link_indices.get(row).copied() else { continue };
                                                 let Some((from, to, label, directed)) = self.case.links.get(link_index)
                                                     .map(|link| (link.from, link.to, link.label.clone(), link.directed)) else { continue };
                                                 let from_name = self.case.entities.iter().find(|entity| entity.id == from).map(|entity| entity.name.as_str()).unwrap_or("(missing entity)");
                                                 let to_name = self.case.entities.iter().find(|entity| entity.id == to).map(|entity| entity.name.as_str()).unwrap_or("(missing entity)");
-                                                if ui.small_button(format!("Inspect · {from_name} {} {to_name} · {label}", if directed { "→" } else { "—" })).clicked() {
-                                                    self.selected = Some(from);
-                                                    self.selected_link = Some(link_index);
-                                                    self.chart_focus = None;
-                                                    self.chart_focus_link = None;
-                                                    self.chart_focus_group = None;
-                                                    self.chart_fit_entities = Some(vec![from, to]);
-                                                    self.chart_fit_path = None;
-                                                    self.clear_path_result();
-                                                    self.sql_source_focus = None;
-                                                    self.page = WorkspacePage::Chart;
-                                                    self.show_timeline = false;
-                                                }
+                                                let endpoint_summary = format!(
+                                                    "{from_name} {} {to_name} · {label}",
+                                                    if directed { "→" } else { "↔" },
+                                                );
+                                                ui.vertical(|ui| {
+                                                    if ui
+                                                        .small_button(format!("Inspect #{} · {label}", row + 1))
+                                                        .on_hover_text(&endpoint_summary)
+                                                        .clicked()
+                                                    {
+                                                        self.selected = Some(from);
+                                                        self.selected_link = Some(link_index);
+                                                        self.chart_focus = None;
+                                                        self.chart_focus_link = None;
+                                                        self.chart_focus_group = None;
+                                                        self.chart_fit_entities = Some(vec![from, to]);
+                                                        self.chart_fit_path = None;
+                                                        self.clear_path_result();
+                                                        self.sql_source_focus = None;
+                                                        self.page = WorkspacePage::Chart;
+                                                        self.show_timeline = false;
+                                                    }
+                                                    ui.add(
+                                                        egui::Label::new(
+                                                            egui::RichText::new(endpoint_summary.clone())
+                                                                .small()
+                                                                .color(muted),
+                                                        )
+                                                        .truncate(),
+                                                    )
+                                                    .on_hover_text(endpoint_summary);
+                                                });
                                             }
                                         });
                                 }
@@ -43852,12 +43897,35 @@ mod tests {
             assert!(!analysis.layers.is_empty());
             assert!(!analysis.groups.is_empty());
         }
+        let expected_group_members = app
+            .network_proximity_analysis
+            .as_ref()
+            .unwrap()
+            .1
+            .groups
+            .get(1)
+            .expect("fixture has an outer contact group")
+            .members
+            .clone();
+        let visible_contact_map =
+            scroll_headless_until_text(&context, &mut app, &mut frame, &mut time, "G2");
+        click_headless_visible_text(
+            &context,
+            &mut app,
+            &mut frame,
+            &mut time,
+            &visible_contact_map,
+            "G2",
+        );
+        assert_eq!(app.chart_fit_entities, Some(expected_group_members.clone()));
+        assert_eq!(app.selected, expected_group_members.first().copied());
+
         let visible_detect = scroll_headless_until_text(
             &context,
             &mut app,
             &mut frame,
             &mut time,
-            "Detect communities and summarize cross-group links",
+            "Detect communities",
         );
         let after_communities = click_headless_visible_text(
             &context,
@@ -43865,7 +43933,7 @@ mod tests {
             &mut frame,
             &mut time,
             &visible_detect,
-            "Detect communities and summarize cross-group links",
+            "Detect communities",
         );
         let community_analysis = app
             .community_analysis
@@ -43878,11 +43946,9 @@ mod tests {
             let interaction = &community_analysis.interactions[0];
             let interaction_key = (interaction.first_community, interaction.second_community);
             let interaction_label = format!(
-                "Community {} ↔ {} · {} records / {} pairs",
+                "Community {} ↔ {}",
                 interaction_key.0 + 1,
                 interaction_key.1 + 1,
-                interaction.relationship_record_count,
-                interaction.distinct_endpoint_pair_count,
             );
             let final_group_index = community_analysis.groups.len() - 1;
             let final_group = &community_analysis.groups[final_group_index];
@@ -43953,30 +44019,11 @@ mod tests {
 
         let inspected_link_index =
             app.community_analysis.as_ref().unwrap().interactions[0].link_indices[0];
-        let (inspected_from, inspected_to, inspected_directed, inspected_label) = {
+        let (inspected_from, inspected_to, inspected_label) = {
             let link = &app.case.links[inspected_link_index];
-            (link.from, link.to, link.directed, link.label.clone())
+            (link.from, link.to, link.label.clone())
         };
-        let from_name = app
-            .case
-            .entities
-            .iter()
-            .find(|entity| entity.id == inspected_from)
-            .unwrap()
-            .name
-            .clone();
-        let to_name = app
-            .case
-            .entities
-            .iter()
-            .find(|entity| entity.id == inspected_to)
-            .unwrap()
-            .name
-            .clone();
-        let inspect_label = format!(
-            "Inspect · {from_name} {} {to_name} · {inspected_label}",
-            if inspected_directed { "→" } else { "—" }
-        );
+        let inspect_label = format!("Inspect #1 · {inspected_label}");
         let visible_inspect =
             scroll_headless_until_text(&context, &mut app, &mut frame, &mut time, &inspect_label);
         app.chart_fit_entities = Some(vec![Uuid::from_u128(u128::MAX)]);
