@@ -46157,20 +46157,30 @@ mod tests {
         let alpha_path = root.join("alpha.sqlite");
         let beta_path = root.join("beta.sqlite");
         let fixture_sql = "CREATE TABLE observations (id INTEGER PRIMARY KEY, tenant TEXT NOT NULL, source_id INTEGER, target_id INTEGER, detail TEXT, optional TEXT, opaque BLOB);
+            CREATE TABLE source_context (tenant TEXT NOT NULL, entity_id INTEGER NOT NULL, analyst_context TEXT, PRIMARY KEY (tenant, entity_id));
             INSERT INTO observations VALUES (1, 'alpha', 7, 9, 'current alpha row', NULL, X'01ff');
-            INSERT INTO observations VALUES (2, 'alpha', 11, 7, 'reverse alpha row', 'present', X'02');";
+            INSERT INTO observations VALUES (2, 'alpha', 11, 7, 'reverse alpha row', 'present', X'02');
+            INSERT INTO source_context VALUES ('alpha', 7, 'alpha joined context');
+            INSERT INTO source_context VALUES ('beta', 7, 'beta joined context');";
         sql_lookup_fixture_database(&alpha_path, fixture_sql);
         sql_lookup_fixture_database(
             &beta_path,
             "CREATE TABLE observations (id INTEGER PRIMARY KEY, tenant TEXT NOT NULL, source_id INTEGER, target_id INTEGER, detail TEXT, optional TEXT, opaque BLOB);
-             INSERT INTO observations VALUES (1, 'beta', 7, 8, 'beta source row', NULL, X'03');",
+             CREATE TABLE source_context (tenant TEXT NOT NULL, entity_id INTEGER NOT NULL, analyst_context TEXT, PRIMARY KEY (tenant, entity_id));
+             INSERT INTO observations VALUES (1, 'beta', 7, 8, 'beta source row', NULL, X'03');
+             INSERT INTO source_context VALUES ('beta', 7, 'beta joined context');",
         );
         let alpha_before = std::fs::read(&alpha_path).expect("read alpha source before lookup");
         let beta_before = std::fs::read(&beta_path).expect("read beta source before lookup");
-        let query = "SELECT tenant || ':' || CAST(source_id AS TEXT) AS source_entity_id,
-                tenant || ':' || CAST(target_id AS TEXT) AS target_entity_id,
-                detail, optional, opaque, :capture_tag AS capture_tag
-            FROM observations WHERE tenant = :tenant ORDER BY id";
+        let query = "SELECT o.tenant || ':' || CAST(o.source_id AS TEXT) AS source_entity_id,
+                o.tenant || ':' || CAST(o.target_id AS TEXT) AS target_entity_id,
+                o.detail AS observation_detail, o.optional AS optional_value,
+                o.opaque AS opaque_value, :capture_tag AS capture_tag,
+                context.analyst_context AS joined_context
+            FROM observations AS o
+            LEFT JOIN source_context AS context
+                ON context.tenant = o.tenant AND context.entity_id = o.source_id
+            WHERE o.tenant = :tenant ORDER BY o.id";
         let alpha = sql_lookup_snapshot(
             &alpha_path,
             query,
@@ -46201,7 +46211,7 @@ mod tests {
         assert_eq!(alpha_rows.source_entity_id, "ALPHA:7");
         assert_eq!(
             alpha_rows.columns.join("|"),
-            "source_entity_id|target_entity_id|detail|optional|opaque|capture_tag"
+            "source_entity_id|target_entity_id|observation_detail|optional_value|opaque_value|capture_tag|joined_context"
         );
         assert_eq!(alpha_rows.rows_scanned, 2);
         assert_eq!(alpha_rows.rows.len(), 2);
@@ -46210,7 +46220,9 @@ mod tests {
         assert_eq!(alpha_rows.rows[0][3], "");
         assert_eq!(alpha_rows.rows[0][4], "BLOB · 2 bytes · 01ff");
         assert_eq!(alpha_rows.rows[0][5], "baseline");
+        assert_eq!(alpha_rows.rows[0][6], "alpha joined context");
         assert_eq!(alpha_rows.rows[1][1], "alpha:7");
+        assert_eq!(alpha_rows.rows[1][6], "");
         assert_eq!(beta_rows.snapshot_id, beta.id);
         assert_eq!(
             beta_rows.database_path,
@@ -46223,6 +46235,7 @@ mod tests {
         assert_eq!(beta_rows.rows.len(), 1);
         assert_eq!(beta_rows.rows[0][0], "beta:7");
         assert_eq!(beta_rows.rows[0][5], "current");
+        assert_eq!(beta_rows.rows[0][6], "beta joined context");
         assert_eq!(std::fs::read(&alpha_path).unwrap(), alpha_before);
         assert_eq!(std::fs::read(&beta_path).unwrap(), beta_before);
         assert_eq!(serde_json::to_vec(&alpha).unwrap(), alpha_snapshot_before);

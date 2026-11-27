@@ -95,6 +95,22 @@ The Linux per-user installer now creates an executable Desktop shortcut byte-ide
 
 Commands, fixture descriptions, result hashes, and scope limits: [SQL-AUTO-07](evidence/sql-automation/SQL-AUTO-07-current-installed-release-linux.md).
 
+## Joined-query SQL source drillback regression — 2026-11-27
+
+**Task / owner:** Extend read-only live source-record lookup acceptance to joined SQL queries; implementation session.
+**Repository / branch / baseline:** `/home/sysadmin/github/arch_notebook` / `codex/ui-00-chart-baseline` / `17ed57eb14f50b7277285766aeecd7d1e24999cc`.
+**Candidate source:** recorded after commit.
+
+| Gate | Result | Evidence |
+| --- | --- | --- |
+| Joined lookup focused regression | PASS | Qualified `LEFT JOIN`, composite source identities, aliased outputs, present/missing join values, typed params, and display conversion all pass. |
+| Source and snapshot immutability | PASS | The two fixture SQLite files and serialized snapshots remain unchanged after both lookups. |
+| Full offline suite | PASS | 69 passed, 0 failed, 3 ignored. |
+| Locked compile, format, diff checks | PASS | `cargo check --locked --offline`, `cargo fmt --all -- --check`, and `git diff --check` passed. |
+| Native inspector review | NOT TESTED | Lookup is directly exercised at source level; native interaction remains a separate UI gate. |
+
+See [SQL-DRILLBACK-02](evidence/sql-automation/SQL-DRILLBACK-02-joined-query-linux.md).
+
 ## SQL scheduler runner recheck — 2026-11-27
 
 **Verification source:** `179aff68d32e59e49f411a18f17e90144903712d`; installed runtime binary SHA-256 `4a373a10ace60f738232247d44f5eee16e0d289b6d755788e8e9c2255cb436d0`.
