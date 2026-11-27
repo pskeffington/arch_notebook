@@ -3,6 +3,7 @@
 - **Task / owner:** Improve visual separation and pick accuracy for ties in the sampled hop-group topology; implementation session, with an independent topology audit.
 - **Repository / branch / baseline:** `arch_notebook` / `codex/ui-00-chart-baseline` / `96c7ad4f758458958fa429d9cfec120bc2ffc305`.
 - **Candidate source:** `58efaac921512a68f1565b537dd70c438a8c5db5`.
+- **Benchmark harness / aggregate evidence commit:** `88f2517c7743348542b568d63ae80f5ce63bcba6`.
 - **Scope:** `src/main.rs`, this report, and topology acceptance notes.
 
 ## Change

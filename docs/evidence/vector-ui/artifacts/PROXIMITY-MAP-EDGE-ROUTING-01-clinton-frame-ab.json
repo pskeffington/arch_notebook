@@ -55,5 +55,5 @@
     }
   },
   "scope": "Same retained Clinton case, viewport, production Chart frame, and precomputed analysis; toggles only displaying sampled topology in the analysis pane. Headless frame construction and egui CPU tessellation only. Does not measure GPU, compositor, presentation latency, FPS, Qwen analysis, or the 1128-pair complete-graph ceiling.",
-  "source_candidate": "recorded after commit"
+  "source_candidate": "88f2517c7743348542b568d63ae80f5ce63bcba6"
 }
