@@ -17,6 +17,7 @@
 | Offline check and builds | PASS | `CARGO_BUILD_JOBS=1 CARGO_TARGET_DIR=/tmp/arch-notebook-target cargo check --locked --offline`, `CARGO_BUILD_JOBS=1 CARGO_TARGET_DIR=/tmp/arch-notebook-target cargo build --locked --offline`, and `CARGO_BUILD_JOBS=1 CARGO_TARGET_DIR=/tmp/arch-notebook-target cargo build --release --locked --offline` exited 0. |
 | Formatting / whitespace | PASS | `cargo fmt --all -- --check` and `git diff --check` exited 0. |
 | Paint speed / native presentation | NOT MEASURED | The benchmark counts candidate routes after conservative culling. It does not measure paint time, GPU, compositor, frame rate, or input-to-presentation latency; native visual review remains open. |
+| Independent headless test review | PASS | The reviewer confirmed the pointer event path and shape-count scope by inspection; no independent test run or native rendering claim. See the [review handoff](G4-paint-path-headless-review-20261126.md). |
 
 ## Reproduction
 
