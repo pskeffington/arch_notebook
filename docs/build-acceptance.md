@@ -1,5 +1,20 @@
 # Local build acceptance record
 
+## SQL automation and scale recheck — 2026-11-27
+
+**Task / owner:** Revalidate the installed release's SQL automation, recovery, interchange, and joined-header scale paths; implementation session.
+**Repository / branch / verification source:** `/home/sysadmin/github/arch_notebook` / `codex/ui-00-chart-baseline` / `282f9de3a755557c856b16f50145d9f37936e882`.
+**Runtime source / binary:** product behavior from `e27ad5e842dd1c6d503f05c51844f12790502fa6`; installed release SHA-256 `4a373a10ace60f738232247d44f5eee16e0d289b6d755788e8e9c2255cb436d0`.
+
+| Gate | Result | Evidence |
+| --- | --- | --- |
+| SQL automation, failure retention, diagnosis/repair, batch recovery, CSV/TSV interchange | PASS | Current installed release harness exited 0; expected failure statuses were retained and verified. |
+| Joined-header scale | PASS | 7,121 synthetic records, 1,500 entities, 4,121 repeated endpoint pairs, two snapshots, zero skipped rows; source remained unchanged during captures. |
+| Exact-source workflow status | NOT RUN | Actions API returned zero runs and commit status had no contexts for `282f9de`. |
+| Production schema, native Automation UI, live scheduler, IBM validation | NOT TESTED | These require separate production-shaped inputs, native host interaction, scheduler execution, or IBM schema/application evidence. |
+
+Commands, fixture descriptions, result hashes, and scope limits: [SQL-AUTO-07](evidence/sql-automation/SQL-AUTO-07-current-installed-release-linux.md).
+
 ## Current synchronized branch verification — 2026-11-26
 
 **Repository / branch:** `/home/sysadmin/github/arch_notebook` / `codex/ui-00-chart-baseline`.
