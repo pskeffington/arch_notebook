@@ -14,6 +14,11 @@ pub(super) struct Analysis {
     pub groups: Vec<ContactGroup>,
     pub interactions: Vec<GroupInteraction>,
     pub proxies: Vec<GroupProxy>,
+    pub cross_group_relationship_record_count: usize,
+    pub map_hops: Vec<usize>,
+    pub map_groups_by_column: Vec<Vec<usize>>,
+    pub map_group_indices: Vec<usize>,
+    pub map_interaction_indices: Vec<usize>,
     pub reachable_entity_count: usize,
     pub unreachable_entity_count: usize,
 }
@@ -23,6 +28,7 @@ pub(super) struct ContactGroup {
     pub hop_distance: usize,
     pub members: Vec<Uuid>,
     pub internal_record_count: usize,
+    pub contains_cross_group_proxy: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -43,6 +49,54 @@ pub(super) struct GroupProxy {
     pub distinct_group_contacts: usize,
     pub distinct_counterpart_entities: usize,
     pub relationship_record_count: usize,
+}
+
+fn sample_group_map(
+    groups: &[ContactGroup],
+    max_groups: usize,
+    max_hops: usize,
+) -> (Vec<usize>, Vec<Vec<usize>>) {
+    if groups.is_empty() || max_groups == 0 || max_hops == 0 {
+        return (Vec::new(), Vec::new());
+    }
+
+    let hop_count = groups.last().map_or(0, |group| group.hop_distance + 1);
+    let displayed_hops: Vec<usize> = if hop_count <= max_hops {
+        (0..hop_count).collect()
+    } else if max_hops == 1 {
+        vec![0]
+    } else {
+        (0..max_hops)
+            .map(|column| column * (hop_count - 1) / (max_hops - 1))
+            .collect()
+    };
+    let mut groups_by_hop = vec![Vec::new(); hop_count];
+    for (group_index, group) in groups.iter().enumerate() {
+        groups_by_hop[group.hop_distance].push(group_index);
+    }
+
+    let mut visible_groups_by_column = vec![Vec::new(); displayed_hops.len()];
+    let mut group_cursors = vec![0; displayed_hops.len()];
+    let mut visible_group_count = 0;
+    loop {
+        let mut found_group = false;
+        for (column, hop) in displayed_hops.iter().copied().enumerate() {
+            if visible_group_count >= max_groups {
+                break;
+            }
+            if let Some(group_index) = groups_by_hop[hop].get(group_cursors[column]).copied() {
+                visible_groups_by_column[column].push(group_index);
+                group_cursors[column] += 1;
+                visible_group_count += 1;
+                found_group = true;
+            }
+        }
+        if !found_group || visible_group_count >= max_groups {
+            break;
+        }
+    }
+
+    (displayed_hops, visible_groups_by_column)
 }
 
 /// Build a deterministic, undirected and unweighted contact roll-up from an
@@ -147,6 +201,7 @@ where
                 hop_distance: distance,
                 members: component,
                 internal_record_count: 0,
+                contains_cross_group_proxy: false,
             });
         }
     }
@@ -258,11 +313,40 @@ where
             .then_with(|| entity_order(&first.entity_id, &second.entity_id))
     });
 
+    let proxy_entities: HashSet<Uuid> = proxies.iter().map(|proxy| proxy.entity_id).collect();
+    for group in &mut groups {
+        group.contains_cross_group_proxy = group
+            .members
+            .iter()
+            .any(|member| proxy_entities.contains(member));
+    }
+    let (map_hops, map_groups_by_column) = sample_group_map(&groups, 120, 40);
+    let map_group_indices: Vec<usize> = map_groups_by_column.iter().flatten().copied().collect();
+    let map_group_set: HashSet<usize> = map_group_indices.iter().copied().collect();
+    let map_interaction_indices = interactions
+        .iter()
+        .enumerate()
+        .filter_map(|(index, interaction)| {
+            (map_group_set.contains(&interaction.first_group)
+                && map_group_set.contains(&interaction.second_group))
+            .then_some(index)
+        })
+        .collect();
+    let cross_group_relationship_record_count = interactions
+        .iter()
+        .map(|interaction| interaction.relationship_record_count)
+        .sum();
+
     Analysis {
         layers,
         groups,
         interactions,
         proxies,
+        cross_group_relationship_record_count,
+        map_hops,
+        map_groups_by_column,
+        map_group_indices,
+        map_interaction_indices,
         reachable_entity_count: distances.len(),
         unreachable_entity_count: entity_count.saturating_sub(distances.len()),
     }
@@ -271,6 +355,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::analyze;
+    use super::{ContactGroup, sample_group_map};
     use uuid::Uuid;
 
     fn id(value: u128) -> Uuid {
@@ -332,6 +417,67 @@ mod tests {
         assert_eq!(proxy.distinct_group_contacts, 3);
         assert_eq!(proxy.distinct_counterpart_entities, 3);
         assert_eq!(proxy.relationship_record_count, 4);
+        assert!(analysis.groups[1].contains_cross_group_proxy);
+        assert_eq!(analysis.map_group_indices, vec![0, 1, 2, 3]);
+        assert_eq!(
+            analysis.map_interaction_indices.len(),
+            analysis.interactions.len()
+        );
+        assert_eq!(
+            analysis.cross_group_relationship_record_count,
+            analysis
+                .interactions
+                .iter()
+                .map(|interaction| interaction.relationship_record_count)
+                .sum::<usize>()
+        );
+    }
+
+    #[test]
+    fn group_map_sampling_is_bounded_deterministic_and_covers_sampled_hops() {
+        let groups_by_hop = [
+            vec![0, 1, 2],
+            vec![3],
+            vec![4, 5],
+            vec![6, 7],
+            vec![8],
+            vec![9, 10],
+            vec![11],
+            vec![12, 13],
+        ];
+        let groups: Vec<ContactGroup> = groups_by_hop
+            .iter()
+            .enumerate()
+            .flat_map(|(hop, indices)| {
+                indices.iter().map(move |index| ContactGroup {
+                    hop_distance: hop,
+                    members: vec![id(*index as u128 + 1)],
+                    ..Default::default()
+                })
+            })
+            .collect();
+
+        let (displayed_hops, sampled) = sample_group_map(&groups, 5, 3);
+        assert_eq!(displayed_hops, vec![0, 3, 7]);
+        assert!(sampled.iter().all(|hop_groups| !hop_groups.is_empty()));
+        assert_eq!(sampled.iter().map(Vec::len).sum::<usize>(), 5);
+        for (column, hop) in displayed_hops.iter().copied().enumerate() {
+            assert!(
+                sampled[column]
+                    .iter()
+                    .all(|group_index| groups[*group_index].hop_distance == hop)
+            );
+        }
+        assert_eq!(
+            (displayed_hops.clone(), sampled.clone()),
+            sample_group_map(&groups, 5, 3)
+        );
+
+        let (one_hop, one_column) = sample_group_map(&groups, 120, 1);
+        assert_eq!(one_hop, vec![0]);
+        assert_eq!(one_column, vec![vec![0, 1, 2]]);
+        assert!(sample_group_map(&groups, 0, 3).1.is_empty());
+        assert!(sample_group_map(&groups, 3, 0).0.is_empty());
     }
 
     #[test]

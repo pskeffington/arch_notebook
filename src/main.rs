@@ -905,49 +905,6 @@ struct CommunityInteraction {
     link_indices: Vec<usize>,
 }
 
-fn sample_proximity_map_groups(
-    groups_by_hop: &[Vec<usize>],
-    max_groups: usize,
-    max_hops: usize,
-) -> (Vec<usize>, Vec<Vec<usize>>) {
-    if groups_by_hop.is_empty() || max_groups == 0 || max_hops == 0 {
-        return (Vec::new(), Vec::new());
-    }
-
-    let hop_count = groups_by_hop.len();
-    let displayed_hops: Vec<usize> = if hop_count <= max_hops {
-        (0..hop_count).collect()
-    } else if max_hops == 1 {
-        vec![0]
-    } else {
-        (0..max_hops)
-            .map(|column| column * (hop_count - 1) / (max_hops - 1))
-            .collect()
-    };
-    let mut visible_groups_by_column = vec![Vec::new(); displayed_hops.len()];
-    let mut group_cursors = vec![0; displayed_hops.len()];
-    let mut visible_group_count = 0;
-    loop {
-        let mut found_group = false;
-        for (column, hop) in displayed_hops.iter().copied().enumerate() {
-            if visible_group_count >= max_groups {
-                break;
-            }
-            if let Some(group_index) = groups_by_hop[hop].get(group_cursors[column]).copied() {
-                visible_groups_by_column[column].push(group_index);
-                group_cursors[column] += 1;
-                visible_group_count += 1;
-                found_group = true;
-            }
-        }
-        if !found_group || visible_group_count >= max_groups {
-            break;
-        }
-    }
-
-    (displayed_hops, visible_groups_by_column)
-}
-
 struct ChartVectorGeometry {
     link_lanes: Vec<f32>,
     entity_positions: HashMap<Uuid, egui::Pos2>,
@@ -24563,6 +24520,10 @@ impl eframe::App for App {
                         },
                     );
                     ui.allocate_ui_with_layout(egui::vec2(right,avail.y),egui::Layout::top_down(egui::Align::Min),|ui|{
+                    egui::ScrollArea::vertical()
+                        .id_salt("chart_analysis_content")
+                        .max_height(avail.y)
+                        .show(ui, |ui| {
                     egui::Frame::new().fill(panel).inner_margin(12).show(ui,|ui|{
                         ui.set_min_width(right);ui.set_max_width(right);
                         ui.horizontal(|ui| {
@@ -25562,7 +25523,7 @@ impl eframe::App for App {
                             ui.label(egui::RichText::new(format!(
                                 "{} within-layer contact groups · {} cross-group records · {} reachable · {} outside the origin component",
                                 analysis.groups.len(),
-                                analysis.interactions.iter().map(|item| item.relationship_record_count).sum::<usize>(),
+                                analysis.cross_group_relationship_record_count,
                                 analysis.reachable_entity_count,
                                 analysis.unreachable_entity_count,
                             )).small().color(muted));
@@ -25572,34 +25533,13 @@ impl eframe::App for App {
                             ui.label(egui::RichText::new(
                                 "GROUP CONTACT MAP · each node is a hop-layer group; thicker lines represent more relationship records. Direction counts remain available in the interaction list.",
                             ).small().color(muted));
-                            let max_hop = analysis
+                            let displayed_hops = &analysis.map_hops;
+                            let visible_groups_by_column = &analysis.map_groups_by_column;
+                            let visible_group_count = analysis.map_group_indices.len();
+                            let hop_count = analysis
                                 .groups
-                                .iter()
-                                .map(|group| group.hop_distance)
-                                .max()
-                                .unwrap_or_default();
-                            let mut groups_by_hop = vec![Vec::new(); max_hop + 1];
-                            for (group_index, group) in analysis.groups.iter().enumerate() {
-                                groups_by_hop[group.hop_distance].push(group_index);
-                            }
-                            const MAX_MAP_GROUPS: usize = 120;
-                            const MAX_MAP_HOPS: usize = 40;
-                            let hop_count = groups_by_hop.len();
-                            let (displayed_hops, visible_groups_by_column) =
-                                sample_proximity_map_groups(
-                                    &groups_by_hop,
-                                    MAX_MAP_GROUPS,
-                                    MAX_MAP_HOPS,
-                                );
-                            let visible_group_count: usize =
-                                visible_groups_by_column.iter().map(Vec::len).sum();
-                            let visible_group_indices: Vec<usize> = visible_groups_by_column
-                                .iter()
-                                .flatten()
-                                .copied()
-                                .collect();
-                            let visible_group_set: std::collections::HashSet<usize> =
-                                visible_group_indices.iter().copied().collect();
+                                .last()
+                                .map_or(0, |group| group.hop_distance + 1);
                             let map_width = 160.0 + displayed_hops.len().saturating_sub(1) as f32 * 160.0;
                             let max_layer_groups = visible_groups_by_column
                                 .iter()
@@ -25616,7 +25556,8 @@ impl eframe::App for App {
                                         egui::Sense::hover(),
                                     );
                                     let painter = ui.painter_at(map_rect);
-                                    let mut group_positions = vec![egui::Pos2::ZERO; analysis.groups.len()];
+                                    let mut group_positions =
+                                        HashMap::with_capacity(visible_group_count);
                                     for (column, group_indices) in
                                         visible_groups_by_column.iter().enumerate()
                                     {
@@ -25630,20 +25571,16 @@ impl eframe::App for App {
                                             muted,
                                         );
                                         for (row, group_index) in group_indices.iter().copied().enumerate() {
-                                            group_positions[group_index] = egui::pos2(
-                                                x,
-                                                map_rect.top() + 42.0 + row as f32 * 44.0,
+                                            group_positions.insert(
+                                                group_index,
+                                                egui::pos2(x, map_rect.top() + 42.0 + row as f32 * 44.0),
                                             );
                                         }
                                     }
-                                    for interaction in &analysis.interactions {
-                                        if !visible_group_set.contains(&interaction.first_group)
-                                            || !visible_group_set.contains(&interaction.second_group)
-                                        {
-                                            continue;
-                                        }
-                                        let Some(&from) = group_positions.get(interaction.first_group) else { continue };
-                                        let Some(&to) = group_positions.get(interaction.second_group) else { continue };
+                                    for interaction_index in &analysis.map_interaction_indices {
+                                        let Some(interaction) = analysis.interactions.get(*interaction_index) else { continue };
+                                        let Some(&from) = group_positions.get(&interaction.first_group) else { continue };
+                                        let Some(&to) = group_positions.get(&interaction.second_group) else { continue };
                                         let width = (1.0
                                             + (interaction.relationship_record_count as f32).log2())
                                             .clamp(1.0, 5.0);
@@ -25652,21 +25589,13 @@ impl eframe::App for App {
                                             egui::Stroke::new(width, egui::Color32::from_rgb(66, 111, 129)),
                                         );
                                     }
-                                    let proxy_entities: std::collections::HashSet<Uuid> = analysis
-                                        .proxies
-                                        .iter()
-                                        .map(|proxy| proxy.entity_id)
-                                        .collect();
-                                    for group_index in visible_group_indices.iter().copied() {
+                                    for group_index in analysis.map_group_indices.iter().copied() {
                                         let group = &analysis.groups[group_index];
-                                        let center = group_positions[group_index];
+                                        let Some(&center) = group_positions.get(&group_index) else { continue };
                                         let radius = (8.0 + (group.members.len() as f32).sqrt())
                                             .clamp(9.0, 15.0);
                                         let is_origin = group.hop_distance == 0;
-                                        let contains_proxy = group
-                                            .members
-                                            .iter()
-                                            .any(|member| proxy_entities.contains(member));
+                                        let contains_proxy = group.contains_cross_group_proxy;
                                         let fill = if is_origin {
                                             egui::Color32::from_rgb(183, 137, 63)
                                         } else {
@@ -25707,21 +25636,12 @@ impl eframe::App for App {
                                             ui.make_persistent_id(("proximity_group_map_node", group_index)),
                                             egui::Sense::click(),
                                         );
-                                        let member_names = group
-                                            .members
-                                            .iter()
-                                            .filter_map(|id| self.case.entities.iter().find(|entity| entity.id == *id))
-                                            .take(8)
-                                            .map(|entity| entity.name.as_str())
-                                            .collect::<Vec<_>>()
-                                            .join(" · ");
                                         response.clone().on_hover_text(format!(
-                                            "Group {} · hop {} · {} entities{}\n{}\nClick to show this group on the chart.",
+                                            "Group {} · hop {} · {} entities{}\nClick to show this group on the chart.",
                                             group_index + 1,
                                             group.hop_distance,
                                             group.members.len(),
                                             if contains_proxy { " · contains a cross-group proxy" } else { "" },
-                                            member_names,
                                         ));
                                         if response.clicked() {
                                             self.chart_fit_entities = Some(group.members.clone());
@@ -27304,6 +27224,7 @@ impl eframe::App for App {
                             self.show_timeline = false;
                         }
                         ui.add_space(20.0);ui.label(egui::RichText::new("LEGEND").size(9.0).strong().color(cyan));ui.label(egui::RichText::new("Solid link  ·  corroborated").small().color(muted));ui.label(egui::RichText::new("Dashed link  ·  unverified").small().color(muted));
+                    });
                     });
                     });
                 });
@@ -43655,8 +43576,189 @@ mod tests {
         ImportValueTransform, Uuid, apply_import_value_transforms, canonical_connection,
         compare_snapshots, compile_import_value_transforms, entity_type_layout_positions,
         export_analysis_packet_cli, grid_layout_dimensions, import_filter_matches,
-        sample_proximity_map_groups,
     };
+
+    fn render_headless_app_frame(
+        context: &egui::Context,
+        app: &mut super::App,
+        frame: &mut eframe::Frame,
+        time: f64,
+        events: Vec<egui::Event>,
+    ) -> Vec<egui::epaint::ClippedShape> {
+        context
+            .run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1440.0, 900.0),
+                    )),
+                    time: Some(time),
+                    events,
+                    ..Default::default()
+                },
+                |context| eframe::App::update(app, context, frame),
+            )
+            .shapes
+    }
+
+    fn find_headless_text_point(
+        shapes: &[egui::epaint::ClippedShape],
+        target: &str,
+    ) -> Option<egui::Pos2> {
+        find_headless_text_rect(shapes, target).map(|rect| rect.center())
+    }
+
+    fn find_headless_text_rect(
+        shapes: &[egui::epaint::ClippedShape],
+        target: &str,
+    ) -> Option<egui::Rect> {
+        fn in_shape(shape: &egui::epaint::Shape, target: &str) -> Option<egui::Rect> {
+            match shape {
+                egui::epaint::Shape::Text(text) if text.galley.text().contains(target) => {
+                    Some(text.visual_bounding_rect())
+                }
+                egui::epaint::Shape::Vec(children) => {
+                    children.iter().find_map(|child| in_shape(child, target))
+                }
+                _ => None,
+            }
+        }
+        shapes.iter().find_map(|clipped| {
+            in_shape(&clipped.shape, target)
+                .filter(|rect| clipped.clip_rect.intersects(*rect))
+                .map(|rect| rect.intersect(clipped.clip_rect))
+        })
+    }
+
+    fn collect_headless_texts(shapes: &[egui::epaint::ClippedShape]) -> Vec<String> {
+        fn in_shape(shape: &egui::epaint::Shape, output: &mut Vec<String>) {
+            match shape {
+                egui::epaint::Shape::Text(text) => output.push(text.galley.text().to_owned()),
+                egui::epaint::Shape::Vec(children) => {
+                    for child in children {
+                        in_shape(child, output);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut output = Vec::new();
+        for clipped in shapes {
+            in_shape(&clipped.shape, &mut output);
+        }
+        output
+    }
+
+    fn click_headless_text(
+        context: &egui::Context,
+        app: &mut super::App,
+        frame: &mut eframe::Frame,
+        time: &mut f64,
+        text: &str,
+    ) -> Vec<egui::epaint::ClippedShape> {
+        let shapes = render_headless_app_frame(context, app, frame, *time, Vec::new());
+        let point = find_headless_text_point(&shapes, text)
+            .unwrap_or_else(|| panic!("visible UI text not found: {text}"));
+        click_headless_point(context, app, frame, time, point)
+    }
+
+    fn click_headless_visible_text(
+        context: &egui::Context,
+        app: &mut super::App,
+        frame: &mut eframe::Frame,
+        time: &mut f64,
+        shapes: &[egui::epaint::ClippedShape],
+        text: &str,
+    ) -> Vec<egui::epaint::ClippedShape> {
+        let point = find_headless_text_point(shapes, text)
+            .unwrap_or_else(|| panic!("visible UI text not found: {text}"));
+        click_headless_point(context, app, frame, time, point)
+    }
+
+    fn click_headless_point(
+        context: &egui::Context,
+        app: &mut super::App,
+        frame: &mut eframe::Frame,
+        time: &mut f64,
+        point: egui::Pos2,
+    ) -> Vec<egui::epaint::ClippedShape> {
+        let primary = egui::Event::PointerButton {
+            pos: point,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: egui::Modifiers::default(),
+        };
+        *time += 1.0 / 60.0;
+        render_headless_app_frame(
+            context,
+            app,
+            frame,
+            *time,
+            vec![egui::Event::PointerMoved(point), primary],
+        );
+        *time += 1.0 / 60.0;
+        render_headless_app_frame(
+            context,
+            app,
+            frame,
+            *time,
+            vec![egui::Event::PointerButton {
+                pos: point,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::default(),
+            }],
+        )
+    }
+
+    fn scroll_headless_until_text(
+        context: &egui::Context,
+        app: &mut super::App,
+        frame: &mut eframe::Frame,
+        time: &mut f64,
+        text: &str,
+    ) -> Vec<egui::epaint::ClippedShape> {
+        scroll_headless_until_text_at(context, app, frame, time, text, egui::pos2(1_370.0, 780.0))
+    }
+
+    fn scroll_headless_until_text_at(
+        context: &egui::Context,
+        app: &mut super::App,
+        frame: &mut eframe::Frame,
+        time: &mut f64,
+        text: &str,
+        pointer: egui::Pos2,
+    ) -> Vec<egui::epaint::ClippedShape> {
+        for _ in 0..100 {
+            let shapes = render_headless_app_frame(context, app, frame, *time, Vec::new());
+            if find_headless_text_point(&shapes, text).is_some() {
+                return shapes;
+            }
+            *time += 1.0 / 60.0;
+            render_headless_app_frame(
+                context,
+                app,
+                frame,
+                *time,
+                vec![
+                    egui::Event::PointerMoved(pointer),
+                    egui::Event::MouseWheel {
+                        unit: egui::MouseWheelUnit::Point,
+                        delta: egui::vec2(0.0, -250.0),
+                        modifiers: egui::Modifiers::default(),
+                    },
+                ],
+            );
+            *time += 1.0 / 60.0;
+        }
+        let shapes = render_headless_app_frame(context, app, frame, *time, Vec::new());
+        assert!(
+            find_headless_text_point(&shapes, text).is_some(),
+            "UI text not found after scrolling: {text}; visible text: {:?}",
+            collect_headless_texts(&shapes)
+        );
+        shapes
+    }
 
     fn layout_entity(name: &str, kind: &str, position_locked: bool) -> Entity {
         Entity {
@@ -43676,6 +43778,223 @@ mod tests {
             position_locked,
             color: [55, 128, 162],
         }
+    }
+
+    #[test]
+    fn headless_ui_drives_geodesic_and_detected_community_actions() {
+        let mut case: CaseFile =
+            serde_json::from_str(include_str!("../fixtures/chart/correctness.case.json"))
+                .expect("checked-in chart fixture is valid");
+        case.entities = (0..8)
+            .map(|index| {
+                let mut entity = layout_entity(
+                    &format!("{}{}", if index < 4 { 'A' } else { 'B' }, index % 4),
+                    "PERSON",
+                    false,
+                );
+                entity.id = Uuid::from_u128(index as u128 + 1);
+                entity
+            })
+            .collect();
+        for index in 8..158 {
+            let mut isolate = layout_entity(&format!("Isolate {index:03}"), "PERSON", false);
+            isolate.id = Uuid::from_u128(index as u128 + 1);
+            case.entities.push(isolate);
+        }
+        let entity_ids: Vec<Uuid> = case.entities.iter().map(|entity| entity.id).collect();
+        case.links.clear();
+        let make_link = |from, to, directed| super::Link {
+            from,
+            to,
+            connection_id: format!("headless-{from}-{to}"),
+            label: "CONTACTS".into(),
+            date: String::new(),
+            confidence: 2,
+            directed,
+            notes: String::new(),
+            source_notes: String::new(),
+            source_reference: String::new(),
+            ingest_source: None,
+            attributes: Vec::new(),
+        };
+        for (start, end) in [(0, 4), (4, 8)] {
+            for left in start..end {
+                for right in left + 1..end {
+                    case.links
+                        .push(make_link(entity_ids[left], entity_ids[right], false));
+                }
+            }
+        }
+        case.links
+            .push(make_link(entity_ids[3], entity_ids[4], false));
+        let origin = case.entities[0].id;
+        let mut app = super::App::automation_context(case, "/tmp/headless-network-ui.case.json");
+        app.selected = Some(origin);
+        let context = egui::Context::default();
+        let mut frame = eframe::Frame::_new_kittest();
+        let mut time = 0.0;
+
+        let initial = render_headless_app_frame(&context, &mut app, &mut frame, time, Vec::new());
+        assert!(find_headless_text_point(&initial, "Measure hop layers").is_some());
+        let _after_geodesic = click_headless_text(
+            &context,
+            &mut app,
+            &mut frame,
+            &mut time,
+            "Measure hop layers",
+        );
+        {
+            let (measured_origin, analysis) = app
+                .network_proximity_analysis
+                .as_ref()
+                .expect("the actual UI button computes geodesic layers");
+            assert_eq!(*measured_origin, origin);
+            assert!(!analysis.layers.is_empty());
+            assert!(!analysis.groups.is_empty());
+        }
+        let visible_detect = scroll_headless_until_text(
+            &context,
+            &mut app,
+            &mut frame,
+            &mut time,
+            "Detect communities and summarize cross-group links",
+        );
+        let after_communities = click_headless_visible_text(
+            &context,
+            &mut app,
+            &mut frame,
+            &mut time,
+            &visible_detect,
+            "Detect communities and summarize cross-group links",
+        );
+        let community_analysis = app
+            .community_analysis
+            .as_ref()
+            .expect("the actual UI button computes detected communities");
+        assert!(!community_analysis.groups.is_empty());
+        assert_eq!(community_analysis.interactions.len(), 1);
+        assert!(find_headless_text_point(&after_communities, "DETECTED COMMUNITIES").is_some());
+        let (interaction_key, interaction_label, final_group_label, final_group_entity) = {
+            let interaction = &community_analysis.interactions[0];
+            let interaction_key = (interaction.first_community, interaction.second_community);
+            let interaction_label = format!(
+                "Community {} ↔ {} · {} records / {} pairs",
+                interaction_key.0 + 1,
+                interaction_key.1 + 1,
+                interaction.relationship_record_count,
+                interaction.distinct_endpoint_pair_count,
+            );
+            let final_group_index = community_analysis.groups.len() - 1;
+            let final_group = &community_analysis.groups[final_group_index];
+            assert_eq!(final_group.len(), 1);
+            (
+                interaction_key,
+                interaction_label,
+                format!("Community {:02} · 1 entities", final_group_index + 1),
+                final_group[0],
+            )
+        };
+        assert!(community_analysis.groups.len() > 100);
+        assert!(find_headless_text_point(&after_communities, &final_group_label).is_none());
+        let community_list_header = scroll_headless_until_text(
+            &context,
+            &mut app,
+            &mut frame,
+            &mut time,
+            "Communities · scroll to browse all",
+        );
+        let community_list_header_rect =
+            find_headless_text_rect(&community_list_header, "Communities · scroll to browse all")
+                .expect("community list header is visible before scrolling its rows");
+        let visible_late_community = scroll_headless_until_text_at(
+            &context,
+            &mut app,
+            &mut frame,
+            &mut time,
+            &final_group_label,
+            egui::pos2(
+                community_list_header_rect.center().x,
+                community_list_header_rect.bottom() + 45.0,
+            ),
+        );
+        let late_community_label_rect =
+            find_headless_text_rect(&visible_late_community, &final_group_label)
+                .expect("scrolling reaches the last virtualized community row");
+        let show_community_point = egui::pos2(
+            late_community_label_rect.right() + 20.0,
+            late_community_label_rect.center().y,
+        );
+        click_headless_point(
+            &context,
+            &mut app,
+            &mut frame,
+            &mut time,
+            show_community_point,
+        );
+        assert_eq!(app.chart_fit_entities, Some(vec![final_group_entity]));
+        assert_eq!(app.selected, Some(final_group_entity));
+
+        let visible_interaction = scroll_headless_until_text(
+            &context,
+            &mut app,
+            &mut frame,
+            &mut time,
+            &interaction_label,
+        );
+        click_headless_visible_text(
+            &context,
+            &mut app,
+            &mut frame,
+            &mut time,
+            &visible_interaction,
+            &interaction_label,
+        );
+        assert_eq!(app.selected_community_interaction, Some(interaction_key));
+
+        let inspected_link_index =
+            app.community_analysis.as_ref().unwrap().interactions[0].link_indices[0];
+        let (inspected_from, inspected_to, inspected_directed, inspected_label) = {
+            let link = &app.case.links[inspected_link_index];
+            (link.from, link.to, link.directed, link.label.clone())
+        };
+        let from_name = app
+            .case
+            .entities
+            .iter()
+            .find(|entity| entity.id == inspected_from)
+            .unwrap()
+            .name
+            .clone();
+        let to_name = app
+            .case
+            .entities
+            .iter()
+            .find(|entity| entity.id == inspected_to)
+            .unwrap()
+            .name
+            .clone();
+        let inspect_label = format!(
+            "Inspect · {from_name} {} {to_name} · {inspected_label}",
+            if inspected_directed { "→" } else { "—" }
+        );
+        let visible_inspect =
+            scroll_headless_until_text(&context, &mut app, &mut frame, &mut time, &inspect_label);
+        app.chart_fit_entities = Some(vec![Uuid::from_u128(u128::MAX)]);
+        click_headless_visible_text(
+            &context,
+            &mut app,
+            &mut frame,
+            &mut time,
+            &visible_inspect,
+            &inspect_label,
+        );
+        assert_eq!(app.selected_link, Some(inspected_link_index));
+        assert_eq!(app.selected, Some(inspected_from));
+        assert_eq!(
+            app.chart_fit_entities,
+            Some(vec![inspected_from, inspected_to])
+        );
+        assert!(matches!(app.page, super::WorkspacePage::Chart));
     }
 
     #[test]
@@ -43701,57 +44020,6 @@ mod tests {
             ImportFilterOperator::Equals,
             "PENDING"
         ));
-    }
-
-    #[test]
-    fn proximity_map_sampling_is_bounded_deterministic_and_covers_sampled_hops() {
-        let groups_by_hop = vec![
-            vec![0, 1, 2],
-            vec![3],
-            vec![4, 5],
-            vec![6, 7],
-            vec![8],
-            vec![9, 10],
-            vec![11],
-            vec![12, 13],
-        ];
-        let (displayed_hops, sampled) = sample_proximity_map_groups(&groups_by_hop, 5, 3);
-        assert_eq!(displayed_hops, vec![0, 3, 7]);
-        assert!(sampled.iter().all(|hop_groups| !hop_groups.is_empty()));
-        assert_eq!(sampled.iter().map(Vec::len).sum::<usize>(), 5);
-        assert!(
-            sampled[0]
-                .iter()
-                .all(|group| groups_by_hop[0].contains(group))
-        );
-        assert!(
-            sampled[1]
-                .iter()
-                .all(|group| groups_by_hop[3].contains(group))
-        );
-        assert!(
-            sampled[2]
-                .iter()
-                .all(|group| groups_by_hop[7].contains(group))
-        );
-        assert_eq!(
-            (displayed_hops.clone(), sampled.clone()),
-            sample_proximity_map_groups(&groups_by_hop, 5, 3)
-        );
-
-        let (one_hop, one_column) = sample_proximity_map_groups(&groups_by_hop, 120, 1);
-        assert_eq!(one_hop, vec![0]);
-        assert_eq!(one_column, vec![vec![0, 1, 2]]);
-        assert!(
-            sample_proximity_map_groups(&groups_by_hop, 0, 3)
-                .1
-                .is_empty()
-        );
-        assert!(
-            sample_proximity_map_groups(&groups_by_hop, 3, 0)
-                .0
-                .is_empty()
-        );
     }
 
     #[test]
