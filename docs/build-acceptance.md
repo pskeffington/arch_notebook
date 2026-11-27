@@ -15,6 +15,21 @@
 | Native window interaction and visual review | NOT RUN | `wayland-info` returns `failed to create display: Operation not permitted`; install checks do not establish a rendered or interactive window. |
 | IBM ANX/XSD/application validation | NOT TESTED | The IBM schema and application were unavailable; internal interoperability checks do not replace vendor validation. |
 
+## Latest pushed verification source — 2026-11-26
+
+**Repository / branch:** `/home/sysadmin/github/arch_notebook` / `codex/ui-00-chart-baseline`.
+**Source commit:** `a2739d0114e742fd17d18866eb6fcbd250857ba1` (refines the headless regression to count offscreen `CONTACTS` label shapes).
+**Product release binary SHA-256:** `4a373a10ace60f738232247d44f5eee16e0d289b6d755788e8e9c2255cb436d0`.
+
+| Gate | Result | Evidence |
+| --- | --- | --- |
+| Exact-source offline Rust suite | PASS | `CARGO_BUILD_JOBS=1 CARGO_TARGET_DIR=/tmp/arch-notebook-target cargo test --locked --offline -- --test-threads=1` exited 0; 57 passed, 0 failed. |
+| Formatting and whitespace | PASS | `cargo fmt --all -- --check` and `git diff --check` exited 0. |
+| Remote GitHub Actions and commit statuses | NOT RUN | Actions API returned `total_count: 0`; combined commit status returned an empty status list for this exact SHA. |
+| Native UI and vendor compatibility | NOT TESTED | Native visual review and IBM ANX/XSD/application validation remain separate open gates. |
+
+The change refines test coverage only; the optimized application binary remains byte-identical to the installed `4a373a…` release. Product behavior and install evidence are recorded under [LOCAL-INSTALL-04](evidence/deployment/LOCAL-INSTALL-04-linux.md), [COMMUNITY-PROXY-01](evidence/vector-ui/COMMUNITY-PROXY-01-linux.md), and [G4-VIEWPORT-CULLING-01](evidence/vector-ui/G4-VIEWPORT-CULLING-01-linux.md).
+
 ## Previous synchronized branch verification — 2026-11-26
 
 **Repository / branch:** `/home/sysadmin/github/arch_notebook` / `codex/ui-00-chart-baseline`.
