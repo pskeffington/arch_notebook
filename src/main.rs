@@ -1615,6 +1615,9 @@ const MAX_CHART_LEGEND_ENTRIES: usize = 24;
 const MAX_CHART_LEGEND_DESCRIPTION_BYTES: usize = 4_096;
 const MAX_CHART_LEGEND_CONDITIONS: usize = 8;
 const MAX_CHART_TEMPLATE_CONDITIONAL_RULES: usize = MAX_CHART_LEGEND_ENTRIES * 4;
+const PROXIMITY_MAP_GROUP_ROW_SPACING: f32 = 52.0;
+const PROXIMITY_MAP_MAX_NODE_RADIUS: f32 = 15.0;
+const PROXIMITY_MAP_LABEL_OFFSET: f32 = 5.0;
 
 fn chart_template_saved_status(
     action: &str,
@@ -26177,7 +26180,8 @@ impl eframe::App for App {
                                 .map(Vec::len)
                                 .max()
                                 .unwrap_or_default();
-                            let map_height = 64.0 + max_layer_groups as f32 * 44.0;
+                            let map_height = 64.0
+                                + max_layer_groups as f32 * PROXIMITY_MAP_GROUP_ROW_SPACING;
                             egui::ScrollArea::both()
                                 .id_salt("proximity_group_map_scroll")
                                 .max_height(205.0)
@@ -26204,7 +26208,12 @@ impl eframe::App for App {
                                         for (row, group_index) in group_indices.iter().copied().enumerate() {
                                             group_positions.insert(
                                                 group_index,
-                                                egui::pos2(x, map_rect.top() + 42.0 + row as f32 * 44.0),
+                                                egui::pos2(
+                                                    x,
+                                                    map_rect.top()
+                                                        + 42.0
+                                                        + row as f32 * PROXIMITY_MAP_GROUP_ROW_SPACING,
+                                                ),
                                             );
                                         }
                                     }
@@ -26231,7 +26240,7 @@ impl eframe::App for App {
                                         let has_reverse = interaction.second_to_first_record_count > 0;
                                         let first_radius = (8.0
                                             + (analysis.groups[interaction.first_group].members.len() as f32).sqrt())
-                                            .clamp(9.0, 15.0);
+                                            .clamp(9.0, PROXIMITY_MAP_MAX_NODE_RADIUS);
                                         let second_radius = (8.0
                                             + (analysis.groups[interaction.second_group].members.len() as f32).sqrt())
                                             .clamp(9.0, 15.0);
@@ -26276,7 +26285,8 @@ impl eframe::App for App {
                                             egui::Color32::WHITE,
                                         );
                                         painter.text(
-                                            center + egui::vec2(0.0, radius + 5.0),
+                                            center
+                                                + egui::vec2(0.0, radius + PROXIMITY_MAP_LABEL_OFFSET),
                                             egui::Align2::CENTER_TOP,
                                             format!(
                                                 "{} entities · {} internal",
@@ -44917,6 +44927,17 @@ mod tests {
         assert_eq!(truncated_unicode_label.chars().count(), 21);
         assert!(truncated_unicode_label.ends_with('…'));
         assert!(unicode_label.starts_with(truncated_unicode_label.trim_end_matches('…')));
+    }
+
+    #[test]
+    fn proximity_group_rows_clear_metric_labels_from_the_next_node() {
+        const LABEL_HEIGHT: f32 = 11.0;
+        const LABEL_NODE_GAP: f32 = 4.0;
+        let label_bottom_from_center =
+            super::PROXIMITY_MAP_MAX_NODE_RADIUS + super::PROXIMITY_MAP_LABEL_OFFSET + LABEL_HEIGHT;
+        let next_node_top_from_previous_center =
+            super::PROXIMITY_MAP_GROUP_ROW_SPACING - super::PROXIMITY_MAP_MAX_NODE_RADIUS;
+        assert!(next_node_top_from_previous_center - label_bottom_from_center >= LABEL_NODE_GAP);
     }
 
     #[test]
