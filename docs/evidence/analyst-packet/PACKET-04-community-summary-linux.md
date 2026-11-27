@@ -2,7 +2,7 @@
 
 - **Task / owner:** Extend local findings delivery with graph community context; implementation session.
 - **Repository / branch:** `/home/sysadmin/github/arch_notebook` / `codex/ui-00-chart-baseline`.
-- **Source baseline:** `179aff68d32e59e49f411a18f17e90144903712d`; final source commit is recorded in Git after evidence capture.
+- **Source baseline:** `179aff68d32e59e49f411a18f17e90144903712d`; feature commit: `280f5f0b3b0200170e12e730e4b0cce0358afc20`; evidence-provenance correction: `9f2f6019987930c70982b63272e1b70a0eb0b728`.
 - **Scoped paths:** `src/main.rs`, `scripts/test-analysis-packet-acceptance.py`, `docs/notebook-workflows.md`, this evidence record, its JSON artifact, and `docs/roadmaps/social-network-graphing-roadmap.md`.
 - **Other files bundled in the same commit:** pre-existing concurrent updates to `README.md`, `docs/analyst-notebook-parity.md`, `docs/build-acceptance.md`, and SQL-SCHED-07 evidence. They were not modified as part of PACKET-04.
 - **Release binary:** `/tmp/arch-notebook-target/release/arch-notebook`, SHA-256 `4bc1d5b72d623a32293338b459633c3d38c1726db01edd958b136c50e635e4d1`.
