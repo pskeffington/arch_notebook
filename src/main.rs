@@ -26099,7 +26099,7 @@ impl eframe::App for App {
                                             let proxy = &analysis.proxies[row];
                                             let Some(entity_name) = self.case.entities.iter().find(|entity| entity.id == proxy.entity_id).map(|entity| entity.name.clone()) else { continue };
                                             ui.horizontal(|ui| {
-                                                if ui.small_button(&entity_name).on_hover_text("Focus this bridge entity on the chart").clicked() {
+                                                if ui.small_button(format!("Focus · {entity_name}")).on_hover_text("Focus this bridge entity on the chart").clicked() {
                                                     self.focus_entity_from_chart_search(proxy.entity_id);
                                                 }
                                                 ui.label(egui::RichText::new(format!(
@@ -44088,7 +44088,9 @@ mod tests {
                 entity
             })
             .collect();
-        for index in 8..158 {
+        case.entities[3].x = 0.92;
+        case.entities[3].y = 0.88;
+        for index in 12..162 {
             let mut isolate = layout_entity(&format!("Isolate {index:03}"), "PERSON", false);
             isolate.id = Uuid::from_u128(index as u128 + 1);
             case.entities.push(isolate);
@@ -44109,7 +44111,7 @@ mod tests {
             ingest_source: None,
             attributes: Vec::new(),
         };
-        for (start, end) in [(0, 4), (4, 8)] {
+        for (start, end) in [(0, 4), (4, 8), (8, 12)] {
             for left in start..end {
                 for right in left + 1..end {
                     case.links
@@ -44117,8 +44119,10 @@ mod tests {
                 }
             }
         }
-        case.links
-            .push(make_link(entity_ids[3], entity_ids[4], false));
+        case.links.extend([
+            make_link(entity_ids[3], entity_ids[4], false),
+            make_link(entity_ids[3], entity_ids[8], false),
+        ]);
         let origin = case.entities[0].id;
         let mut app = super::App::automation_context(case, "/tmp/headless-network-ui.case.json");
         app.selected = Some(origin);
@@ -44188,7 +44192,7 @@ mod tests {
             .expect("the actual UI button computes detected communities")
             .clone();
         assert!(!community_analysis.groups.is_empty());
-        assert_eq!(community_analysis.interactions.len(), 1);
+        assert_eq!(community_analysis.interactions.len(), 2);
         assert!(!community_analysis.proxies.is_empty());
         assert!(find_headless_text_point(&after_communities, "DETECTED COMMUNITIES").is_some());
         let visible_proxies = scroll_headless_until_text(
@@ -44300,6 +44304,41 @@ mod tests {
             Some(vec![inspected_from, inspected_to])
         );
         assert!(matches!(app.page, super::WorkspacePage::Chart));
+
+        let bridge_entity_id = app
+            .case
+            .entities
+            .iter()
+            .find(|entity| entity.name == "A3")
+            .expect("fixture boundary entity exists")
+            .id;
+        assert!(
+            community_analysis
+                .proxies
+                .iter()
+                .any(|proxy| proxy.entity_id == bridge_entity_id)
+        );
+        let visible_proxies = scroll_headless_until_text(
+            &context,
+            &mut app,
+            &mut frame,
+            &mut time,
+            "CROSS-COMMUNITY PROXIES",
+        );
+        let pan_before_proxy_focus = app.chart_pan;
+        click_headless_visible_text(
+            &context,
+            &mut app,
+            &mut frame,
+            &mut time,
+            &visible_proxies,
+            "Focus · A3",
+        );
+        assert!(matches!(app.page, super::WorkspacePage::Chart));
+        assert_eq!(app.selected, Some(bridge_entity_id));
+        time += 1.0 / 60.0;
+        render_headless_app_frame(&context, &mut app, &mut frame, time, Vec::new());
+        assert_ne!(app.chart_pan, pan_before_proxy_focus);
     }
 
     #[test]
