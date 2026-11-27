@@ -44342,6 +44342,81 @@ mod tests {
     }
 
     #[test]
+    fn headless_chart_paint_culls_offscreen_relationship_segments() {
+        fn count_line_segments(shapes: &[egui::epaint::ClippedShape]) -> usize {
+            fn count(shape: &egui::epaint::Shape) -> usize {
+                match shape {
+                    egui::epaint::Shape::LineSegment { stroke, .. }
+                        if stroke.color.to_array() == [60, 78, 90, 120] =>
+                    {
+                        1
+                    }
+                    egui::epaint::Shape::Vec(children) => children.iter().map(count).sum(),
+                    _ => 0,
+                }
+            }
+            shapes.iter().map(|clipped| count(&clipped.shape)).sum()
+        }
+
+        let mut case: CaseFile =
+            serde_json::from_str(include_str!("../fixtures/chart/correctness.case.json"))
+                .expect("checked-in chart fixture is valid");
+        let mut from = layout_entity("Source", "PERSON", false);
+        from.id = Uuid::from_u128(1);
+        from.x = 0.4;
+        from.y = 0.5;
+        let mut to = layout_entity("Target", "PERSON", false);
+        to.id = Uuid::from_u128(2);
+        to.x = 0.6;
+        to.y = 0.5;
+        case.entities = vec![from, to];
+        case.labels.clear();
+        case.links = (0..40)
+            .map(|index| super::Link {
+                from: if index % 2 == 0 {
+                    Uuid::from_u128(1)
+                } else {
+                    Uuid::from_u128(2)
+                },
+                to: if index % 2 == 0 {
+                    Uuid::from_u128(2)
+                } else {
+                    Uuid::from_u128(1)
+                },
+                connection_id: format!("paint-cull-{index}"),
+                label: "CONTACTS".into(),
+                date: String::new(),
+                confidence: 2,
+                directed: false,
+                notes: String::new(),
+                source_notes: String::new(),
+                source_reference: String::new(),
+                ingest_source: None,
+                attributes: Vec::new(),
+            })
+            .collect();
+
+        let mut app = App::automation_context(case, "/tmp/headless-chart-paint-cull.case.json");
+        app.chart_zoom = 1.0;
+        app.chart_pan = egui::Vec2::ZERO;
+        let context = egui::Context::default();
+        let mut frame = eframe::Frame::_new_kittest();
+        let visible_shapes =
+            render_headless_app_frame(&context, &mut app, &mut frame, 0.0, Vec::new());
+        let visible_line_segments = count_line_segments(&visible_shapes);
+
+        app.chart_pan = egui::vec2(2_000.0, 0.0);
+        let offscreen_shapes =
+            render_headless_app_frame(&context, &mut app, &mut frame, 1.0 / 60.0, Vec::new());
+        let offscreen_line_segments = count_line_segments(&offscreen_shapes);
+
+        assert!(
+            visible_line_segments > offscreen_line_segments + 100,
+            "visible chart should emit relationship segments before pan (visible={visible_line_segments}, panned={offscreen_line_segments})"
+        );
+    }
+
+    #[test]
     fn delimited_import_transforms_values_before_applying_row_filters() {
         let transforms = vec![ImportValueTransform {
             column: "status".into(),
