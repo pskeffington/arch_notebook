@@ -3,6 +3,20 @@
 ## Current synchronized branch verification — 2026-11-26
 
 **Repository / branch:** `/home/sysadmin/github/arch_notebook` / `codex/ui-00-chart-baseline`.
+**Source commit:** `4c132cf3d2b5f4bee0bd1f9625f1dfa66fd57f52`.
+**Release binary SHA-256:** `1a7331856c8498fa72cad1148a3a31c11a20d1a29b967226d9ee517334879392`.
+
+| Gate | Result | Evidence |
+| --- | --- | --- |
+| Offline Rust suite, check and formatting | PASS | 55 tests pass; `cargo check --locked --offline`, formatting, and diff validation exit 0. |
+| Debug and release builds | PASS | Locked offline builds exit 0. |
+| Current-user desktop/launcher install | PASS, scoped | Installed binary matches the release artifact. Menu entry and Desktop shortcut validate and compare byte-for-byte; MIME registration, automation helper, SVG and PNG match. See [LOCAL-INSTALL-03](evidence/deployment/LOCAL-INSTALL-03-linux.md). |
+| Native window interaction and visual review | NOT RUN | `wayland-info` returns `failed to create display: Operation not permitted`; install checks do not establish a rendered or interactive window. |
+| IBM ANX/XSD/application validation | NOT TESTED | The IBM schema and application were unavailable; internal interoperability checks do not replace vendor validation. |
+
+## Previous synchronized branch verification — 2026-11-26
+
+**Repository / branch:** `/home/sysadmin/github/arch_notebook` / `codex/ui-00-chart-baseline`.
 **Source commit:** `e86814675eaee96ed6f20caff94d6d5b79b9a2c5`.
 
 | Gate | Result | Evidence |
