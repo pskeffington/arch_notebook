@@ -14159,10 +14159,14 @@ fn most_connected_counts(
     counts
 }
 
-fn analysis_filter_display(label: &str) -> String {
-    const MAX_VISIBLE_CHARS: usize = 20;
+fn analysis_filter_visible_chars(pane_width: f32) -> usize {
+    (((pane_width - 88.0) / 14.0).floor() as usize).clamp(8, 20)
+}
+
+fn analysis_filter_display(label: &str, max_visible_chars: usize) -> String {
+    let max_visible_chars = max_visible_chars.max(1);
     let mut characters = label.chars();
-    let visible: String = characters.by_ref().take(MAX_VISIBLE_CHARS).collect();
+    let visible: String = characters.by_ref().take(max_visible_chars).collect();
     if characters.next().is_some() {
         format!("{visible}…")
     } else {
@@ -19420,15 +19424,16 @@ impl eframe::App for App {
                 ui.separator();
                 let avail=ui.available_size();
                 ui.horizontal(|ui| {
-                    let left=190.0;
+                    let left: f32 = 190.0;
                     let analysis_drag_start_id = egui::Id::new("chart_analysis_pane_drag_start");
                     let mut right = self.analysis_pane_width.clamp(240.0, 420.0);
+                    let left_content_width = (left - 24.0).max(0.0);
                     ui.allocate_ui_with_layout(egui::vec2(left,avail.y),egui::Layout::top_down(egui::Align::Min),|ui| {
                     let mut entity_to_focus = None;
                     let mut link_to_focus = None;
                     let mut chart_to_open = None;
                     egui::Frame::new().fill(panel).inner_margin(12).show(ui,|ui| {
-                        ui.set_min_width(left); ui.set_max_width(left);
+                        ui.set_min_width(left_content_width); ui.set_max_width(left_content_width);
                         ui.label(egui::RichText::new("CASE FILE").size(10.0).strong().color(muted));
                         ui.add_space(8.0);
                         ui.label(egui::RichText::new(&self.case.title).strong().color(egui::Color32::WHITE));
@@ -24714,7 +24719,8 @@ impl eframe::App for App {
                         .max_height(avail.y)
                         .show(ui, |ui| {
                     egui::Frame::new().fill(panel).inner_margin(12).show(ui,|ui|{
-                        ui.set_min_width(right);ui.set_max_width(right);
+                        let content_width = (right - 32.0).max(0.0);
+                        ui.set_min_width(content_width);ui.set_max_width(content_width);
                         ui.horizontal(|ui| {
                             ui.label(egui::RichText::new("ANALYSIS").size(10.0).strong().color(muted));
                             if ui.small_button("−").on_hover_text("Narrow analysis pane").clicked() {
@@ -24740,7 +24746,7 @@ impl eframe::App for App {
                                 ui.add(
                                     egui::TextEdit::multiline(&mut label.text)
                                         .hint_text(if label.is_legend { "Legend title" } else { "Annotation, summary, or chart title" })
-                                        .desired_width(right - 24.0)
+                                        .desired_width(content_width)
                                         .desired_rows(3),
                                 );
                                 if label.is_legend {
@@ -25500,7 +25506,10 @@ impl eframe::App for App {
                         ui.label("Connected by");
                         let relationship_filter_response =
                             egui::ComboBox::from_id_salt("most_connected_relationship")
-                                .selected_text(analysis_filter_display(&relationship_filter))
+                                .selected_text(analysis_filter_display(
+                                    &relationship_filter,
+                                    analysis_filter_visible_chars(right),
+                                ))
                                 .show_ui(ui, |ui| {
                                     ui.selectable_value(
                                         &mut self.most_connected_relationship,
@@ -25539,15 +25548,17 @@ impl eframe::App for App {
                         ui.label(egui::RichText::new(measure_note).small().color(muted));
                         if let Some(relationship_type) = self.most_connected_relationship.as_deref()
                         {
-                            ui.label(
-                                egui::RichText::new(if relationship_type.is_empty() {
-                                    "Connected by: unlabeled relationships."
-                                } else {
-                                    relationship_type
-                                })
-                                .small()
-                                .color(muted),
-                            );
+                            let relationship_disclosure = if relationship_type.is_empty() {
+                                "Connected by: unlabeled relationships."
+                            } else {
+                                relationship_type
+                            };
+                            ui.add(egui::Label::new(
+                                egui::RichText::new(relationship_disclosure)
+                                    .small()
+                                    .color(muted),
+                            )
+                            .wrap());
                         }
                         let ranking_counts = most_connected_counts(
                             &self.case,
@@ -43983,9 +43994,10 @@ mod tests {
         AnalysisPacketDisclosure, App, AutomationJob, AutomationParameterOverrides, CaseFile,
         ChartDocument, ConnectionFact, ConnectionSnapshot, Entity, EntityRepresentation,
         ImportFilterOperator, ImportTransformOperation, ImportValueTransform, Uuid,
-        analysis_filter_display, apply_import_value_transforms, canonical_connection,
-        compare_snapshots, compile_import_value_transforms, entity_type_layout_positions,
-        export_analysis_packet_cli, grid_layout_dimensions, import_filter_matches,
+        analysis_filter_display, analysis_filter_visible_chars, apply_import_value_transforms,
+        canonical_connection, compare_snapshots, compile_import_value_transforms,
+        entity_type_layout_positions, export_analysis_packet_cli, grid_layout_dimensions,
+        import_filter_matches,
     };
 
     fn render_headless_app_frame(
@@ -44048,22 +44060,39 @@ mod tests {
         })
     }
 
-    fn headless_text_fits_clip(shapes: &[egui::epaint::ClippedShape], target: &str) -> bool {
-        fn in_shape(shape: &egui::epaint::Shape, target: &str) -> Option<egui::Rect> {
+    fn headless_text_clip_bounds(
+        shapes: &[egui::epaint::ClippedShape],
+        target: &str,
+    ) -> Vec<(egui::Rect, egui::Rect)> {
+        fn collect(
+            shape: &egui::epaint::Shape,
+            clip_rect: egui::Rect,
+            target: &str,
+            output: &mut Vec<(egui::Rect, egui::Rect)>,
+        ) {
             match shape {
                 egui::epaint::Shape::Text(text) if text.galley.text() == target => {
-                    Some(text.visual_bounding_rect())
+                    output.push((text.visual_bounding_rect(), clip_rect));
                 }
                 egui::epaint::Shape::Vec(children) => {
-                    children.iter().find_map(|child| in_shape(child, target))
+                    for child in children {
+                        collect(child, clip_rect, target, output);
+                    }
                 }
-                _ => None,
+                _ => {}
             }
         }
-        shapes.iter().any(|clipped| {
-            in_shape(&clipped.shape, target)
-                .is_some_and(|rect| clipped.clip_rect.contains_rect(rect))
-        })
+        let mut output = Vec::new();
+        for clipped in shapes {
+            collect(&clipped.shape, clipped.clip_rect, target, &mut output);
+        }
+        output
+    }
+
+    fn headless_text_fits_clip(shapes: &[egui::epaint::ClippedShape], target: &str) -> bool {
+        headless_text_clip_bounds(shapes, target)
+            .iter()
+            .any(|(rect, clip_rect)| clip_rect.contains_rect(*rect))
     }
 
     fn collect_headless_texts(shapes: &[egui::epaint::ClippedShape]) -> Vec<String> {
@@ -44218,13 +44247,16 @@ mod tests {
 
     #[test]
     fn analysis_filter_label_truncation_is_unicode_safe_and_stable() {
-        assert_eq!(analysis_filter_display("CONTACTS"), "CONTACTS");
+        assert_eq!(analysis_filter_visible_chars(240.0), 10);
+        assert_eq!(analysis_filter_visible_chars(320.0), 16);
+        assert_eq!(analysis_filter_visible_chars(420.0), 20);
+        assert_eq!(analysis_filter_display("CONTACTS", 20), "CONTACTS");
         assert_eq!(
-            analysis_filter_display("123456789012345678901"),
+            analysis_filter_display("123456789012345678901", 20),
             "12345678901234567890…"
         );
         let unicode_label = "这是一段超过二十个字符的关系分类名称用于检查安全截断和可读性";
-        let truncated_unicode_label = analysis_filter_display(unicode_label);
+        let truncated_unicode_label = analysis_filter_display(unicode_label, 20);
         assert_eq!(truncated_unicode_label.chars().count(), 21);
         assert!(truncated_unicode_label.ends_with('…'));
         assert!(unicode_label.starts_with(truncated_unicode_label.trim_end_matches('…')));
@@ -44251,7 +44283,8 @@ mod tests {
             find_headless_text_rect(&shapes, "Rank by").expect("rank filter label is visible");
         let relationship_label = find_headless_text_rect(&shapes, "Connected by")
             .expect("relationship filter label is visible");
-        let selected_value = analysis_filter_display(long_label);
+        let selected_value =
+            analysis_filter_display(long_label, analysis_filter_visible_chars(320.0));
         let selected_value_rect = find_headless_text_rect(&shapes, &selected_value)
             .expect("long relationship value uses a bounded display label");
 
@@ -44264,7 +44297,7 @@ mod tests {
                 .iter()
                 .any(|text| text == long_label)
         );
-
+        assert!(headless_text_fits_clip(&shapes, long_label));
         let pointer = selected_value_rect.center();
         let mut hover_time = 1.0;
         render_headless_app_frame(
@@ -44281,17 +44314,19 @@ mod tests {
             .iter()
             .filter(|text| text.as_str() == long_label)
             .count();
-        assert!(
-            full_label_occurrences >= 2,
-            "full filter value remains disclosed below the control and in its hover tooltip"
-        );
+        assert!(full_label_occurrences >= 2);
 
-        let narrow_case = app.case.clone();
+        let narrow_unicode_label = "这是一段超过二十个字符的关系分类名称用于检查安全截断和可读性";
+        let mut narrow_case = app.case.clone();
+        for link in &mut narrow_case.links {
+            link.label = narrow_unicode_label.to_owned();
+        }
         let mut narrow_app = App::automation_context(
             narrow_case,
             "/tmp/headless-analysis-filter-minimum.case.json",
         );
-        narrow_app.most_connected_relationship = Some(long_label.to_owned());
+        narrow_app.analysis_pane_width = 240.0;
+        narrow_app.most_connected_relationship = Some(narrow_unicode_label.to_owned());
         let narrow_context = egui::Context::default();
         let mut narrow_frame = eframe::Frame::_new_kittest();
         let narrow_shapes = render_headless_app_frame_at(
@@ -44303,13 +44338,54 @@ mod tests {
             egui::vec2(1_000.0, 650.0),
         );
         assert!(find_headless_text_rect(&narrow_shapes, "Connected by").is_some());
-        assert!(find_headless_text_rect(&narrow_shapes, &selected_value).is_some());
-        assert!(headless_text_fits_clip(&narrow_shapes, &selected_value));
+        let narrow_selected_value = analysis_filter_display(
+            narrow_unicode_label,
+            analysis_filter_visible_chars(narrow_app.analysis_pane_width),
+        );
+        assert!(find_headless_text_rect(&narrow_shapes, &narrow_selected_value).is_some());
+        assert!(headless_text_fits_clip(
+            &narrow_shapes,
+            &narrow_selected_value
+        ));
         assert!(
             collect_headless_texts(&narrow_shapes)
                 .iter()
-                .any(|text| text == long_label)
+                .any(|text| text == narrow_unicode_label)
         );
+        let full_disclosure_bounds =
+            headless_text_clip_bounds(&narrow_shapes, narrow_unicode_label);
+        assert!(
+            full_disclosure_bounds
+                .iter()
+                .any(|(rect, clip)| clip.contains_rect(*rect)),
+            "full disclosure bounds and clips: {full_disclosure_bounds:?}"
+        );
+        let pointer = find_headless_text_rect(&narrow_shapes, &narrow_selected_value)
+            .expect("minimum-width selected relationship value is visible")
+            .center();
+        let mut hover_time = 1.0;
+        render_headless_app_frame_at(
+            &narrow_context,
+            &mut narrow_app,
+            &mut narrow_frame,
+            hover_time,
+            vec![egui::Event::PointerMoved(pointer)],
+            egui::vec2(1_000.0, 650.0),
+        );
+        hover_time += 1.0;
+        let narrow_hovered_shapes = render_headless_app_frame_at(
+            &narrow_context,
+            &mut narrow_app,
+            &mut narrow_frame,
+            hover_time,
+            Vec::new(),
+            egui::vec2(1_000.0, 650.0),
+        );
+        let narrow_full_label_occurrences = collect_headless_texts(&narrow_hovered_shapes)
+            .iter()
+            .filter(|text| text.as_str() == narrow_unicode_label)
+            .count();
+        assert!(narrow_full_label_occurrences >= 2);
     }
 
     #[test]
