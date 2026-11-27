@@ -27,3 +27,7 @@ The narrow-sidebar review exposed clipped long action and record labels. The nat
 ## Limits and remaining gates
 
 This is one host and one small fictional chart. It does not establish keyboard behavior, accessibility, arbitrary window resizing, GPU/render timing, FPS, or broad performance. A native click on a contact-map node was not confirmed. G3 force-layout arrange/restore input review and G4 paint/presentation measurements remain open; the CPU geometry benchmark is not a rendering benchmark. No production data was used, no case was saved, and no release approval is implied.
+
+## Current-host retest — 2026-11-26
+
+The current X11 root-window inspection exited 0 and listed an existing `Arch Notebook · Link Analysis` window (`0x1000003`, 1440×900), but this session could not deliver input or retain a new screenshot. `xdotool search --onlyvisible --name 'Arch Notebook'` exited 1 (`Failed creating new xdo instance`); `spectacle --new-instance --activewindow --background --nonotify --no-decoration --output /tmp/arch-notebook-current-review.png` aborted with exit 134; and `DISPLAY=:0 import -window 0x1000003 /tmp/arch-notebook-current-review.png` exited 1 (`unable to open X server`). Therefore this retest adds no current-candidate visual/input acceptance and does not supersede the earlier scoped native review above. The current-source headless map-node click is separately recorded in [headless evidence](SNG-DELIVERY-002-G1-G2-headless-ui-20261126.md).
