@@ -33,6 +33,10 @@ Relationship labels and their attribute callouts now have session-scoped **Auto*
 
 The original screen capture was stored temporarily at `/tmp/arch-notebook-review-screen.png`; it is not committed because it also contains unrelated desktop content. The installed candidate and sparse-30 fixture are ready for review when a Wayland compositor/input session is available. Use the [G3/G4 native acceptance runbook](G3-G4-native-acceptance-runbook.md) to record screenshots, binary hash, and actual pointer actions. Native G4 remains open until that review passes.
 
+### Existing-window follow-up
+
+On 2026-11-27 at 01:30 local time, a fresh full-desktop capture showed the same `VECTOR UI SPARSE 30` window (30 entities, 90 relationships) still open, with dense relationship labels and cards outside the visible viewport. The chart navigator shows that the current view is a subset of the whole graph, so this capture cannot distinguish intentional pan/zoom from a fit/layout defect. It also cannot identify which executable the existing process loaded; the newer release was installed after that process was already running. Capture: `/tmp/arch-notebook-fullscreen-current.png`, 2560×1440, SHA-256 `d70a718ed74e21a62752324a159504a93fbaef6c9754773fe9a230264f9a0f7e` (not committed because it contains unrelated desktop content). Input injection through this sandbox still fails (`xdotool`: `Failed creating new xdo instance`), so **Fit all**, Auto/All label mode, and G3 Arrange/Restore could not be exercised. This is a current-state observation only, not a regression result for the installed candidate.
+
 ## Reviewer handoff
 
 - The reviewer checked source behavior after the candidate changes and returned PASS. In particular, Auto uses the post-culling visible-route count, source focus does not match two absent source values, and selection/picking remains independent of label presence.
