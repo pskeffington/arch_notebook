@@ -1,5 +1,25 @@
 # Local build acceptance record
 
+## Analysis pane filter readability — 2026-11-27
+
+**Task / owner:** Improve chart-analysis navigation at the default pane width; implementation session.
+**Repository / branch / baseline / product source:** `/home/sysadmin/github/arch_notebook` / `codex/ui-00-chart-baseline` / `487473d0ff655e0b9fc0584fcd8dd59a7e320dbb` / `1dd4cdcb204f20ba610e8b4dedf2f776744aae9b`.
+**Candidate binary SHA-256:** `7bb98beff1db4321fabec1258ddfc67574deb1a44dfb0cee45d1ee522b36840f`.
+
+| Gate | Result | Evidence |
+| --- | --- | --- |
+| Unicode-safe long label handling | **PASS** | `analysis_filter_label_truncation_is_unicode_safe_and_stable` covers short values, exact 20-character limit, and Unicode character boundaries. |
+| Default-width analysis-pane control layout | **PASS, headless UI** | `headless_analysis_filter_controls_stack_and_fit_default_pane` verifies rank and relationship controls occupy separate rows and the bounded selected label fits the rendered clip at 1440×900/default 320px pane width. |
+| Full Rust suite | **PASS** | `CARGO_BUILD_JOBS=1 CARGO_TARGET_DIR=/tmp/arch-notebook-target cargo test --locked --offline -- --test-threads=1` exited 0: 60 passed, 0 failed. |
+| Locked compile and builds | **PASS** | `cargo check --locked --offline`, debug build, and release build exited 0 with `CARGO_BUILD_JOBS=1 CARGO_TARGET_DIR=/tmp/arch-notebook-target`. |
+| Formatting and diff validation | **PASS** | `cargo fmt --all -- --check` and `git diff --check` exited 0. |
+| Per-user launcher sync | **PASS** | `scripts/install-linux-user.sh /tmp/arch-notebook-sync-ui-filters/arch-notebook-linux-x86_64` exited 0; installed executable matches the release SHA above, desktop entries validate and match, and installed icon and helper files match repository assets. |
+| Exact-candidate native UI render | **BLOCKED** | `env -u WAYLAND_DISPLAY DISPLAY=:0 /tmp/arch-notebook-target/release/arch-notebook /home/sysadmin/github/arch_notebook/fixtures/chart/correctness.case.json` exited 1 with `XOpenDisplayFailed`. The prior screenshot is from an older build and is not used as current-candidate evidence. |
+| GitHub Actions for this feature-branch candidate | **NOT RUN** | The build workflow runs on `main` pushes, pull requests, manual dispatch, and releases. No open PR currently targets this feature branch; manual dispatch access is unavailable from the connected tools. |
+
+Detailed source semantics, headless assertions, host limitation, and residual gates: [UI-ANALYSIS-FILTERS-01](evidence/vector-ui/UI-ANALYSIS-FILTERS-01-linux.md).
+
+
 ## SQL automation and scale recheck — 2026-11-27
 
 **Task / owner:** Revalidate the installed release's SQL automation, recovery, interchange, and joined-header scale paths; implementation session.
