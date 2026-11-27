@@ -31,7 +31,23 @@ Detailed paths, checks, and hashes: [LOCAL-INSTALL-02 evidence](evidence/deploym
 | Current-candidate native chart review | BLOCKED | Wayland launch failed with `NoCompositor`; no visual or pointer acceptance is claimed. |
 | IBM application compatibility | NOT TESTED | No IBM application or XSD was used. |
 
-See [origin-centered proximity groups evidence](evidence/vector-ui/PROXIMITY-GROUPS-linux-6b59e32.md) for the method, exact commands, fixture and limits. The group roll-up is in the Analysis pane; the chart continues to draw its original entity and relationship records.
+See [origin-centered proximity groups evidence](evidence/vector-ui/PROXIMITY-GROUPS-linux-6b59e32.md) for the calculation, fixtures and limits. The follow-up [group contact map acceptance](evidence/vector-ui/PROXIMITY-MAP-01-linux-ffdd781.md) records the bounded visual overview, navigation behavior, current-user installation, local build results and remaining native UI gate. The main chart continues to draw its original entity and relationship records.
+
+## Origin-centered group contact map — 2026-11-26
+
+**Task / owner:** Add a bounded group-level contact overview to the proximity workflow; implementation session.
+**Repository / branch:** `/home/sysadmin/github/arch_notebook` / `codex/ui-00-chart-baseline`.
+**Product source commit:** `26fe459dee702ab6c41da483f7f29d267c60fed7`.
+**Release binary SHA-256:** `b6955b38b8af4596e0d88a9667d7d60637ffdd7536c63a806d2d8334e648172f`.
+
+| Gate | Result | Evidence and limits |
+| --- | --- | --- |
+| Offline Rust tests, compile and optimized build | PASS | 51 tests passed; locked offline check and release build exited 0. |
+| Local executable, desktop launcher and icon synchronization | PASS | Installed binary matches release hash; launcher entries validate; repository and installed icon hashes match. |
+| GitHub platform/package matrix | PENDING | [Run 45914257016](https://github.com/pskeffington/arch_notebook/actions/runs/45914257016) is queued for the exact source commit. The preceding candidate's run [45912700353](https://github.com/pskeffington/arch_notebook/actions/runs/45912700353) passed but predates the final sampler regression test. |
+| Native visual/input review | BLOCKED | Current Wayland diagnostic returned `Operation not permitted`; no native appearance or pointer acceptance is claimed. |
+
+The bounded map is in the Analysis pane. It samples at most 120 groups and 40 hop layers on large cases; the complete group and exact interaction records remain listed below it. See the [detailed acceptance record](evidence/vector-ui/PROXIMITY-MAP-01-linux-ffdd781.md).
 
 ## UI-01 chart entity-card picking — 2026-11-26
 
