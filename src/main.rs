@@ -28513,7 +28513,7 @@ fn benchmark_chart_vectors(
             "entity_positions": case.entities.len(),
             "ordinary_lanes": case.links.len(),
             "geometric_lanes": case.links.len(),
-            "nearest_record_at_canvas_center": final_match,
+            "pointer_cycle_candidates_at_canvas_center": final_match,
         },
         "timings": {
             "vector_geometry_prepare": duration_summary(&preparation_samples),
