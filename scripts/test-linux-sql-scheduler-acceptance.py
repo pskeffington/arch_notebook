@@ -8,6 +8,7 @@ import csv
 import json
 import os
 import shlex
+import shutil
 import sqlite3
 import subprocess
 import tempfile
@@ -210,6 +211,8 @@ def main() -> int:
         ),
     ]
     installed: list[dict[str, str]] = []
+    systemd_analyze = shutil.which("systemd-analyze")
+    calendar_parser_checks = 0
     exported_dir = work / 'exports "quoted" $cash %done'
     exported_dir.mkdir()
     for index, (label, settings, expected_calendar) in enumerate(case_specs):
@@ -236,6 +239,20 @@ def main() -> int:
         service_text = service_path.read_text(encoding="utf-8")
         if expected_calendar not in timer_text or "Persistent=true" not in timer_text:
             raise RuntimeError(f"unexpected timer contents for {label}: {timer_text}")
+        if systemd_analyze:
+            calendar_expression = expected_calendar.removeprefix("OnCalendar=")
+            calendar_check = subprocess.run(
+                [systemd_analyze, "calendar", calendar_expression],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            if calendar_check.returncode != 0:
+                raise RuntimeError(
+                    f"systemd rejected the {label} calendar expression "
+                    f"{calendar_expression!r}: {calendar_check.stdout}{calendar_check.stderr}"
+                )
+            calendar_parser_checks += 1
         if "Type=oneshot" not in service_text or "TimeoutStartSec=infinity" not in service_text:
             raise RuntimeError(f"service lacks bounded scheduler semantics for {label}")
         argv = decode_exec_start(service_path)
@@ -373,6 +390,11 @@ def main() -> int:
             "window_end_utc_exclusive": window_end,
             "included_connection_ids": scheduled_connection_ids,
             "excluded_connection_ids": ["BEFORE-WINDOW", "WINDOW-END"],
+        },
+        "systemd_calendar_parser": {
+            "result": "PASS" if systemd_analyze else "NOT AVAILABLE",
+            "executable": systemd_analyze,
+            "validated_expressions": calendar_parser_checks,
         },
         "failed_sql_preflight_installed_nothing": True,
         "invalid_month_day_rejected": True,
