@@ -14159,6 +14159,17 @@ fn most_connected_counts(
     counts
 }
 
+fn analysis_filter_display(label: &str) -> String {
+    const MAX_VISIBLE_CHARS: usize = 20;
+    let mut characters = label.chars();
+    let visible: String = characters.by_ref().take(MAX_VISIBLE_CHARS).collect();
+    if characters.next().is_some() {
+        format!("{visible}…")
+    } else {
+        visible
+    }
+}
+
 fn connected_components(case: &CaseFile) -> Vec<Vec<Uuid>> {
     let names: HashMap<Uuid, String> = case
         .entities
@@ -25444,51 +25455,52 @@ impl eframe::App for App {
                             });
                         ui.add_space(12.0);
                         ui.label(egui::RichText::new("MOST CONNECTED").size(9.0).strong().color(cyan));
-                        ui.horizontal_wrapped(|ui| {
-                            ui.label("Rank by");
-                            egui::ComboBox::from_id_salt("most_connected_measure")
-                                .selected_text(match self.most_connected_measure {
-                                    MostConnectedMeasure::ConnectedEntities => "Distinct entities",
-                                    MostConnectedMeasure::LinkRecords => "Link records",
-                                    MostConnectedMeasure::IncomingLinks => "Incoming links",
-                                    MostConnectedMeasure::OutgoingLinks => "Outgoing links",
-                                })
-                                .show_ui(ui, |ui| {
-                                    ui.selectable_value(
-                                        &mut self.most_connected_measure,
-                                        MostConnectedMeasure::ConnectedEntities,
-                                        "Distinct entities",
-                                    );
-                                    ui.selectable_value(
-                                        &mut self.most_connected_measure,
-                                        MostConnectedMeasure::LinkRecords,
-                                        "Link records",
-                                    );
-                                    ui.selectable_value(
-                                        &mut self.most_connected_measure,
-                                        MostConnectedMeasure::IncomingLinks,
-                                        "Incoming links",
-                                    );
-                                    ui.selectable_value(
-                                        &mut self.most_connected_measure,
-                                        MostConnectedMeasure::OutgoingLinks,
-                                        "Outgoing links",
-                                    );
-                                });
-                            ui.label("Connected by");
+                        ui.label("Rank by");
+                        egui::ComboBox::from_id_salt("most_connected_measure")
+                            .selected_text(match self.most_connected_measure {
+                                MostConnectedMeasure::ConnectedEntities => "Distinct entities",
+                                MostConnectedMeasure::LinkRecords => "Link records",
+                                MostConnectedMeasure::IncomingLinks => "Incoming links",
+                                MostConnectedMeasure::OutgoingLinks => "Outgoing links",
+                            })
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(
+                                    &mut self.most_connected_measure,
+                                    MostConnectedMeasure::ConnectedEntities,
+                                    "Distinct entities",
+                                );
+                                ui.selectable_value(
+                                    &mut self.most_connected_measure,
+                                    MostConnectedMeasure::LinkRecords,
+                                    "Link records",
+                                );
+                                ui.selectable_value(
+                                    &mut self.most_connected_measure,
+                                    MostConnectedMeasure::IncomingLinks,
+                                    "Incoming links",
+                                );
+                                ui.selectable_value(
+                                    &mut self.most_connected_measure,
+                                    MostConnectedMeasure::OutgoingLinks,
+                                    "Outgoing links",
+                                );
+                            });
+                        let relationship_filter = self
+                            .most_connected_relationship
+                            .as_deref()
+                            .map(|label| {
+                                if label.is_empty() {
+                                    "(Unlabeled)".to_owned()
+                                } else {
+                                    label.to_owned()
+                                }
+                            })
+                            .unwrap_or_else(|| "Any relationship".to_owned());
+                        ui.add_space(4.0);
+                        ui.label("Connected by");
+                        let relationship_filter_response =
                             egui::ComboBox::from_id_salt("most_connected_relationship")
-                                .selected_text(
-                                    self.most_connected_relationship
-                                        .as_deref()
-                                        .map(|label| {
-                                            if label.is_empty() {
-                                                "(Unlabeled)"
-                                            } else {
-                                                label
-                                            }
-                                        })
-                                        .unwrap_or("Any relationship"),
-                                )
+                                .selected_text(analysis_filter_display(&relationship_filter))
                                 .show_ui(ui, |ui| {
                                     ui.selectable_value(
                                         &mut self.most_connected_relationship,
@@ -25507,7 +25519,9 @@ impl eframe::App for App {
                                         );
                                     }
                                 });
-                        });
+                        relationship_filter_response
+                            .response
+                            .on_hover_text(&relationship_filter);
                         let measure_note = match self.most_connected_measure {
                             MostConnectedMeasure::ConnectedEntities => {
                                 "Distinct counterpart entities; parallel links count once."
@@ -43969,9 +43983,9 @@ mod tests {
         AnalysisPacketDisclosure, App, AutomationJob, AutomationParameterOverrides, CaseFile,
         ChartDocument, ConnectionFact, ConnectionSnapshot, Entity, EntityRepresentation,
         ImportFilterOperator, ImportTransformOperation, ImportValueTransform, Uuid,
-        apply_import_value_transforms, canonical_connection, compare_snapshots,
-        compile_import_value_transforms, entity_type_layout_positions, export_analysis_packet_cli,
-        grid_layout_dimensions, import_filter_matches,
+        analysis_filter_display, apply_import_value_transforms, canonical_connection,
+        compare_snapshots, compile_import_value_transforms, entity_type_layout_positions,
+        export_analysis_packet_cli, grid_layout_dimensions, import_filter_matches,
     };
 
     fn render_headless_app_frame(
@@ -43981,13 +43995,21 @@ mod tests {
         time: f64,
         events: Vec<egui::Event>,
     ) -> Vec<egui::epaint::ClippedShape> {
+        render_headless_app_frame_at(context, app, frame, time, events, egui::vec2(1440.0, 900.0))
+    }
+
+    fn render_headless_app_frame_at(
+        context: &egui::Context,
+        app: &mut super::App,
+        frame: &mut eframe::Frame,
+        time: f64,
+        events: Vec<egui::Event>,
+        viewport_size: egui::Vec2,
+    ) -> Vec<egui::epaint::ClippedShape> {
         context
             .run(
                 egui::RawInput {
-                    screen_rect: Some(egui::Rect::from_min_size(
-                        egui::Pos2::ZERO,
-                        egui::vec2(1440.0, 900.0),
-                    )),
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, viewport_size)),
                     time: Some(time),
                     events,
                     ..Default::default()
@@ -44023,6 +44045,24 @@ mod tests {
             in_shape(&clipped.shape, target)
                 .filter(|rect| clipped.clip_rect.intersects(*rect))
                 .map(|rect| rect.intersect(clipped.clip_rect))
+        })
+    }
+
+    fn headless_text_fits_clip(shapes: &[egui::epaint::ClippedShape], target: &str) -> bool {
+        fn in_shape(shape: &egui::epaint::Shape, target: &str) -> Option<egui::Rect> {
+            match shape {
+                egui::epaint::Shape::Text(text) if text.galley.text() == target => {
+                    Some(text.visual_bounding_rect())
+                }
+                egui::epaint::Shape::Vec(children) => {
+                    children.iter().find_map(|child| in_shape(child, target))
+                }
+                _ => None,
+            }
+        }
+        shapes.iter().any(|clipped| {
+            in_shape(&clipped.shape, target)
+                .is_some_and(|rect| clipped.clip_rect.contains_rect(rect))
         })
     }
 
@@ -44174,6 +44214,102 @@ mod tests {
             position_locked,
             color: [55, 128, 162],
         }
+    }
+
+    #[test]
+    fn analysis_filter_label_truncation_is_unicode_safe_and_stable() {
+        assert_eq!(analysis_filter_display("CONTACTS"), "CONTACTS");
+        assert_eq!(
+            analysis_filter_display("123456789012345678901"),
+            "12345678901234567890…"
+        );
+        let unicode_label = "这是一段超过二十个字符的关系分类名称用于检查安全截断和可读性";
+        let truncated_unicode_label = analysis_filter_display(unicode_label);
+        assert_eq!(truncated_unicode_label.chars().count(), 21);
+        assert!(truncated_unicode_label.ends_with('…'));
+        assert!(unicode_label.starts_with(truncated_unicode_label.trim_end_matches('…')));
+    }
+
+    #[test]
+    fn headless_analysis_filter_controls_stack_and_fit_default_pane() {
+        let mut case: CaseFile =
+            serde_json::from_str(include_str!("../fixtures/chart/correctness.case.json"))
+                .expect("checked-in chart fixture is valid");
+        let long_label = "VERY LONG RELATIONSHIP CATEGORY FOR CONTACT CLASSIFICATION";
+        for link in &mut case.links {
+            link.label = long_label.to_owned();
+        }
+        let mut app = App::automation_context(case, "/tmp/headless-analysis-filter.case.json");
+        app.most_connected_relationship = Some(long_label.to_owned());
+        let context = egui::Context::default();
+        let mut frame = eframe::Frame::_new_kittest();
+        let shapes = render_headless_app_frame(&context, &mut app, &mut frame, 0.0, Vec::new());
+
+        let heading = find_headless_text_rect(&shapes, "MOST CONNECTED")
+            .expect("analysis filter heading is visible");
+        let rank_label =
+            find_headless_text_rect(&shapes, "Rank by").expect("rank filter label is visible");
+        let relationship_label = find_headless_text_rect(&shapes, "Connected by")
+            .expect("relationship filter label is visible");
+        let selected_value = analysis_filter_display(long_label);
+        let selected_value_rect = find_headless_text_rect(&shapes, &selected_value)
+            .expect("long relationship value uses a bounded display label");
+
+        assert!(rank_label.min.y > heading.max.y);
+        assert!(relationship_label.min.y > rank_label.max.y);
+        assert!(selected_value_rect.min.y > relationship_label.max.y);
+        assert!(headless_text_fits_clip(&shapes, &selected_value));
+        assert!(
+            collect_headless_texts(&shapes)
+                .iter()
+                .any(|text| text == long_label)
+        );
+
+        let pointer = selected_value_rect.center();
+        let mut hover_time = 1.0;
+        render_headless_app_frame(
+            &context,
+            &mut app,
+            &mut frame,
+            hover_time,
+            vec![egui::Event::PointerMoved(pointer)],
+        );
+        hover_time += 1.0;
+        let hovered_shapes =
+            render_headless_app_frame(&context, &mut app, &mut frame, hover_time, Vec::new());
+        let full_label_occurrences = collect_headless_texts(&hovered_shapes)
+            .iter()
+            .filter(|text| text.as_str() == long_label)
+            .count();
+        assert!(
+            full_label_occurrences >= 2,
+            "full filter value remains disclosed below the control and in its hover tooltip"
+        );
+
+        let narrow_case = app.case.clone();
+        let mut narrow_app = App::automation_context(
+            narrow_case,
+            "/tmp/headless-analysis-filter-minimum.case.json",
+        );
+        narrow_app.most_connected_relationship = Some(long_label.to_owned());
+        let narrow_context = egui::Context::default();
+        let mut narrow_frame = eframe::Frame::_new_kittest();
+        let narrow_shapes = render_headless_app_frame_at(
+            &narrow_context,
+            &mut narrow_app,
+            &mut narrow_frame,
+            0.0,
+            Vec::new(),
+            egui::vec2(1_000.0, 650.0),
+        );
+        assert!(find_headless_text_rect(&narrow_shapes, "Connected by").is_some());
+        assert!(find_headless_text_rect(&narrow_shapes, &selected_value).is_some());
+        assert!(headless_text_fits_clip(&narrow_shapes, &selected_value));
+        assert!(
+            collect_headless_texts(&narrow_shapes)
+                .iter()
+                .any(|text| text == long_label)
+        );
     }
 
     #[test]
