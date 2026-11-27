@@ -1617,6 +1617,22 @@ const MAX_CHART_LEGEND_CONDITIONS: usize = 8;
 const MAX_CHART_TEMPLATE_CONDITIONAL_RULES: usize = MAX_CHART_LEGEND_ENTRIES * 4;
 const PROXIMITY_MAP_SELECTED_EDGE_COLOR: egui::Color32 = egui::Color32::from_rgb(244, 224, 166);
 
+fn proximity_map_node_radius(member_count: usize) -> f32 {
+    (15.0 + (member_count as f32).max(1.0).log2() * 2.0).clamp(15.0, 23.0)
+}
+
+fn proximity_map_node_hit_radius(member_count: usize, is_proxy: bool) -> f32 {
+    proximity_map_node_radius(member_count) + if is_proxy { 7.0 } else { 4.0 }
+}
+
+fn proximity_map_node_position(column: usize, row: usize) -> egui::Pos2 {
+    egui::pos2(74.0 + column as f32 * 148.0, 50.0 + row as f32 * 64.0)
+}
+
+fn proximity_map_height(row_count: usize) -> f32 {
+    50.0 + row_count as f32 * 64.0
+}
+
 fn count_with_noun(count: usize, singular: &str, plural: &str) -> String {
     format!("{count} {}", if count == 1 { singular } else { plural })
 }
@@ -26230,7 +26246,7 @@ impl eframe::App for App {
                             let visible_groups_by_column = &analysis.map_groups_by_column;
                             let map_width = 148.0 + analysis.map_hops.len().saturating_sub(1) as f32 * 148.0;
                             let max_rows = visible_groups_by_column.iter().map(Vec::len).max().unwrap_or_default();
-                            let map_height = 72.0 + max_rows as f32 * 58.0;
+                            let map_height = proximity_map_height(max_rows);
                             egui::ScrollArea::both()
                                 .id_salt(("proximity_sampled_contact_map", analysis_origin))
                                 .max_height(190.0)
@@ -26242,7 +26258,8 @@ impl eframe::App for App {
                                     let painter = ui.painter_at(map_rect);
                                     let mut positions = HashMap::with_capacity(analysis.map_group_indices.len());
                                     for (column, group_indices) in visible_groups_by_column.iter().enumerate() {
-                                        let x = map_rect.left() + 74.0 + column as f32 * 148.0;
+                                        let position = proximity_map_node_position(column, 0);
+                                        let x = map_rect.left() + position.x;
                                         painter.text(
                                                 egui::pos2(x, map_rect.top() + 12.0),
                                             egui::Align2::CENTER_CENTER,
@@ -26253,7 +26270,7 @@ impl eframe::App for App {
                                         for (row, group_index) in group_indices.iter().copied().enumerate() {
                                             positions.insert(
                                                 group_index,
-                                                egui::pos2(x, map_rect.top() + 50.0 + row as f32 * 58.0),
+                                                map_rect.min + proximity_map_node_position(column, row).to_vec2(),
                                             );
                                         }
                                     }
@@ -26319,7 +26336,7 @@ impl eframe::App for App {
                                         } else {
                                             egui::Color32::from_rgb(58, 111, 130)
                                         };
-                                        let radius = (15.0 + (group.members.len() as f32).log2() * 2.0).clamp(15.0, 23.0);
+                                        let radius = proximity_map_node_radius(group.members.len());
                                         painter.circle_filled(center, radius, color);
                                         if group.contains_cross_group_proxy {
                                             painter.circle_stroke(center, radius + 3.0, egui::Stroke::new(1.5_f32, egui::Color32::from_rgb(235, 190, 94)));
@@ -26327,7 +26344,19 @@ impl eframe::App for App {
                                         painter.text(center + egui::vec2(0.0, -3.0), egui::Align2::CENTER_CENTER, format!("G{}", group_index + 1), egui::FontId::proportional(9.0), egui::Color32::WHITE);
                                         painter.text(center + egui::vec2(0.0, 9.0), egui::Align2::CENTER_CENTER, group.members.len().to_string(), egui::FontId::proportional(8.0), egui::Color32::WHITE);
                                         let response = ui.interact(
-                                            egui::Rect::from_center_size(center, egui::vec2(radius * 2.0 + 8.0, radius * 2.0 + 8.0)),
+                                            egui::Rect::from_center_size(
+                                                center,
+                                                egui::vec2(
+                                                    proximity_map_node_hit_radius(
+                                                        group.members.len(),
+                                                        group.contains_cross_group_proxy,
+                                                    ) * 2.0,
+                                                    proximity_map_node_hit_radius(
+                                                        group.members.len(),
+                                                        group.contains_cross_group_proxy,
+                                                    ) * 2.0,
+                                                ),
+                                            ),
                                             ui.make_persistent_id(("proximity_sampled_group", analysis_origin, group_index)),
                                             egui::Sense::click(),
                                         ).on_hover_text(format!(
@@ -45243,6 +45272,25 @@ mod tests {
                 .y
         });
         assert!(metric_label_height > 0.0);
+        let maximum_node_hit_radius = super::proximity_map_node_hit_radius(usize::MAX, true);
+        assert!(
+            super::proximity_map_node_position(0, 1).y
+                - super::proximity_map_node_position(0, 0).y
+                - maximum_node_hit_radius * 2.0
+                >= 4.0,
+            "adjacent node hit targets must retain at least 4 points of vertical clearance"
+        );
+        let maximum_metric_label_bottom = 9.0 + metric_label_height / 2.0;
+        let next_node_hit_top = 64.0 - maximum_node_hit_radius;
+        assert!(
+            next_node_hit_top - maximum_metric_label_bottom >= 4.0,
+            "node metrics must remain separated from the next group hit target"
+        );
+        assert!(
+            super::proximity_map_height(3)
+                >= super::proximity_map_node_position(0, 2).y + maximum_node_hit_radius + 4.0,
+            "scroll content must include the final proxy target and clearance"
+        );
         let expected_group_members = app
             .network_proximity_analysis
             .as_ref()

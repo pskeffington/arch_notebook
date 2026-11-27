@@ -1,5 +1,9 @@
 # Local build acceptance record
 
+## Topology pointer-target geometry — 2026-11-27
+
+Named map-geometry helpers size group nodes and their proxy-ring hit targets, place rows at a measured pitch, and include the last target in the scroll content. Production UI regression checks minimum target/label clearance; retained Clinton production UI and sampling checks pass. Native review remains open and this candidate needs its own exact-head CI run. See [PROXIMITY-MAP-HIT-GEOMETRY-01](evidence/vector-ui/PROXIMITY-MAP-HIT-GEOMETRY-01.md).
+
 ## Topology rendering cleanup — 2026-11-27
 
 The hop-group contact map now spaces columns and rows further apart, scales and labels group nodes with member totals, and separates overlapping contacts with deterministic lanes. Production headless UI and both retained Clinton topology regressions pass. Native display review remains blocked by unavailable X11/Wayland access; IBM visual parity is not tested. See [PROXIMITY-MAP-RENDER-CLEANUP-01](evidence/vector-ui/PROXIMITY-MAP-RENDER-CLEANUP-01.md).

@@ -1,5 +1,7 @@
 # SNG-DELIVERY-002: Detected communities and vector graph optimization
 
+- **Status (2026-11-27 topology pointer geometry follow-up):** Centralized sampled-map node size, hit target, row position, and scroll-height calculations. The production headless UI test checks minimum hit-target and label clearances; full Rust suite, Clinton topology UI/sampler tests, locked offline check/debug build, formatting, and diff checks pass. Native display review and exact-head CI remain open; see [PROXIMITY-MAP-HIT-GEOMETRY-01](../evidence/vector-ui/PROXIMITY-MAP-HIT-GEOMETRY-01.md).
+
 - **Owner:** orchestrator; implementation proceeds in bounded stages.
 - **Planning baseline:** `91ebd699b49b8438e168a126e47004db87b908c5`; implementation baseline: `94c469316adc37403f5b88e396ea58171a24af05` on `codex/ui-00-chart-baseline`.
 - **User decisions:** detected communities; optimize both graph rendering and layout.
