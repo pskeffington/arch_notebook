@@ -30,11 +30,11 @@ The JSON and human-readable success summaries no longer echo the caller-supplied
 
 ## Conditional formatting in chart templates — 2026-11-27
 
-Chart templates now carry up to 96 conditional attribute-formatting rules and apply them through bounded, visible template-owned legend blocks. The full suite (63 passed, 1 opt-in benchmark ignored), locked check/debug/release builds, and current-user launcher/icon sync pass. Exact-head cross-platform CI passed in [run 45985015963](https://github.com/pskeffington/arch_notebook/actions/runs/45985015963); native visual review remains blocked by the unavailable display. See [CHART-TEMPLATE-CONDITIONAL-RULES-01](evidence/vector-ui/CHART-TEMPLATE-CONDITIONAL-RULES-01-linux.md).
+Chart templates now carry up to 96 conditional attribute-formatting rules and apply them through bounded, visible template-owned legend blocks. The full suite (63 passed, 1 opt-in benchmark ignored), locked check/debug/release builds, and current-user launcher/icon sync pass. The earlier candidate passed exact-head cross-platform CI in [run 45985015963](https://github.com/pskeffington/arch_notebook/actions/runs/45985015963); this template-ownership follow-up has local suite/build/install evidence, with exact-head CI pending. Native visual review remains blocked by the unavailable display. See [CHART-TEMPLATE-CONDITIONAL-RULES-01](evidence/vector-ui/CHART-TEMPLATE-CONDITIONAL-RULES-01-linux.md).
 
 ## Current-user Linux Desktop shortcut — 2026-11-27
 
-The Linux per-user installer now creates an executable Desktop shortcut byte-identical to the application-menu entry. An isolated temporary-HOME smoke passes for executable, desktop files, icons, SQL helper and MIME definition; the current-user release and icon assets are synchronized. Exact-head cross-platform CI passed in [run 45985015963](https://github.com/pskeffington/arch_notebook/actions/runs/45985015963), including the Linux installer smoke. Native launch remains blocked by the unavailable compositor. See [LOCAL-INSTALL-08](evidence/deployment/LOCAL-INSTALL-08-linux.md).
+The Linux per-user installer now creates an executable Desktop shortcut byte-identical to the application-menu entry. An isolated temporary-HOME smoke passes for executable, desktop files, icons, SQL helper and MIME definition; the current-user release and icon assets are synchronized. Exact-head cross-platform CI passed for the installer implementation in [run 45985015963](https://github.com/pskeffington/arch_notebook/actions/runs/45985015963), including the Linux installer smoke. The currently installed application includes a later template-ownership fix whose exact-head CI is pending. Native launch remains blocked by the unavailable compositor. See [LOCAL-INSTALL-08](evidence/deployment/LOCAL-INSTALL-08-linux.md).
 
 
 ## SQL automation and scale recheck — 2026-11-27
@@ -571,3 +571,7 @@ The initial grid implementation used a 1.6 chart aspect estimate. It now uses th
 | IBM visual or XSD/application validation | BLOCKED / not run | No IBM application or schema was used; this increment makes no IBM parity claim. |
 
 See [UI-ANALYSIS-CARD-01 evidence](evidence/vector-ui/UI-ANALYSIS-CARD-01-linux.md) and the [phased implementation roadmap](roadmaps/social-network-graphing-roadmap.md). The native and independent-review gates remain open; this is not a release-readiness result.
+
+## Linux SQL scheduler calendar parser — 2026-11-27
+
+The Linux scheduler acceptance now asks `systemd-analyze calendar` to validate the five emitted cadence expressions, while retaining isolated unit-install and service-invocation checks. All five cadence expressions and the complete synthetic SQL scheduler harness pass. Live timer delivery remains untested because the harness uses a stub and the current sandbox cannot access the user systemd bus. See [SQL-SCHED-08](evidence/sql-automation/SQL-SCHED-08-systemd-calendar-parser-linux.md) and its [acceptance JSON](evidence/sql-automation/artifacts/SQL-SCHED-08-linux.json).
