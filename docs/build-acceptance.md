@@ -2,7 +2,7 @@
 
 ## Topology selection feedback — 2026-11-27
 
-The sampled map now draws the selected group with a clear outer ring and the selected group-contact pair with a contrasting wider stroke. Headless production UI checks assert both marks appear alongside exact contact-record detail. Full Rust suite (70 passed), retained Clinton topology UI/sampler, offline check/build, and format checks pass. Native pointer/contrast review remains blocked; exact-head CI is pending. See [PROXIMITY-MAP-SELECTION-FEEDBACK-01](evidence/vector-ui/PROXIMITY-MAP-SELECTION-FEEDBACK-01.md).
+The sampled map now draws the selected group with a clear outer ring and the selected sampled contact pair with a contrasting wider stroke. Full-index selections outside the bounded sample are labeled accurately while exact-contact records remain available. The 70-test suite and retained Clinton topology UI/sampler pass, including omitted group/pair selections. Native pointer/contrast review remains blocked; exact-head CI is pending. See [PROXIMITY-MAP-SELECTION-FEEDBACK-01](evidence/vector-ui/PROXIMITY-MAP-SELECTION-FEEDBACK-01.md).
 
 ## Topology pointer-target geometry — 2026-11-27
 

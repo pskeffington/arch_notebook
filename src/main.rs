@@ -26442,6 +26442,12 @@ impl eframe::App for App {
                             if let Some(group_index) = self.selected_proximity_group
                                 && let Some(group) = analysis.groups.get(group_index)
                             {
+                                if !analysis.map_group_indices.contains(&group_index) {
+                                    ui.label(egui::RichText::new(format!(
+                                        "Selected G{} is outside the sampled map; its full contacts remain available here.",
+                                        group_index + 1,
+                                    )).small().color(muted));
+                                }
                                 ui.label(egui::RichText::new(format!(
                                     "GROUP G{} CONTACTS · hop {} · {} · {}",
                                     group_index + 1,
@@ -26527,12 +26533,27 @@ impl eframe::App for App {
                                 ui.label(egui::RichText::new("group size shown in node").small().color(muted));
                                 ui.label(egui::RichText::new("Click a group to show it on the chart.").small().color(muted));
                             });
-                            if self.selected_proximity_interaction.is_some() {
-                                ui.label(
-                                    egui::RichText::new("Highlighted contact line · selected interaction records shown below")
-                                        .small()
-                                        .color(PROXIMITY_MAP_SELECTED_EDGE_COLOR),
-                                );
+                            if let Some(key) = self.selected_proximity_interaction {
+                                let selected_pair_is_visible = analysis
+                                    .map_interaction_indices
+                                    .iter()
+                                    .any(|index| {
+                                        let interaction = &analysis.interactions[*index];
+                                        (interaction.first_group, interaction.second_group) == key
+                                    });
+                                if selected_pair_is_visible {
+                                    ui.label(
+                                        egui::RichText::new("Selected contact line is highlighted in the sampled map; exact records are shown below.")
+                                            .small()
+                                            .color(PROXIMITY_MAP_SELECTED_EDGE_COLOR),
+                                    );
+                                } else {
+                                    ui.label(
+                                        egui::RichText::new("Selected contact pair is outside the sampled map; exact records are shown below.")
+                                            .small()
+                                            .color(muted),
+                                    );
+                                }
                             }
                             egui::ScrollArea::vertical()
                                 .id_salt("proximity_contact_groups")
@@ -45824,6 +45845,72 @@ mod tests {
                 .expanded_map_interaction_indices
                 .len(),
             "full virtualized group index must retain every contact group"
+        );
+
+        let (omitted_group, omitted_pair) = {
+            let analysis = &app.network_proximity_analysis.as_ref().unwrap().1;
+            let omitted_group = (0..analysis.groups.len())
+                .find(|group_index| !analysis.map_group_indices.contains(group_index))
+                .expect("Clinton corpus has groups outside the bounded map sample");
+            let omitted_interaction = analysis
+                .interactions
+                .iter()
+                .enumerate()
+                .find(|(index, _)| !analysis.map_interaction_indices.contains(index))
+                .map(|(_, interaction)| interaction)
+                .expect("Clinton corpus has contact pairs outside the map sample");
+            (
+                omitted_group,
+                (
+                    omitted_interaction.first_group,
+                    omitted_interaction.second_group,
+                ),
+            )
+        };
+        app.selected_proximity_group = Some(omitted_group);
+        let omitted_group_shapes = render_headless_app_frame_at(
+            &context,
+            &mut app,
+            &mut frame,
+            scroll_time + 2.0 / 60.0,
+            Vec::new(),
+            egui::vec2(1440.0, 1600.0),
+        );
+        assert!(
+            find_headless_text_rect(
+                &omitted_group_shapes,
+                &format!("Selected G{} is outside the sampled map", omitted_group + 1,)
+            )
+            .is_some()
+        );
+
+        app.selected_proximity_group = Some(omitted_pair.0);
+        app.selected_proximity_interaction = Some(omitted_pair);
+        let omitted_pair_shapes = render_headless_app_frame_at(
+            &context,
+            &mut app,
+            &mut frame,
+            scroll_time + 3.0 / 60.0,
+            Vec::new(),
+            egui::vec2(1440.0, 1600.0),
+        );
+        assert!(
+            find_headless_text_rect(
+                &omitted_pair_shapes,
+                "Selected contact pair is outside the sampled map; exact records are shown below.",
+            )
+            .is_some()
+        );
+        assert!(
+            find_headless_text_rect(
+                &omitted_pair_shapes,
+                &format!(
+                    "Selected G{} ↔ G{} ·",
+                    omitted_pair.0 + 1,
+                    omitted_pair.1 + 1
+                ),
+            )
+            .is_some()
         );
     }
 
