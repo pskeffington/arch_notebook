@@ -1,5 +1,9 @@
 # Local build acceptance record
 
+## Topology selection feedback — 2026-11-27
+
+The sampled map now draws the selected group with a clear outer ring and the selected group-contact pair with a contrasting wider stroke. Headless production UI checks assert both marks appear alongside exact contact-record detail. Full Rust suite (70 passed), retained Clinton topology UI/sampler, offline check/build, and format checks pass. Native pointer/contrast review remains blocked; exact-head CI is pending. See [PROXIMITY-MAP-SELECTION-FEEDBACK-01](evidence/vector-ui/PROXIMITY-MAP-SELECTION-FEEDBACK-01.md).
+
 ## Topology pointer-target geometry — 2026-11-27
 
 Named map-geometry helpers size group nodes and their proxy-ring hit targets, place rows at a measured pitch, and include the last target in the scroll content. The sampled map now reports group, pair, and record coverage plus omitted totals. Production UI regression checks geometry, calculated coverage, and navigation; retained Clinton production UI and sampling checks pass. Exact-head CI [46076464039](https://github.com/pskeffington/arch_notebook/actions/runs/46076464039) passed all six jobs for `25ff6b6`. Native review remains open. See [PROXIMITY-MAP-HIT-GEOMETRY-01](evidence/vector-ui/PROXIMITY-MAP-HIT-GEOMETRY-01.md).
