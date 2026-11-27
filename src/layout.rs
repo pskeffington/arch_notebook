@@ -18,6 +18,31 @@ pub(super) struct LayoutSettings {
     pub seed: u64,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(super) struct ConnectivityNode {
+    pub id: uuid::Uuid,
+    pub x: f32,
+    pub y: f32,
+    pub pinned: bool,
+    pub degree: usize,
+}
+
+/// G0 connectivity arrangement retained as the production baseline layout.
+pub(super) fn connectivity_layout(nodes: &[ConnectivityNode]) -> Vec<(f32, f32)> {
+    let mut positions: Vec<_> = nodes.iter().map(|node| (node.x, node.y)).collect();
+    let movable_count = nodes.iter().filter(|node| !node.pinned).count();
+    let mut order: Vec<usize> = (0..nodes.len())
+        .filter(|index| !nodes[*index].pinned)
+        .collect();
+    order.sort_by_key(|index| (std::cmp::Reverse(nodes[*index].degree), nodes[*index].id));
+    for (rank, index) in order.into_iter().enumerate() {
+        let angle = std::f32::consts::TAU * rank as f32 / movable_count as f32
+            - std::f32::consts::FRAC_PI_2;
+        positions[index] = (0.5 + angle.cos() * 0.36, 0.5 + angle.sin() * 0.36);
+    }
+    positions
+}
+
 const GRID: usize = 12;
 const MIN_ITERATIONS: usize = 1;
 const MAX_ITERATIONS: usize = 120;
@@ -203,7 +228,40 @@ fn mix64(mut x: u64) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{LayoutNode, LayoutSettings, force_layout};
+    use super::{ConnectivityNode, LayoutNode, LayoutSettings, connectivity_layout, force_layout};
+
+    #[test]
+    fn connectivity_layout_orders_by_degree_and_preserves_pins() {
+        let pinned = uuid::Uuid::from_u128(1);
+        let low = uuid::Uuid::from_u128(2);
+        let high = uuid::Uuid::from_u128(3);
+        let nodes = [
+            ConnectivityNode {
+                id: pinned,
+                x: 0.17,
+                y: 0.83,
+                pinned: true,
+                degree: 99,
+            },
+            ConnectivityNode {
+                id: low,
+                x: 0.0,
+                y: 0.0,
+                pinned: false,
+                degree: 1,
+            },
+            ConnectivityNode {
+                id: high,
+                x: 0.0,
+                y: 0.0,
+                pinned: false,
+                degree: 4,
+            },
+        ];
+        let positions = connectivity_layout(&nodes);
+        assert_eq!(positions[0], (0.17, 0.83));
+        assert!(positions[2].1 < positions[1].1);
+    }
 
     #[test]
     fn force_layout_is_repeatable_bounded_and_preserves_pins() {

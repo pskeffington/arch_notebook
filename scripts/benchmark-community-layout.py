@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import math
 import platform
 import subprocess
 import tempfile
@@ -31,6 +33,7 @@ def main() -> int:
     binary = args.binary.resolve(strict=True)
     if not binary.is_file():
         parser.error(f"not a file: {binary}")
+    binary_sha256 = hashlib.sha256(binary.read_bytes()).hexdigest()
     if not 1 <= args.iterations <= 120 or not 3 <= args.samples <= 100:
         parser.error("iterations must be 1..120 and samples 3..100")
     if any(size < 10 or size > 10_000 for size in args.sizes):
@@ -71,18 +74,41 @@ def main() -> int:
                     capture_output=True,
                     text=True,
                 )
-                results.append(json.loads(completed.stdout))
+                result = json.loads(completed.stdout)
+                timings = result.get("timings", {})
+                required_timings = (
+                    "g0_connectivity_layout",
+                    "community_force_layout",
+                )
+                if result.get("benchmark") != "g0_connectivity_vs_community_force_layout_cpu":
+                    raise SystemExit("binary returned an unexpected layout benchmark format")
+                for timing_name in required_timings:
+                    summary = timings.get(timing_name)
+                    if not isinstance(summary, dict) or summary.get("samples") != args.samples:
+                        raise SystemExit(
+                            f"binary omitted {args.samples}-sample timing summary: {timing_name}"
+                        )
+                    if not all(
+                        isinstance(summary.get(key), (int, float))
+                        and math.isfinite(summary[key])
+                        and summary[key] >= 0
+                        for key in ("min_ns", "median_ns", "p95_ns", "max_ns", "mean_ns")
+                    ):
+                        raise SystemExit(f"binary returned invalid timing values: {timing_name}")
+                results.append(result)
 
     report = {
         "schema_version": 1,
-        "benchmark_suite": "arch_notebook_community_force_layout_cpu",
+        "benchmark_suite": "arch_notebook_g0_connectivity_vs_community_force_layout_cpu",
         "host": {"platform": platform.platform(), "machine": platform.machine()},
         "binary": str(binary),
+        "binary_sha256": binary_sha256,
         "settings": {"iterations": args.iterations, "samples": args.samples},
         "results": results,
         "limitations": [
             "Synthetic fictional charts only.",
-            "Community detection is performed before timing; the reported timing covers layout coordinates only.",
+            "The production G0 connectivity layout and community force layout run on identical fixture inputs and are timed separately.",
+            "Community detection is performed once before the repeated layout timings.",
             "Does not measure native chart painting, input latency, compositor, or presentation.",
             "Timing is host-specific and is not a universal performance target.",
         ],

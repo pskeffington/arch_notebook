@@ -12022,25 +12022,28 @@ impl App {
         match self.layout_mode {
             LayoutMode::Connectivity => {
                 let degrees = connected_entity_counts(&self.case);
-                let mut order: Vec<usize> = (0..n)
-                    .filter(|index| !self.case.entities[*index].position_locked)
+                let nodes: Vec<_> = self
+                    .case
+                    .entities
+                    .iter()
+                    .map(|entity| layout::ConnectivityNode {
+                        id: entity.id,
+                        x: entity.x,
+                        y: entity.y,
+                        pinned: entity.position_locked,
+                        degree: degrees.get(&entity.id).copied().unwrap_or(0),
+                    })
                     .collect();
-                order.sort_by_key(|index| {
-                    (
-                        std::cmp::Reverse(
-                            degrees
-                                .get(&self.case.entities[*index].id)
-                                .copied()
-                                .unwrap_or(0),
-                        ),
-                        self.case.entities[*index].id,
-                    )
-                });
-                for (rank, index) in order.into_iter().enumerate() {
-                    let angle = std::f32::consts::TAU * rank as f32 / movable_count as f32
-                        - std::f32::consts::FRAC_PI_2;
-                    self.case.entities[index].x = 0.5 + angle.cos() * 0.36;
-                    self.case.entities[index].y = 0.5 + angle.sin() * 0.36;
+                for (entity, (x, y)) in self
+                    .case
+                    .entities
+                    .iter_mut()
+                    .zip(layout::connectivity_layout(&nodes))
+                {
+                    if !entity.position_locked {
+                        entity.x = x;
+                        entity.y = y;
+                    }
                 }
             }
             LayoutMode::CentralEntity => {
@@ -28542,24 +28545,70 @@ fn benchmark_community_layout(
         seed: 0x4152_4348_4e4f_5445,
     };
     const WARMUP_RUNS: usize = 1;
+    let degrees = connected_entity_counts(&case);
+    let connectivity_nodes: Vec<_> = case
+        .entities
+        .iter()
+        .map(|entity| layout::ConnectivityNode {
+            id: entity.id,
+            x: entity.x,
+            y: entity.y,
+            pinned: entity.position_locked,
+            degree: degrees.get(&entity.id).copied().unwrap_or(0),
+        })
+        .collect();
+    for _ in 0..WARMUP_RUNS {
+        std::hint::black_box(layout::connectivity_layout(&connectivity_nodes));
+    }
     for _ in 0..WARMUP_RUNS {
         std::hint::black_box(layout::force_layout(&nodes, &edges, settings));
     }
     let mut elapsed_ns = Vec::with_capacity(samples);
     let mut coordinate_checksum = 0.0f64;
-    for _ in 0..samples {
-        let started = Instant::now();
-        let positions = layout::force_layout(&nodes, &edges, settings);
-        elapsed_ns.push(started.elapsed().as_nanos());
-        coordinate_checksum = positions
-            .iter()
-            .map(|(x, y)| f64::from(*x) + f64::from(*y))
-            .sum();
-        std::hint::black_box(&positions);
+    let mut connectivity_elapsed_ns = Vec::with_capacity(samples);
+    let mut connectivity_checksum = 0.0f64;
+    for sample_index in 0..samples {
+        let measure_connectivity = || {
+            let started = Instant::now();
+            let positions = layout::connectivity_layout(&connectivity_nodes);
+            let elapsed = started.elapsed().as_nanos();
+            let checksum = positions
+                .iter()
+                .map(|(x, y)| f64::from(*x) + f64::from(*y))
+                .sum();
+            std::hint::black_box(&positions);
+            (elapsed, checksum)
+        };
+        let measure_force = || {
+            let started = Instant::now();
+            let positions = layout::force_layout(&nodes, &edges, settings);
+            let elapsed = started.elapsed().as_nanos();
+            let checksum = positions
+                .iter()
+                .map(|(x, y)| f64::from(*x) + f64::from(*y))
+                .sum();
+            std::hint::black_box(&positions);
+            (elapsed, checksum)
+        };
+        if sample_index % 2 == 0 {
+            let (baseline_elapsed, baseline_checksum) = measure_connectivity();
+            let (force_elapsed, force_checksum) = measure_force();
+            connectivity_elapsed_ns.push(baseline_elapsed);
+            connectivity_checksum = baseline_checksum;
+            elapsed_ns.push(force_elapsed);
+            coordinate_checksum = force_checksum;
+        } else {
+            let (force_elapsed, force_checksum) = measure_force();
+            let (baseline_elapsed, baseline_checksum) = measure_connectivity();
+            elapsed_ns.push(force_elapsed);
+            coordinate_checksum = force_checksum;
+            connectivity_elapsed_ns.push(baseline_elapsed);
+            connectivity_checksum = baseline_checksum;
+        }
     }
     Ok(serde_json::json!({
         "schema_version": 1,
-        "benchmark": "community_aware_force_layout_cpu",
+        "benchmark": "g0_connectivity_vs_community_force_layout_cpu",
         "application_version": env!("CARGO_PKG_VERSION"),
         "fixture_path": case_path,
         "fixture_sha256": sha256_hex(contents.as_bytes()),
@@ -28567,12 +28616,19 @@ fn benchmark_community_layout(
         "relationship_records": case.links.len(),
         "detected_communities": groups.len(),
         "community_detection_elapsed_ns_single_sample": community_detection_elapsed_ns,
-        "iterations_per_layout": iterations,
+        "community_force_iterations": iterations,
+        "g0_connectivity_iterations": 1,
         "samples": samples,
         "warmup_runs": WARMUP_RUNS,
-        "coordinate_checksum": coordinate_checksum,
-        "timing": duration_summary(&elapsed_ns),
-        "scope": "Reports one untuned community-detection timing and repeated layout-coordinate timings; excludes UI, painting, compositor, and presentation",
+        "baseline_connectivity_coordinate_checksum": connectivity_checksum,
+        "community_force_coordinate_checksum": coordinate_checksum,
+        "timings": {
+            "g0_connectivity_layout": duration_summary(&connectivity_elapsed_ns),
+            "community_force_layout": duration_summary(&elapsed_ns),
+        },
+        "sample_order": "Alternates which layout runs first to reduce order bias",
+        "build_profile": if cfg!(debug_assertions) { "debug" } else { "release" },
+        "scope": "Runs the production G0 connectivity coordinate routine and community force coordinate routine on identical input nodes, edges, pinned positions, warmup count, and sample count. Community detection is timed separately once. Excludes UI, painting, compositor, and presentation.",
     }))
 }
 
