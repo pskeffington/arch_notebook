@@ -26157,8 +26157,13 @@ impl eframe::App for App {
                                 "Entities at the same hop are grouped when they contact within that layer. Group links retain record counts and direction; parallel records remain individually inspectable.",
                             ).small().color(muted));
                             ui.label(egui::RichText::new(
-                                "GROUP CONTACT MAP · nodes are hop-layer groups; line thickness represents relationship-record count, and arrowheads show recorded direction. Lines without arrowheads represent undirected records.",
+                                "GROUP CONTACT MAP · nodes are hop-layer groups; larger nodes contain more entities, and thicker lines represent more relationship records. Arrowheads show recorded direction; unarrowed lines are undirected.",
                             ).small().color(muted));
+                            ui.horizontal(|ui| {
+                                ui.label(egui::RichText::new("Node size · entity count").small().color(muted));
+                                ui.label(egui::RichText::new("Thin line · fewer records").small().color(muted));
+                                ui.label(egui::RichText::new("Thick line · more records").small().color(muted));
+                            });
                             let displayed_hops = &analysis.map_hops;
                             let visible_groups_by_column = &analysis.map_groups_by_column;
                             let visible_group_count = analysis.map_group_indices.len();
@@ -26267,18 +26272,18 @@ impl eframe::App for App {
                                             center,
                                             egui::Align2::CENTER_CENTER,
                                             format!("G{}", group_index + 1),
-                                            egui::FontId::proportional(8.0),
+                                            egui::FontId::proportional(9.0),
                                             egui::Color32::WHITE,
                                         );
                                         painter.text(
                                             center + egui::vec2(0.0, radius + 5.0),
                                             egui::Align2::CENTER_TOP,
                                             format!(
-                                                "{} entities · {} records",
+                                                "{} entities · {} internal",
                                                 group.members.len(),
                                                 group.internal_record_count,
                                             ),
-                                            egui::FontId::proportional(8.0),
+                                            egui::FontId::proportional(9.0),
                                             muted,
                                         );
                                         let hit_rect = egui::Rect::from_center_size(
@@ -26291,10 +26296,11 @@ impl eframe::App for App {
                                             egui::Sense::click(),
                                         );
                                         response.clone().on_hover_text(format!(
-                                            "Group {} · hop {} · {} entities{}\nClick to show this group on the chart.",
+                                            "Group {} · hop {} · {} entities · {} internal records{}\nClick to show this group on the chart.",
                                             group_index + 1,
                                             group.hop_distance,
                                             group.members.len(),
+                                            group.internal_record_count,
                                             if contains_proxy { " · contains a cross-group proxy" } else { "" },
                                         ));
                                         if response.clicked() {
@@ -45136,6 +45142,16 @@ mod tests {
             assert!(!analysis.layers.is_empty());
             assert!(!analysis.groups.is_empty());
         }
+        let map_legend = scroll_headless_until_text_at(
+            &context,
+            &mut app,
+            &mut frame,
+            &mut time,
+            "Node size · entity count",
+            egui::pos2(1_300.0, 780.0),
+        );
+        assert!(find_headless_text_rect(&map_legend, "Thin line · fewer records").is_some());
+        assert!(find_headless_text_rect(&map_legend, "Thick line · more records").is_some());
         let expected_group_members = app
             .network_proximity_analysis
             .as_ref()
@@ -45146,8 +45162,14 @@ mod tests {
             .expect("fixture has an outer contact group")
             .members
             .clone();
-        let visible_contact_map =
-            scroll_headless_until_text(&context, &mut app, &mut frame, &mut time, "G2");
+        let visible_contact_map = scroll_headless_until_text_at(
+            &context,
+            &mut app,
+            &mut frame,
+            &mut time,
+            "3 entities · 3 internal",
+            egui::pos2(1_300.0, 780.0),
+        );
         assert_eq!(
             count_strokes_with_color(&visible_contact_map, egui::Color32::from_rgb(84, 194, 205),),
             6,
