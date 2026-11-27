@@ -6,7 +6,7 @@ Named map-geometry helpers size group nodes and their proxy-ring hit targets, pl
 
 ## Sampled topology row ordering — 2026-11-27
 
-The bounded hop-group sample now orders rows by neighboring group contacts using deterministic barycenter sweeps. A test fixture decreases crossings from six to zero; the Clinton real-corpus headless UI and sample bounds tests remain green. The read-only Clinton acceptance also passes: 2,813 entities, 6,173 relationships, query-only SQL preflight 1/1, replay with zero skipped rows/deltas, and default-redacted packet with all entity centers in view. Human review, PDF extraction completeness, and Qwen analysis remain unverified. Cross-platform CI for this ordering follow-up is pending. See [PROXIMITY-MAP-CROSSING-REDUCTION-01](evidence/vector-ui/PROXIMITY-MAP-CROSSING-REDUCTION-01.md).
+The bounded hop-group sample now orders rows by neighboring group contacts using deterministic barycenter sweeps. A synthetic fixture decreases crossings from six to zero; on the sampled Clinton graph, proper segment crossings decrease from 23 to 3. The Clinton real-corpus headless UI and sample bounds tests pass. The read-only Clinton acceptance also passes: 2,813 entities, 6,173 relationships, query-only SQL preflight 1/1, replay with zero skipped rows/deltas, and default-redacted packet with all entity centers in view. Human review, PDF extraction completeness, and Qwen analysis remain unverified. Cross-platform CI for this ordering follow-up is pending. See [PROXIMITY-MAP-CROSSING-REDUCTION-01](evidence/vector-ui/PROXIMITY-MAP-CROSSING-REDUCTION-01.md).
 
 ## Topology rendering cleanup — 2026-11-27
 

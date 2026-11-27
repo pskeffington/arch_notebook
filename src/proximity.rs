@@ -456,6 +456,60 @@ mod tests {
         Uuid::from_u128(value)
     }
 
+    fn sampled_contact_crossings(
+        columns: &[Vec<usize>],
+        interactions: &[GroupInteraction],
+    ) -> usize {
+        let positions: HashMap<usize, (i128, i128)> = columns
+            .iter()
+            .enumerate()
+            .flat_map(|(column, groups)| {
+                groups
+                    .iter()
+                    .enumerate()
+                    .map(move |(row, group)| (*group, (column as i128, row as i128)))
+            })
+            .collect();
+        let orient = |a: (i128, i128), b: (i128, i128), c: (i128, i128)| {
+            (b.0 - a.0) * (c.1 - a.1) - (b.1 - a.1) * (c.0 - a.0)
+        };
+        let mut crossings = 0;
+        for first in 0..interactions.len() {
+            let left = &interactions[first];
+            let (Some(&a), Some(&b)) = (
+                positions.get(&left.first_group),
+                positions.get(&left.second_group),
+            ) else {
+                continue;
+            };
+            for right in &interactions[first + 1..] {
+                if left.first_group == right.first_group
+                    || left.first_group == right.second_group
+                    || left.second_group == right.first_group
+                    || left.second_group == right.second_group
+                {
+                    continue;
+                }
+                let (Some(&c), Some(&d)) = (
+                    positions.get(&right.first_group),
+                    positions.get(&right.second_group),
+                ) else {
+                    continue;
+                };
+                let ab_c = orient(a, b, c);
+                let ab_d = orient(a, b, d);
+                let cd_a = orient(c, d, a);
+                let cd_b = orient(c, d, b);
+                if ((ab_c < 0 && ab_d > 0) || (ab_c > 0 && ab_d < 0))
+                    && ((cd_a < 0 && cd_b > 0) || (cd_a > 0 && cd_b < 0))
+                {
+                    crossings += 1;
+                }
+            }
+        }
+        crossings
+    }
+
     #[test]
     fn origin_layers_condense_same_layer_contacts_and_rank_cross_group_proxies() {
         let entities = [
@@ -585,34 +639,10 @@ mod tests {
                 ..Default::default()
             })
             .collect();
-        let crossing_count = |columns: &[Vec<usize>]| {
-            let row_by_group: HashMap<usize, usize> = columns[0]
-                .iter()
-                .enumerate()
-                .chain(columns[1].iter().enumerate())
-                .map(|(row, group)| (*group, row))
-                .collect();
-            let mut crossings = 0;
-            for first in 0..interactions.len() {
-                for second in first + 1..interactions.len() {
-                    let left = &interactions[first];
-                    let right = &interactions[second];
-                    let left_from = row_by_group[&left.first_group] as isize;
-                    let left_to = row_by_group[&left.second_group] as isize;
-                    let right_from = row_by_group[&right.first_group] as isize;
-                    let right_to = row_by_group[&right.second_group] as isize;
-                    if (left_from - right_from) * (left_to - right_to) < 0 {
-                        crossings += 1;
-                    }
-                }
-            }
-            crossings
-        };
-
-        let initial_crossings = crossing_count(&columns);
+        let initial_crossings = sampled_contact_crossings(&columns, &interactions);
         assert_eq!(initial_crossings, 6);
         reorder_map_groups_by_connections(&mut columns, &interactions);
-        assert_eq!(crossing_count(&columns), 0);
+        assert_eq!(sampled_contact_crossings(&columns, &interactions), 0);
 
         let result = columns.clone();
         reorder_map_groups_by_connections(&mut columns, &interactions);
@@ -666,6 +696,16 @@ mod tests {
                 .map(|link| (link.from, link.to, link.directed)),
             origin,
         );
+        let (_, mut initial_columns) = sample_group_map(&analysis.groups, 48, 40);
+        let initial_crossings = sampled_contact_crossings(&initial_columns, &analysis.interactions);
+        reorder_map_groups_by_connections(&mut initial_columns, &analysis.interactions);
+        let reduced_crossings = sampled_contact_crossings(&initial_columns, &analysis.interactions);
+        assert_eq!(initial_columns, analysis.map_groups_by_column);
+        assert!(
+            reduced_crossings <= initial_crossings,
+            "contact ordering increased crossings: {initial_crossings} -> {reduced_crossings}"
+        );
+        println!("aggregate Clinton sample crossings: {initial_crossings} -> {reduced_crossings}");
         assert_eq!(analysis.reachable_entity_count, 2_128);
         assert_eq!(analysis.layers.len(), 9);
         assert_eq!(analysis.map_hops.len(), 10);
