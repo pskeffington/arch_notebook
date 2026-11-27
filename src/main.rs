@@ -44930,17 +44930,6 @@ mod tests {
     }
 
     #[test]
-    fn proximity_group_rows_clear_metric_labels_from_the_next_node() {
-        const LABEL_HEIGHT: f32 = 11.0;
-        const LABEL_NODE_GAP: f32 = 4.0;
-        let label_bottom_from_center =
-            super::PROXIMITY_MAP_MAX_NODE_RADIUS + super::PROXIMITY_MAP_LABEL_OFFSET + LABEL_HEIGHT;
-        let next_node_top_from_previous_center =
-            super::PROXIMITY_MAP_GROUP_ROW_SPACING - super::PROXIMITY_MAP_MAX_NODE_RADIUS;
-        assert!(next_node_top_from_previous_center - label_bottom_from_center >= LABEL_NODE_GAP);
-    }
-
-    #[test]
     fn headless_analysis_filter_controls_stack_and_fit_default_pane() {
         let mut case: CaseFile =
             serde_json::from_str(include_str!("../fixtures/chart/correctness.case.json"))
@@ -45173,6 +45162,24 @@ mod tests {
         );
         assert!(find_headless_text_rect(&map_legend, "Thin line · fewer records").is_some());
         assert!(find_headless_text_rect(&map_legend, "Thick line · more records").is_some());
+        let metric_label_height = context.fonts(|fonts| {
+            fonts
+                .layout_no_wrap(
+                    "99 entities · 999 internal".to_owned(),
+                    egui::FontId::proportional(9.0),
+                    egui::Color32::WHITE,
+                )
+                .size()
+                .y
+        });
+        let metric_label_clearance = super::PROXIMITY_MAP_GROUP_ROW_SPACING
+            - super::PROXIMITY_MAP_MAX_NODE_RADIUS * 2.0
+            - super::PROXIMITY_MAP_LABEL_OFFSET
+            - metric_label_height;
+        assert!(
+            metric_label_clearance >= 4.0,
+            "actual egui metric-label height {metric_label_height:.1} leaves only {metric_label_clearance:.1} px between maximum-size rows"
+        );
         let expected_group_members = app
             .network_proximity_analysis
             .as_ref()
