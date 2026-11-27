@@ -26186,9 +26186,9 @@ impl eframe::App for App {
                                 .id_salt("proximity_group_map_scroll")
                                 .max_height(205.0)
                                 .show(ui, |ui| {
-                                    let (map_rect, _) = ui.allocate_exact_size(
+                                    let (map_rect, map_response) = ui.allocate_exact_size(
                                         egui::vec2(map_width, map_height),
-                                        egui::Sense::hover(),
+                                        egui::Sense::click(),
                                     );
                                     let painter = ui.painter_at(map_rect);
                                     let mut group_positions =
@@ -26257,6 +26257,7 @@ impl eframe::App for App {
                                             painter.arrow(start, end - start, egui::Stroke::new(1.5_f32, direction_color));
                                         }
                                     }
+                                    let mut group_node_clicked = false;
                                     for group_index in analysis.map_group_indices.iter().copied() {
                                         let group = &analysis.groups[group_index];
                                         let Some(&center) = group_positions.get(&group_index) else { continue };
@@ -26314,6 +26315,7 @@ impl eframe::App for App {
                                             if contains_proxy { " · contains a cross-group proxy" } else { "" },
                                         ));
                                         if response.clicked() {
+                                            group_node_clicked = true;
                                             self.chart_fit_entities = Some(group.members.clone());
                                             self.chart_fit_path = None;
                                             self.chart_focus_group = Some(group.members.iter().copied().collect());
@@ -26327,6 +26329,40 @@ impl eframe::App for App {
                                             self.show_timeline = false;
                                         }
                                     }
+                                    if !group_node_clicked && map_response.clicked()
+                                        && let Some(pointer) = ui.input(|input| input.pointer.interact_pos())
+                                    {
+                                        let nearest_interaction = analysis
+                                            .map_interaction_indices
+                                            .iter()
+                                            .filter_map(|interaction_index| {
+                                                let interaction = analysis.interactions.get(*interaction_index)?;
+                                                let from = *group_positions.get(&interaction.first_group)?;
+                                                let to = *group_positions.get(&interaction.second_group)?;
+                                                let segment = to - from;
+                                                let length_squared = segment.length_sq();
+                                                if length_squared <= f32::EPSILON {
+                                                    return None;
+                                                }
+                                                let projection = ((pointer - from).dot(segment)
+                                                    / length_squared)
+                                                    .clamp(0.0, 1.0);
+                                                let closest = from + segment * projection;
+                                                Some((
+                                                    pointer.distance(closest),
+                                                    (interaction.first_group, interaction.second_group),
+                                                ))
+                                            })
+                                            .min_by(|first, second| first.0.total_cmp(&second.0));
+                                        if let Some((distance, key)) = nearest_interaction
+                                            && distance <= 8.0
+                                        {
+                                            self.selected_proximity_interaction = Some(key);
+                                        }
+                                    }
+                                    map_response.on_hover_text(
+                                        "Click a group contact line to inspect its exact records below.",
+                                    );
                                 });
                             if visible_group_count < analysis.groups.len()
                                 || displayed_hops.len() < hop_count
@@ -45077,6 +45113,72 @@ mod tests {
                 .sum()
         }
 
+        fn find_line_midpoint_with_color(
+            shapes: &[egui::epaint::ClippedShape],
+            color: egui::Color32,
+        ) -> Option<egui::Pos2> {
+            fn find(shape: &egui::epaint::Shape, color: egui::Color32) -> Option<egui::Pos2> {
+                match shape {
+                    egui::epaint::Shape::LineSegment { points, stroke }
+                        if stroke.color == color =>
+                    {
+                        let midpoint = egui::pos2(
+                            (points[0].x + points[1].x) * 0.5,
+                            (points[0].y + points[1].y) * 0.5,
+                        );
+                        (midpoint.x > 900.0).then_some(midpoint)
+                    }
+                    egui::epaint::Shape::Vec(children) => {
+                        children.iter().find_map(|child| find(child, color))
+                    }
+                    _ => None,
+                }
+            }
+
+            shapes.iter().find_map(|clipped| {
+                find(&clipped.shape, color).filter(|point| clipped.clip_rect.contains(*point))
+            })
+        }
+
+        fn click_headless_point_at_viewport(
+            context: &egui::Context,
+            app: &mut super::App,
+            frame: &mut eframe::Frame,
+            time: &mut f64,
+            point: egui::Pos2,
+            viewport: egui::Vec2,
+        ) -> Vec<egui::epaint::ClippedShape> {
+            let primary = egui::Event::PointerButton {
+                pos: point,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::default(),
+            };
+            *time += 1.0 / 60.0;
+            render_headless_app_frame_at(
+                context,
+                app,
+                frame,
+                *time,
+                vec![egui::Event::PointerMoved(point), primary],
+                viewport,
+            );
+            *time += 1.0 / 60.0;
+            render_headless_app_frame_at(
+                context,
+                app,
+                frame,
+                *time,
+                vec![egui::Event::PointerButton {
+                    pos: point,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::default(),
+                }],
+                viewport,
+            )
+        }
+
         let mut case: CaseFile =
             serde_json::from_str(include_str!("../fixtures/chart/correctness.case.json"))
                 .expect("checked-in chart fixture is valid");
@@ -45152,16 +45254,24 @@ mod tests {
             assert!(!analysis.layers.is_empty());
             assert!(!analysis.groups.is_empty());
         }
-        let map_legend = scroll_headless_until_text_at(
+        let map_viewport = egui::vec2(1_440.0, 1_600.0);
+        let visible_contact_map = render_headless_app_frame_at(
             &context,
             &mut app,
             &mut frame,
-            &mut time,
-            "Node size · entity count",
-            egui::pos2(1_300.0, 780.0),
+            time,
+            Vec::new(),
+            map_viewport,
         );
-        assert!(find_headless_text_rect(&map_legend, "Thin line · fewer records").is_some());
-        assert!(find_headless_text_rect(&map_legend, "Thick line · more records").is_some());
+        assert!(
+            find_headless_text_rect(&visible_contact_map, "Node size · entity count").is_some()
+        );
+        assert!(
+            find_headless_text_rect(&visible_contact_map, "Thin line · fewer records").is_some()
+        );
+        assert!(
+            find_headless_text_rect(&visible_contact_map, "Thick line · more records").is_some()
+        );
         let metric_label_height = context.fonts(|fonts| {
             fonts
                 .layout_no_wrap(
@@ -45190,14 +45300,8 @@ mod tests {
             .expect("fixture has an outer contact group")
             .members
             .clone();
-        let visible_contact_map = scroll_headless_until_text_at(
-            &context,
-            &mut app,
-            &mut frame,
-            &mut time,
-            "3 entities · 3 internal",
-            egui::pos2(1_300.0, 780.0),
-        );
+        assert!(find_headless_text_rect(&visible_contact_map, "3 entities · 3 internal").is_some());
+        assert!(find_headless_text_rect(&visible_contact_map, "HOP 0").is_some());
         assert_eq!(
             count_strokes_with_color(&visible_contact_map, egui::Color32::from_rgb(84, 194, 205),),
             6,
@@ -45214,13 +45318,71 @@ mod tests {
             .expect("fixture contains reciprocal contacts between hop-layer groups");
         assert_eq!(reciprocal_contact.first_to_second_record_count, 1);
         assert_eq!(reciprocal_contact.second_to_first_record_count, 1);
-        click_headless_visible_text(
+        let first_map_interaction = {
+            let analysis = &app.network_proximity_analysis.as_ref().unwrap().1;
+            let interaction_index = *analysis
+                .map_interaction_indices
+                .first()
+                .expect("fixture has a visible group contact line");
+            let interaction = &analysis.interactions[interaction_index];
+            (interaction.first_group, interaction.second_group)
+        };
+        let contact_line_midpoint = find_line_midpoint_with_color(
+            &visible_contact_map,
+            egui::Color32::from_rgb(66, 111, 129),
+        )
+        .expect("the contact map paints a weighted group-connection line");
+        click_headless_point_at_viewport(
             &context,
             &mut app,
             &mut frame,
             &mut time,
-            &visible_contact_map,
-            "G2",
+            contact_line_midpoint,
+            map_viewport,
+        );
+        assert_eq!(
+            app.selected_proximity_interaction,
+            Some(first_map_interaction),
+            "clicking a painted contact line selects its exact interaction drilldown",
+        );
+        let selected_interaction = app
+            .network_proximity_analysis
+            .as_ref()
+            .unwrap()
+            .1
+            .interactions
+            .iter()
+            .find(|interaction| {
+                (interaction.first_group, interaction.second_group) == first_map_interaction
+            })
+            .expect("the selected map line has a group interaction");
+        let expected_detail = format!(
+            "Records between Group {} and Group {} · {} exact records",
+            first_map_interaction.0 + 1,
+            first_map_interaction.1 + 1,
+            selected_interaction.link_indices.len(),
+        );
+        let selected_map_view = render_headless_app_frame_at(
+            &context,
+            &mut app,
+            &mut frame,
+            time,
+            Vec::new(),
+            map_viewport,
+        );
+        assert!(
+            find_headless_text_rect(&selected_map_view, &expected_detail).is_some(),
+            "line selection should show exact record detail: {expected_detail}"
+        );
+        let group_node_point = find_headless_text_point(&visible_contact_map, "G2")
+            .expect("contact map renders the second group node");
+        click_headless_point_at_viewport(
+            &context,
+            &mut app,
+            &mut frame,
+            &mut time,
+            group_node_point,
+            map_viewport,
         );
         assert_eq!(app.chart_fit_entities, Some(expected_group_members.clone()));
         assert_eq!(app.selected, expected_group_members.first().copied());
