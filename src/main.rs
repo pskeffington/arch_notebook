@@ -1618,6 +1618,7 @@ const MAX_CHART_TEMPLATE_CONDITIONAL_RULES: usize = MAX_CHART_LEGEND_ENTRIES * 4
 const PROXIMITY_MAP_GROUP_ROW_SPACING: f32 = 52.0;
 const PROXIMITY_MAP_MAX_NODE_RADIUS: f32 = 15.0;
 const PROXIMITY_MAP_LABEL_OFFSET: f32 = 5.0;
+const PROXIMITY_MAP_SELECTED_EDGE_COLOR: egui::Color32 = egui::Color32::from_rgb(244, 224, 166);
 
 fn chart_template_saved_status(
     action: &str,
@@ -26229,12 +26230,22 @@ impl eframe::App for App {
                                         }
                                         let direction = delta / length;
                                         let normal = egui::vec2(-direction.y, direction.x);
+                                        let key = (interaction.first_group, interaction.second_group);
+                                        let is_selected = self.selected_proximity_interaction == Some(key);
                                         let width = (1.0
                                             + (interaction.relationship_record_count as f32).log2())
-                                            .clamp(1.0, 5.0);
+                                            .clamp(1.0, 5.0)
+                                            + if is_selected { 1.5 } else { 0.0 };
                                         painter.line_segment(
                                             [from, to],
-                                            egui::Stroke::new(width, egui::Color32::from_rgb(66, 111, 129)),
+                                            egui::Stroke::new(
+                                                width,
+                                                if is_selected {
+                                                    PROXIMITY_MAP_SELECTED_EDGE_COLOR
+                                                } else {
+                                                    egui::Color32::from_rgb(66, 111, 129)
+                                                },
+                                            ),
                                         );
                                         let has_forward = interaction.first_to_second_record_count > 0;
                                         let has_reverse = interaction.second_to_first_record_count > 0;
@@ -26378,6 +26389,13 @@ impl eframe::App for App {
                                 ui.label(egui::RichText::new("○ proxy group").small().color(egui::Color32::from_rgb(235, 190, 94)));
                                 ui.label(egui::RichText::new("Click a group to show it on the chart.").small().color(muted));
                             });
+                            if self.selected_proximity_interaction.is_some() {
+                                ui.label(
+                                    egui::RichText::new("Highlighted contact line · selected interaction records shown below")
+                                        .small()
+                                        .color(PROXIMITY_MAP_SELECTED_EDGE_COLOR),
+                                );
+                            }
                             egui::ScrollArea::vertical()
                                 .id_salt("proximity_contact_groups")
                                 .max_height(150.0)
@@ -45369,6 +45387,11 @@ mod tests {
             time,
             Vec::new(),
             map_viewport,
+        );
+        assert!(
+            count_strokes_with_color(&selected_map_view, super::PROXIMITY_MAP_SELECTED_EDGE_COLOR,)
+                > 0,
+            "selected interaction remains highlighted on the contact map"
         );
         assert!(
             find_headless_text_rect(&selected_map_view, &expected_detail).is_some(),
