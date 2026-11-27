@@ -62,6 +62,7 @@ Use a fresh launch of the untouched baseline case and the same candidate binary.
 1. Capture the 2× zoom, zero-pan screenshot. Confirm the long relationship from offscreen endpoints crosses the viewport and its label remains rendered. Then pan the chart and confirm visible routes and labels update without leaving gaps.
 2. Inspect the parallel/reversed relationship records, self-loop, direction markers, and long labels. Confirm individual relationship picking remains possible and that culling does not remove a route merely because its endpoints are outside the viewport.
 3. Pan and zoom back to a neutral fit, capture screenshots, and record any missing route, label, marker, loop, or selectable record as FAIL with the view and steps that reproduce it.
+4. At neutral fit, verify every entity card is inside the chart viewport and remains visible after resizing the analysis pane. Distinguish viewport clipping from card-to-card overlap; record the saved view state and exact card bounds for any defect.
 
 ### Dense overview labels
 
