@@ -18,6 +18,7 @@ Relationship labels and their attribute callouts now have session-scoped **Auto*
 | Check | Result |
 | --- | --- |
 | Headless `App::update` regression: dense Auto suppression, click selection of a record whose label is suppressed, actual View checkbox to All, all 40 visible labels present, unchanged route-segment count, and Auto labels returning after pan | **PASS** |
+| Chart-fit regression: selected entities with edge positions remain fully inside an inset viewport at 1000×700 and 560×420; missing IDs are ignored | **PASS**; `chart_fit_ignores_missing_ids_and_contains_selected_entity_cards`, included in the full suite below |
 | Full offline suite: `CARGO_BUILD_JOBS=1 CARGO_TARGET_DIR=/tmp/arch-notebook-target cargo test --locked --offline -- --test-threads=1` | **PASS**, 61 passed, 0 failed, 1 ignored; exit 0 |
 | Offline check: `CARGO_BUILD_JOBS=1 CARGO_TARGET_DIR=/tmp/arch-notebook-target cargo check --locked --offline` | **PASS**, exit 0 |
 | Offline debug build: `CARGO_BUILD_JOBS=1 CARGO_TARGET_DIR=/tmp/arch-notebook-target cargo build --locked --offline` | **PASS**, exit 0 |

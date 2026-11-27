@@ -47392,11 +47392,21 @@ mod tests {
     }
 
     #[test]
-    fn chart_fit_ignores_missing_ids_and_returns_none_for_empty_selection() {
-        let mut entities = vec![layout_entity("A", "PERSON", false)];
+    fn chart_fit_ignores_missing_ids_and_contains_selected_entity_cards() {
+        let mut entities = vec![
+            layout_entity("A", "PERSON", false),
+            layout_entity("B", "ORGANIZATION", false),
+            layout_entity("C", "LOCATION", false),
+        ];
         entities[0].id = Uuid::from_u128(1);
-        entities[0].x = 0.2;
-        entities[0].y = 0.8;
+        entities[0].x = 0.0;
+        entities[0].y = 0.0;
+        entities[1].id = Uuid::from_u128(2);
+        entities[1].x = 1.0;
+        entities[1].y = 0.0;
+        entities[2].id = Uuid::from_u128(3);
+        entities[2].x = 0.5;
+        entities[2].y = 1.0;
         let case = CaseFile {
             format_version: 19,
             title: "fixture".into(),
@@ -47420,13 +47430,33 @@ mod tests {
             saved_paths: Vec::new(),
             selection_sets: Vec::new(),
         };
-        let rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1000.0, 700.0));
-        assert!(super::chart_fit_transform(&case, &[], rect).is_none());
-        let result =
-            super::chart_fit_transform(&case, &[Uuid::from_u128(99), Uuid::from_u128(1)], rect)
-                .expect("one selected entity exists");
-        assert!(result.0.is_finite() && (0.25..=3.0).contains(&result.0));
-        assert!(result.1.x.is_finite() && result.1.y.is_finite());
+        assert!(super::chart_fit_transform(&case, &[], egui::Rect::NOTHING).is_none());
+        for size in [egui::vec2(1000.0, 700.0), egui::vec2(560.0, 420.0)] {
+            let rect = egui::Rect::from_min_size(egui::pos2(37.0, 51.0), size);
+            let result = super::chart_fit_transform(
+                &case,
+                &[
+                    Uuid::from_u128(99),
+                    Uuid::from_u128(1),
+                    Uuid::from_u128(2),
+                    Uuid::from_u128(3),
+                ],
+                rect,
+            )
+            .expect("valid selected entities exist");
+            assert!(result.0.is_finite() && (0.25..=3.0).contains(&result.0));
+            assert!(result.1.x.is_finite() && result.1.y.is_finite());
+
+            let transform = super::ChartTransform::new(rect, result.0, result.1);
+            for entity in &case.entities {
+                let center = transform.normalized_to_screen(entity.x, entity.y);
+                assert!(
+                    rect.contains_rect(super::chart_entity_card_bounds(center, result.0)),
+                    "fitted card for {} must stay inside the chart viewport at {size:?}",
+                    entity.name
+                );
+            }
+        }
     }
 
     #[test]
