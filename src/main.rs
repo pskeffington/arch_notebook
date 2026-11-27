@@ -4017,20 +4017,8 @@ impl App {
         self.case
             .labels
             .retain(|label| label.template_rules_for.is_none());
-        let existing_rules = self
-            .case
-            .labels
-            .iter()
-            .filter(|label| label.is_legend)
-            .flat_map(|label| &label.legend_entries)
-            .collect::<Vec<_>>();
-        let missing_rules = template
+        let rule_chunks = template
             .conditional_rules
-            .iter()
-            .filter(|rule| !existing_rules.iter().any(|existing| *existing == *rule))
-            .cloned()
-            .collect::<Vec<_>>();
-        let rule_chunks = missing_rules
             .chunks(MAX_CHART_LEGEND_ENTRIES)
             .collect::<Vec<_>>();
         for (chunk_index, rules) in rule_chunks.iter().enumerate() {
@@ -47691,7 +47679,7 @@ mod tests {
             font_size: 12.0,
             color: [240, 240, 240],
             is_legend: true,
-            legend_entries: vec![local_rule],
+            legend_entries: vec![rule.clone(), local_rule],
             legend_entries_truncated: false,
             template_rules_for: None,
         }];
