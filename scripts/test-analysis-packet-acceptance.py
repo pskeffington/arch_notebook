@@ -101,6 +101,16 @@ def main() -> int:
     assert default_result["entities"] == len(original["entities"])
     assert default_result["relationships"] == len(original["links"])
     assert "Chart: Redacted" in default_report
+    assert "## Detected structural communities and recorded interactions" in default_report
+    assert "### Community membership" in default_report
+    assert "### Cross-community relationship records" in default_report
+    assert "### Cross-community proxies" in default_report
+    assert "all incident relationship records (including records within their own community)" in default_report
+    assert "### Cross-community proxies" in default_report
+    assert "structural contact indicator, not a claim of intent or influence" in default_report
+    assert "**Community 3** · 1 entity: Entity 001" in default_report
+    assert "single-level greedy modularity local-move heuristic" in default_report
+    assert "not asserted real-world groups or affiliations" in default_report
     for entity in original["entities"]:
         assert entity["name"] not in default_report and entity["name"] not in default_svg
     for link in original["links"]:

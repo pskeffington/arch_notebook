@@ -14654,6 +14654,108 @@ fn escape_markdown_inline(value: &str) -> String {
     escaped
 }
 
+fn escape_markdown_table_cell(value: &str) -> String {
+    value.replace('|', "\\|")
+}
+
+fn analysis_packet_community_summary(
+    case: &CaseFile,
+    disclosure: AnalysisPacketDisclosure,
+) -> String {
+    let analysis = detected_community_analysis(case);
+    let mut entities: Vec<&Entity> = case.entities.iter().collect();
+    entities.sort_by_key(|entity| entity.id);
+    let entity_labels: HashMap<Uuid, String> = entities
+        .iter()
+        .enumerate()
+        .map(|(index, entity)| {
+            let mut label = if disclosure.names {
+                format!(
+                    "{} · {}",
+                    escape_markdown_inline(&entity.name),
+                    escape_markdown_inline(&entity.kind)
+                )
+            } else {
+                format!("Entity {:03}", index + 1)
+            };
+            if disclosure.ids {
+                label.push_str(&format!(" (ID `{}`)", entity.id));
+            }
+            (entity.id, label)
+        })
+        .collect();
+
+    let mut output = String::from(
+        "Detected structural communities are exploratory partitions, not asserted real-world groups or affiliations. This summary uses all persisted entities and relationships in the exported chart; unsaved search, selection, and timeline filters are not applied. The partition treats the graph as undirected and unweighted, collapses repeated/reversed endpoint pairs, ignores relationship type and date, excludes self-links and missing endpoints, and keeps isolates as singleton communities. The dependency-free single-level greedy modularity local-move heuristic uses resolution γ = 1.0, UUID-ordered traversal, at most 50 sweeps, and splits disconnected fragments. Charts with missing relationship endpoints are refused by packet export.\n\n### Community membership\n\n",
+    );
+    if analysis.groups.is_empty() {
+        output.push_str("No entities are present in the exported chart.\n");
+    } else {
+        for (index, group) in analysis.groups.iter().enumerate() {
+            let members = group
+                .iter()
+                .filter_map(|entity_id| entity_labels.get(entity_id))
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ");
+            let member_label = if group.len() == 1 {
+                "entity"
+            } else {
+                "entities"
+            };
+            output.push_str(&format!(
+                "- **Community {}** · {} {member_label}: {}\n",
+                index + 1,
+                group.len(),
+                members
+            ));
+        }
+    }
+
+    output.push_str(
+        "\n### Cross-community relationship records\n\nCounts below retain repeated records. Distinct endpoint pairs collapse reversed/parallel records; direction counts describe records, not unique pairs.\n\n| Community pair | Relationship records | Distinct endpoint pairs | First → second | Second → first | Undirected |\n| --- | ---: | ---: | ---: | ---: | ---: |\n",
+    );
+    if analysis.interactions.is_empty() {
+        output.push_str("| None | 0 | 0 | 0 | 0 | 0 |\n");
+    } else {
+        for interaction in &analysis.interactions {
+            output.push_str(&format!(
+                "| Community {} ↔ Community {} | {} | {} | {} | {} | {} |\n",
+                interaction.first_community + 1,
+                interaction.second_community + 1,
+                interaction.relationship_record_count,
+                interaction.distinct_endpoint_pair_count,
+                interaction.first_to_second_record_count,
+                interaction.second_to_first_record_count,
+                interaction.undirected_record_count,
+            ));
+        }
+    }
+
+    output.push_str(
+        "\n### Cross-community proxies\n\nRanks entities that directly contact at least two other detected communities by distinct other communities, distinct neighboring entities, then all incident relationship records (including records within their own community). This is a structural contact indicator, not a claim of intent or influence.\n\n| Rank | Entity | Distinct other communities | Distinct neighboring entities | All incident relationship records |\n| ---: | --- | ---: | ---: | ---: |\n",
+    );
+    if analysis.proxies.is_empty() {
+        output.push_str("| — | None | 0 | 0 | 0 |\n");
+    } else {
+        for (index, proxy) in analysis.proxies.iter().enumerate() {
+            let label = entity_labels
+                .get(&proxy.entity_id)
+                .map(|label| escape_markdown_table_cell(label))
+                .unwrap_or_else(|| "Unknown entity".to_owned());
+            output.push_str(&format!(
+                "| {} | {} | {} | {} | {} |\n",
+                index + 1,
+                label,
+                proxy.distinct_community_contacts,
+                proxy.distinct_neighbor_entities,
+                proxy.relationship_record_count,
+            ));
+        }
+    }
+    output
+}
+
 fn analysis_packet_report(
     case: &CaseFile,
     disclosure: AnalysisPacketDisclosure,
@@ -14661,11 +14763,12 @@ fn analysis_packet_report(
 ) -> String {
     let card = network_analysis_method_card(case);
     let mut methods = network_analysis_method_card_text(&card, false, PathTimeFlow::Any, false);
+    let communities = analysis_packet_community_summary(case, disclosure);
     if !disclosure.relationship_labels {
         methods = methods.replace("Relationship type", "relationship type");
     }
     format!(
-        "# Analyst finding packet\n\n{}\n\n> Simplified SVG overview of all persisted entities and relationship records; standalone chart labels are omitted. This export does not apply unsaved selection, search, or timeline filters. Stored chart positions are for layout only; visual distance is not a measure.\n\n> Privacy: topology and aggregate counts may still identify people even when labels are pseudonymous. Review locally before sharing.\n\n## Export options\n\n- Names: {}\n- Relationship labels: {}\n- IDs: {}\n- Evidence references: {}\n\n## Analysis method card\n\n{}\n\n## Analyst-authored fields\n\n### Question\n\n\n### Findings (software generated no findings)\n\n\n### Evidence selected/references\n\n\n### Limitations and alternative explanations\n\n\n### Audience and privacy review\n\n\n### Analyst / date / version\n\n\n",
+        "# Analyst finding packet\n\n{}\n\n> Simplified SVG overview of all persisted entities and relationship records; standalone chart labels are omitted. This export does not apply unsaved selection, search, or timeline filters. Stored chart positions are for layout only; visual distance is not a measure.\n\n> Privacy: topology and aggregate counts may still identify people even when labels are pseudonymous. Review locally before sharing.\n\n## Export options\n\n- Names: {}\n- Relationship labels: {}\n- IDs: {}\n- Evidence references: {}\n\n## Analysis method card\n\n{}\n\n## Detected structural communities and recorded interactions\n\n{}\n\n## Analyst-authored fields\n\n### Question\n\n\n### Findings (software generated no findings)\n\n\n### Evidence selected/references\n\n\n### Limitations and alternative explanations\n\n\n### Audience and privacy review\n\n\n### Analyst / date / version\n\n\n",
         if disclosure.names {
             format!("Chart: {}", escape_markdown_inline(chart_title))
         } else {
@@ -14675,7 +14778,8 @@ fn analysis_packet_report(
         disclosure.relationship_labels,
         disclosure.ids,
         disclosure.evidence_references,
-        methods
+        methods,
+        communities
     )
 }
 
@@ -45276,6 +45380,104 @@ mod tests {
         );
         assert!(report.contains("Findings (software generated no findings)"));
         assert!(report.contains("topology and aggregate counts may still identify people"));
+    }
+
+    #[test]
+    fn analysis_packet_reports_detected_communities_and_cross_group_records() {
+        let mut case = super::demo_case();
+        case.entities = (1..=12)
+            .map(|index| {
+                let name = if index == 3 {
+                    "PRIVATE|ACTOR *<script>".to_owned()
+                } else {
+                    format!("PRIVATE ACTOR {index}")
+                };
+                let mut entity = layout_entity(&name, "ACTOR", false);
+                entity.id = Uuid::from_u128(index);
+                entity
+            })
+            .collect();
+        let mut links = Vec::new();
+        for (start, end) in [(1_u128, 5_u128), (5_u128, 9_u128), (9_u128, 13_u128)] {
+            for from in start..end {
+                for to in from + 1..end {
+                    links.push(super::Link {
+                        from: Uuid::from_u128(from),
+                        to: Uuid::from_u128(to),
+                        connection_id: format!("INTERNAL-{from}-{to}"),
+                        label: "INTERNAL".into(),
+                        date: String::new(),
+                        confidence: 2,
+                        directed: false,
+                        notes: String::new(),
+                        source_notes: String::new(),
+                        source_reference: String::new(),
+                        ingest_source: None,
+                        attributes: Vec::new(),
+                    });
+                }
+            }
+        }
+        for (from, to, directed) in [
+            (3_u128, 6_u128, true),
+            (4, 5, false),
+            (6, 3, true),
+            (3, 10, true),
+        ] {
+            links.push(super::Link {
+                from: Uuid::from_u128(from),
+                to: Uuid::from_u128(to),
+                connection_id: format!("CROSS-{from}-{to}"),
+                label: "CONTACTS".into(),
+                date: String::new(),
+                confidence: 2,
+                directed,
+                notes: String::new(),
+                source_notes: String::new(),
+                source_reference: String::new(),
+                ingest_source: None,
+                attributes: Vec::new(),
+            });
+        }
+        case.links = links;
+
+        let default = super::analysis_packet_report(
+            &case,
+            AnalysisPacketDisclosure::default(),
+            &case.active_chart_title,
+        );
+        assert!(
+            default.contains(
+                "**Community 1** · 4 entities: Entity 001, Entity 002, Entity 003, Entity 004"
+            ),
+            "unexpected community membership summary:\n{default}"
+        );
+        assert!(default.contains(
+            "**Community 2** · 4 entities: Entity 005, Entity 006, Entity 007, Entity 008"
+        ));
+        assert!(default.contains(
+            "**Community 3** · 4 entities: Entity 009, Entity 010, Entity 011, Entity 012"
+        ));
+        assert!(default.contains("| Community 1 ↔ Community 2 | 3 | 2 | 1 | 1 | 1 |"));
+        assert!(default.contains("| 1 | Entity 003 | 2 | 5 | 6 |"));
+        assert!(default.contains("single-level greedy modularity local-move heuristic"));
+        assert!(default.contains("not asserted real-world groups or affiliations"));
+        assert!(!default.contains("PRIVATE ACTOR"));
+        assert!(!default.contains("PRIVATE|ACTOR"));
+        assert!(!default.contains(&Uuid::from_u128(3).to_string()));
+
+        let disclosed = super::analysis_packet_report(
+            &case,
+            AnalysisPacketDisclosure {
+                names: true,
+                ids: true,
+                ..Default::default()
+            },
+            &case.active_chart_title,
+        );
+        assert!(disclosed.contains("PRIVATE\\|ACTOR \\*\\<script\\> · ACTOR"));
+        assert!(!disclosed.contains("<script>"));
+        assert!(disclosed.contains(&Uuid::from_u128(3).to_string()));
     }
 
     #[test]

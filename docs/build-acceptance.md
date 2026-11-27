@@ -15,6 +15,18 @@
 
 Commands, fixture descriptions, result hashes, and scope limits: [SQL-AUTO-07](evidence/sql-automation/SQL-AUTO-07-current-installed-release-linux.md).
 
+## SQL scheduler runner recheck — 2026-11-27
+
+**Verification source:** `179aff68d32e59e49f411a18f17e90144903712d`; installed runtime binary SHA-256 `4a373a10ace60f738232247d44f5eee16e0d289b6d755788e8e9c2255cb436d0`.
+
+| Gate | Result | Evidence |
+| --- | --- | --- |
+| Generated Linux systemd service invocation | PASS, stubbed | Five cadences and scheduled capture/CSV invocation passed with a temporary `systemctl` stub. |
+| Generated macOS LaunchAgent runner | PASS, stubbed on Linux | Five cadences, rolling UTC window, removal and rollback passed with a temporary `launchctl` stub; native macOS host untouched. |
+| Live systemd/launchd delivery | NOT TESTED | Stub execution does not establish live scheduler dispatch. |
+
+Exact commands, fixture boundaries, report hashes, and limits: [SQL-SCHED-07](evidence/sql-automation/SQL-SCHED-07-current-installed-release-linux.md).
+
 ## Current synchronized branch verification — 2026-11-26
 
 **Repository / branch:** `/home/sysadmin/github/arch_notebook` / `codex/ui-00-chart-baseline`.

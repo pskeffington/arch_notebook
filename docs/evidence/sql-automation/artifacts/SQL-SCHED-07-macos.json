@@ -1,0 +1,36 @@
+{
+  "cadences": [
+    "15-minute",
+    "hourly",
+    "daily",
+    "weekly",
+    "monthly"
+  ],
+  "case_removal_and_legacy_schedule_compatibility": true,
+  "case_specific_launchagents": 5,
+  "failed_first_install_leaves_no_agent": true,
+  "failed_replacement_restores_prior_plist_and_agent": true,
+  "generated_launchagent_runner": {
+    "chart_csv_rows": 1,
+    "excluded_connection_ids": [
+      "BEFORE-WINDOW",
+      "WINDOW-END"
+    ],
+    "included_connection_ids": [
+      "WINDOW-START"
+    ],
+    "source_database_unchanged": true,
+    "trigger": "scheduled",
+    "window_end_utc_exclusive": "2026-11-01",
+    "window_start_utc": "2026-10-01"
+  },
+  "invalid_preflight_and_schedule_leave_agents_unchanged": true,
+  "launchctl_calls": 23,
+  "launchctl_is_temporary_stub": true,
+  "real_arch_notebook_preflight": true,
+  "real_macos_launchd_untouched": true,
+  "result": "PASS",
+  "schema_version": 1,
+  "special_character_paths_preserved": true,
+  "work_dir": "/tmp/arch-notebook-sched-macos-179aff6-20261127"
+}
