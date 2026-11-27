@@ -45,6 +45,8 @@ const MAX_CHART_DIAGNOSTIC_SAMPLES_PER_METRIC: usize = 64;
 
 static CHART_DIAGNOSTIC_PATH: OnceLock<Option<PathBuf>> = OnceLock::new();
 static CHART_DIAGNOSTIC_COUNTS: OnceLock<Mutex<HashMap<&'static str, usize>>> = OnceLock::new();
+#[cfg(test)]
+static DISABLE_CHART_ROUTE_CULLING_FOR_BENCHMARK: AtomicBool = AtomicBool::new(false);
 
 fn record_chart_diagnostic(
     metric: &'static str,
@@ -23616,13 +23618,29 @@ impl eframe::App for App {
                                     mid,
                                     egui::vec2(110.0, 18.0) * self.chart_zoom,
                                 );
-                                if !chart_link_route_may_intersect_viewport(
+                                #[cfg(test)]
+                                let should_cull_route = if DISABLE_CHART_ROUTE_CULLING_FOR_BENCHMARK
+                                    .load(Ordering::Relaxed)
+                                {
+                                    false
+                                } else {
+                                    !chart_link_route_may_intersect_viewport(
+                                        &points,
+                                        label_rect,
+                                        link.attributes.len(),
+                                        rect,
+                                        self.chart_zoom,
+                                    )
+                                };
+                                #[cfg(not(test))]
+                                let should_cull_route = !chart_link_route_may_intersect_viewport(
                                     &points,
                                     label_rect,
                                     link.attributes.len(),
                                     rect,
                                     self.chart_zoom,
-                                ) {
+                                );
+                                if should_cull_route {
                                     continue;
                                 }
                                 for (segment_index, segment) in points.windows(2).enumerate() {
@@ -44044,91 +44062,134 @@ mod tests {
             .unwrap_or(30);
         assert!((5..=1000).contains(&iterations));
         let contents = std::fs::read_to_string(&case_path).expect("read benchmark case");
-        let case = serde_json::from_str::<CaseFile>(&contents).expect("parse benchmark case");
-        let mut app = App::automation_context(case, &case_path);
-        app.page = super::WorkspacePage::Chart;
-
-        let context = egui::Context::default();
-        let mut frame = eframe::Frame::_new_kittest();
+        let cull_first = std::env::var("ARCH_NOTEBOOK_CHART_RENDER_BENCH_CULL_FIRST")
+            .map(|value| value != "false")
+            .unwrap_or(true);
+        let culling_order = if cull_first {
+            [true, false]
+        } else {
+            [false, true]
+        };
+        let mut apps: [App; 2] = std::array::from_fn(|_| {
+            let case = serde_json::from_str::<CaseFile>(&contents).expect("parse benchmark case");
+            let mut app = App::automation_context(case, &case_path);
+            app.page = super::WorkspacePage::Chart;
+            app
+        });
+        let contexts = [egui::Context::default(), egui::Context::default()];
+        let mut frames = [eframe::Frame::_new_kittest(), eframe::Frame::_new_kittest()];
         let warmup_runs = 5;
-        let mut update_samples = Vec::with_capacity(iterations);
-        let mut tessellation_samples = Vec::with_capacity(iterations);
-        let mut shape_count = 0usize;
-        let mut primitive_count = 0usize;
-        let mut mesh_vertex_count = 0usize;
-        let mut mesh_index_count = 0usize;
+        let mut update_samples: [Vec<u128>; 2] =
+            std::array::from_fn(|_| Vec::with_capacity(iterations));
+        let mut tessellation_samples: [Vec<u128>; 2] =
+            std::array::from_fn(|_| Vec::with_capacity(iterations));
+        let mut shape_counts = [0usize; 2];
+        let mut primitive_counts = [0usize; 2];
+        let mut mesh_vertex_counts = [0usize; 2];
+        let mut mesh_index_counts = [0usize; 2];
 
         for sample in 0..warmup_runs + iterations {
-            let update_started = Instant::now();
-            let output = context.run(
-                egui::RawInput {
-                    screen_rect: Some(egui::Rect::from_min_size(
-                        egui::Pos2::ZERO,
-                        egui::vec2(1440.0, 900.0),
-                    )),
-                    time: Some(sample as f64 / 60.0),
-                    ..Default::default()
-                },
-                |context| eframe::App::update(&mut app, context, &mut frame),
-            );
-            let update_elapsed = update_started.elapsed().as_nanos();
-            let current_shape_count = output.shapes.len();
-
-            let tessellation_started = Instant::now();
-            let primitives = context.tessellate(output.shapes, output.pixels_per_point);
-            let tessellation_elapsed = tessellation_started.elapsed().as_nanos();
-
-            if sample + 1 == warmup_runs {
-                shape_count = current_shape_count;
-                primitive_count = primitives.len();
-                mesh_vertex_count = primitives
-                    .iter()
-                    .filter_map(|primitive| match &primitive.primitive {
-                        egui::epaint::Primitive::Mesh(mesh) => Some(mesh.vertices.len()),
-                        egui::epaint::Primitive::Callback(_) => None,
-                    })
-                    .sum();
-                mesh_index_count = primitives
-                    .iter()
-                    .filter_map(|primitive| match &primitive.primitive {
-                        egui::epaint::Primitive::Mesh(mesh) => Some(mesh.indices.len()),
-                        egui::epaint::Primitive::Callback(_) => None,
-                    })
-                    .sum();
-            } else if sample >= warmup_runs {
-                assert_eq!(
-                    current_shape_count, shape_count,
-                    "shape count changed between frames"
+            let variant_order = if sample % 2 == 0 { [0, 1] } else { [1, 0] };
+            for variant_index in variant_order {
+                let culling_enabled = culling_order[variant_index];
+                super::DISABLE_CHART_ROUTE_CULLING_FOR_BENCHMARK
+                    .store(!culling_enabled, std::sync::atomic::Ordering::Relaxed);
+                let update_started = Instant::now();
+                let output = contexts[variant_index].run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(1440.0, 900.0),
+                        )),
+                        time: Some(sample as f64 / 60.0),
+                        ..Default::default()
+                    },
+                    |context| {
+                        eframe::App::update(
+                            &mut apps[variant_index],
+                            context,
+                            &mut frames[variant_index],
+                        )
+                    },
                 );
-                update_samples.push(update_elapsed);
-                tessellation_samples.push(tessellation_elapsed);
+                let update_elapsed = update_started.elapsed().as_nanos();
+                let current_shape_count = output.shapes.len();
+
+                let tessellation_started = Instant::now();
+                let primitives =
+                    contexts[variant_index].tessellate(output.shapes, output.pixels_per_point);
+                let tessellation_elapsed = tessellation_started.elapsed().as_nanos();
+
+                if sample + 1 == warmup_runs {
+                    shape_counts[variant_index] = current_shape_count;
+                    primitive_counts[variant_index] = primitives.len();
+                    mesh_vertex_counts[variant_index] = primitives
+                        .iter()
+                        .filter_map(|primitive| match &primitive.primitive {
+                            egui::epaint::Primitive::Mesh(mesh) => Some(mesh.vertices.len()),
+                            egui::epaint::Primitive::Callback(_) => None,
+                        })
+                        .sum();
+                    mesh_index_counts[variant_index] = primitives
+                        .iter()
+                        .filter_map(|primitive| match &primitive.primitive {
+                            egui::epaint::Primitive::Mesh(mesh) => Some(mesh.indices.len()),
+                            egui::epaint::Primitive::Callback(_) => None,
+                        })
+                        .sum();
+                } else if sample >= warmup_runs {
+                    assert_eq!(
+                        current_shape_count, shape_counts[variant_index],
+                        "shape count changed between frames"
+                    );
+                    update_samples[variant_index].push(update_elapsed);
+                    tessellation_samples[variant_index].push(tessellation_elapsed);
+                }
             }
         }
+
+        super::DISABLE_CHART_ROUTE_CULLING_FOR_BENCHMARK
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+        let variants = (0..2)
+            .map(|variant_index| {
+                serde_json::json!({
+                    "culling_enabled": culling_order[variant_index],
+                    "entities": apps[variant_index].case.entities.len(),
+                    "relationship_records": apps[variant_index].case.links.len(),
+                    "labels": apps[variant_index].case.labels.len(),
+                    "warmup_runs": warmup_runs,
+                    "iterations": iterations,
+                    "draw_output": {
+                        "clipped_shapes": shape_counts[variant_index],
+                        "tessellated_primitives": primitive_counts[variant_index],
+                        "mesh_vertices": mesh_vertex_counts[variant_index],
+                        "mesh_indices": mesh_index_counts[variant_index],
+                    },
+                    "timings": {
+                        "app_update_frame_build": super::duration_summary(&update_samples[variant_index]),
+                        "egui_cpu_tessellation": super::duration_summary(&tessellation_samples[variant_index]),
+                    },
+                })
+            })
+            .collect::<Vec<_>>();
+        super::DISABLE_CHART_ROUTE_CULLING_FOR_BENCHMARK
+            .store(false, std::sync::atomic::Ordering::Relaxed);
 
         println!(
             "{}",
             serde_json::to_string_pretty(&serde_json::json!({
-                "schema_version": 1,
+                "schema_version": 2,
                 "benchmark": "headless_chart_ui_and_egui_tessellation_cpu",
                 "fixture_path": case_path,
                 "fixture_sha256": super::sha256_hex(contents.as_bytes()),
                 "viewport_points": { "width": 1440, "height": 900 },
-                "entities": app.case.entities.len(),
-                "relationship_records": app.case.links.len(),
-                "labels": app.case.labels.len(),
-                "warmup_runs": warmup_runs,
-                "iterations": iterations,
-                "draw_output": {
-                    "clipped_shapes": shape_count,
-                    "tessellated_primitives": primitive_count,
-                    "mesh_vertices": mesh_vertex_count,
-                    "mesh_indices": mesh_index_count,
-                },
-                "timings": {
-                    "app_update_frame_build": super::duration_summary(&update_samples),
-                    "egui_cpu_tessellation": super::duration_summary(&tessellation_samples),
-                },
-                "scope": "headless full-app egui frame build (App::update, UI layout, and CPU shape generation) plus egui CPU tessellation for one deterministic fictional chart; excludes GPU, compositor, presentation, input-to-display latency, and FPS"
+                "pan_points": serde_json::from_str::<CaseFile>(&contents)
+                    .map(|case| case.active_chart_pan)
+                    .unwrap_or([0.0, 0.0]),
+                "culling_order": culling_order,
+                "sample_order": "culling variants alternate order within each warmup and measurement pair",
+                "variants": variants,
+                "scope": "headless full-app egui frame build and egui CPU tessellation; variants use the same deterministic fictional chart, viewport, zoom, and pan, toggling only the production relationship-route culling branch; excludes GPU, compositor, presentation, input-to-display latency, and FPS"
             }))
             .expect("serialize benchmark report")
         );

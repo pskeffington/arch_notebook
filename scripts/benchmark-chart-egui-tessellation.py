@@ -127,7 +127,7 @@ def main() -> int:
                 if len(pan_settings) > 1 and fixture_index % 2 == 1:
                     pan_order = list(reversed(pan_settings))
                 fixture_index += 1
-                for pan in pan_order:
+                for pan_index, pan in enumerate(pan_order):
                     run_fixture = temp / f"{family}-{size}-pan-{pan[0]}-{pan[1]}.case.json"
                     case = json.loads(fixture.read_text(encoding="utf-8"))
                     case["active_chart_pan"] = list(pan)
@@ -138,6 +138,9 @@ def main() -> int:
                     case_env = env.copy()
                     case_env["ARCH_NOTEBOOK_CHART_RENDER_BENCH_CASE"] = str(run_fixture)
                     case_env["ARCH_NOTEBOOK_CHART_RENDER_BENCH_ITERATIONS"] = str(args.iterations)
+                    case_env["ARCH_NOTEBOOK_CHART_RENDER_BENCH_CULL_FIRST"] = str(
+                        (fixture_index + pan_index) % 2 == 0
+                    ).lower()
                     completed = subprocess.run(
                         [
                             str(test_binary),
@@ -156,12 +159,34 @@ def main() -> int:
                     report = find_report(completed.stdout + "\n" + completed.stderr)
                     report["fixture_family"] = family
                     report["pan_points"] = list(pan)
+                    variants = {variant["culling_enabled"]: variant for variant in report["variants"]}
+                    if set(variants) != {True, False}:
+                        raise RuntimeError("benchmark must report culling-enabled and disabled variants")
+                    enabled = variants[True]
+                    disabled = variants[False]
+                    if enabled["draw_output"]["clipped_shapes"] > disabled["draw_output"]["clipped_shapes"]:
+                        raise RuntimeError("route culling increased emitted egui shape count")
+                    if enabled["draw_output"]["mesh_vertices"] > disabled["draw_output"]["mesh_vertices"]:
+                        raise RuntimeError("route culling increased tessellated mesh vertex count")
+                    disabled_median = disabled["timings"]["egui_cpu_tessellation"]["median_ns"]
+                    enabled_median = enabled["timings"]["egui_cpu_tessellation"]["median_ns"]
+                    report["culling_effect"] = {
+                        "shapes_omitted": disabled["draw_output"]["clipped_shapes"]
+                        - enabled["draw_output"]["clipped_shapes"],
+                        "mesh_vertices_omitted": disabled["draw_output"]["mesh_vertices"]
+                        - enabled["draw_output"]["mesh_vertices"],
+                        "tessellation_median_reduction_percent": (
+                            round(100.0 * (disabled_median - enabled_median) / disabled_median, 2)
+                            if disabled_median
+                            else None
+                        ),
+                    }
                     results.append(report)
 
     binary_hash = hashlib.sha256(test_binary.read_bytes()).hexdigest()
     output = {
-        "schema_version": 1,
-        "benchmark_suite": "arch_notebook_headless_ui_and_egui_tessellation_cpu",
+        "schema_version": 2,
+        "benchmark_suite": "arch_notebook_headless_ui_culling_ab_cpu",
         "host": {"platform": platform.platform(), "machine": platform.machine()},
         "test_binary": str(test_binary.resolve()),
         "test_binary_sha256": binary_hash,
@@ -170,10 +195,13 @@ def main() -> int:
             "pan_settings_points": [list(pan) for pan in pan_settings],
             "zoom": 1.0,
         },
-        "sample_order": "paired pan settings are interleaved per fixture: neutral then panned for even fixture indices and panned then neutral for odd fixture indices",
+        "sample_order": "pan settings are interleaved per fixture with order alternating by fixture; culling variant first order alternates by fixture/view, and measurement-pair order alternates per sample",
+        "comparison": "For every fixture and pan setting, the same deterministic input is measured with production route culling enabled and with only the route-culling branch disabled in the test harness.",
         "results": results,
         "limitations": [
             "Synthetic fictional graph fixtures only; App::update covers the full application UI at a fixed 1440x900 point viewport.",
+            "Each fixture/view compares culling-enabled and culling-disabled variants using identical input, viewport, zoom, and pan; only the route-culling branch changes.",
+            "Culling-enabled and culling-disabled timings alternate within every warmup and measured sample pair.",
             "Reports egui frame-build CPU time (App::update, layout, and shape generation) separately from egui CPU tessellation, plus submitted shape and mesh counts.",
             "Does not measure GPU execution, compositor work, buffer presentation, input-to-display latency, or FPS.",
             "Host-specific characterization; comparisons require the same host, profile, viewport, and fixture hashes.",
