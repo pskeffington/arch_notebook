@@ -1,0 +1,354 @@
+{
+  "schema_version": 1,
+  "benchmark_suite": "arch_notebook_headless_ui_and_egui_tessellation_cpu",
+  "host": {
+    "platform": "Linux-7.3.5-zen1-1-zen-x86_64-with-glibc2.44",
+    "machine": "x86_64"
+  },
+  "test_binary": "/tmp/arch-notebook-target/release/build/arch-notebook/53cc4e3ef7ff654e/out/arch_notebook-53cc4e3ef7ff654e",
+  "test_binary_sha256": "4bd351c15d2711fedd5404b2533b49fb403a9043203ad0f03fda57a4af1180cc",
+  "profile": "release test profile",
+  "view_transform": {
+    "pan_points": [
+      0.0,
+      0.0
+    ],
+    "zoom": 1.0
+  },
+  "results": [
+    {
+      "benchmark": "headless_chart_ui_and_egui_tessellation_cpu",
+      "draw_output": {
+        "clipped_shapes": 5511,
+        "mesh_indices": 346773,
+        "mesh_vertices": 112214,
+        "tessellated_primitives": 13
+      },
+      "entities": 100,
+      "fixture_path": "/tmp/arch-notebook-egui-bench-jt6swiv0/sparse-100.case.json",
+      "fixture_sha256": "2882d43cb5c261ad1551f5bdbb9b6eeabdb9ebec6c51e1859e662fca005c5bf4",
+      "iterations": 30,
+      "labels": 0,
+      "relationship_records": 300,
+      "schema_version": 1,
+      "scope": "headless full-app egui frame build (App::update, UI layout, and CPU shape generation) plus egui CPU tessellation for one deterministic fictional chart; excludes GPU, compositor, presentation, input-to-display latency, and FPS",
+      "timings": {
+        "app_update_frame_build": {
+          "max_ns": 2304606,
+          "mean_ns": 1582938,
+          "median_ns": 1446351,
+          "min_ns": 1318761,
+          "p95_ns": 2119351,
+          "samples": 30
+        },
+        "egui_cpu_tessellation": {
+          "max_ns": 2719264,
+          "mean_ns": 2018375,
+          "median_ns": 2049089,
+          "min_ns": 1557284,
+          "p95_ns": 2639398,
+          "samples": 30
+        }
+      },
+      "viewport_points": {
+        "height": 900,
+        "width": 1440
+      },
+      "warmup_runs": 5,
+      "fixture_family": "sparse"
+    },
+    {
+      "benchmark": "headless_chart_ui_and_egui_tessellation_cpu",
+      "draw_output": {
+        "clipped_shapes": 53211,
+        "mesh_indices": 3288657,
+        "mesh_vertices": 1033678,
+        "tessellated_primitives": 13
+      },
+      "entities": 1000,
+      "fixture_path": "/tmp/arch-notebook-egui-bench-jt6swiv0/sparse-1000.case.json",
+      "fixture_sha256": "41567e73d4ae2bee466ea2a07e1c6bc0d067ccf43efb8bc533141275c50ec1ab",
+      "iterations": 30,
+      "labels": 0,
+      "relationship_records": 3000,
+      "schema_version": 1,
+      "scope": "headless full-app egui frame build (App::update, UI layout, and CPU shape generation) plus egui CPU tessellation for one deterministic fictional chart; excludes GPU, compositor, presentation, input-to-display latency, and FPS",
+      "timings": {
+        "app_update_frame_build": {
+          "max_ns": 17442991,
+          "mean_ns": 14565434,
+          "median_ns": 14396722,
+          "min_ns": 13038108,
+          "p95_ns": 15976631,
+          "samples": 30
+        },
+        "egui_cpu_tessellation": {
+          "max_ns": 21236848,
+          "mean_ns": 17397344,
+          "median_ns": 17493656,
+          "min_ns": 14601193,
+          "p95_ns": 20300021,
+          "samples": 30
+        }
+      },
+      "viewport_points": {
+        "height": 900,
+        "width": 1440
+      },
+      "warmup_runs": 5,
+      "fixture_family": "sparse"
+    },
+    {
+      "benchmark": "headless_chart_ui_and_egui_tessellation_cpu",
+      "draw_output": {
+        "clipped_shapes": 5511,
+        "mesh_indices": 346725,
+        "mesh_vertices": 112182,
+        "tessellated_primitives": 13
+      },
+      "entities": 100,
+      "fixture_path": "/tmp/arch-notebook-egui-bench-jt6swiv0/hub-100.case.json",
+      "fixture_sha256": "1d48281591313ac384a77b5a699f2baf8239b7db0cdada8bcbc285a348887c6c",
+      "iterations": 30,
+      "labels": 0,
+      "relationship_records": 300,
+      "schema_version": 1,
+      "scope": "headless full-app egui frame build (App::update, UI layout, and CPU shape generation) plus egui CPU tessellation for one deterministic fictional chart; excludes GPU, compositor, presentation, input-to-display latency, and FPS",
+      "timings": {
+        "app_update_frame_build": {
+          "max_ns": 2064406,
+          "mean_ns": 1439892,
+          "median_ns": 1414560,
+          "min_ns": 1298339,
+          "p95_ns": 1561087,
+          "samples": 30
+        },
+        "egui_cpu_tessellation": {
+          "max_ns": 2453016,
+          "mean_ns": 1841597,
+          "median_ns": 1785955,
+          "min_ns": 1601114,
+          "p95_ns": 2438951,
+          "samples": 30
+        }
+      },
+      "viewport_points": {
+        "height": 900,
+        "width": 1440
+      },
+      "warmup_runs": 5,
+      "fixture_family": "hub"
+    },
+    {
+      "benchmark": "headless_chart_ui_and_egui_tessellation_cpu",
+      "draw_output": {
+        "clipped_shapes": 53211,
+        "mesh_indices": 3288615,
+        "mesh_vertices": 1033650,
+        "tessellated_primitives": 13
+      },
+      "entities": 1000,
+      "fixture_path": "/tmp/arch-notebook-egui-bench-jt6swiv0/hub-1000.case.json",
+      "fixture_sha256": "7236a9611fbfd851aa191baaaba3b48a902f097b404b58947c051597038a2d58",
+      "iterations": 30,
+      "labels": 0,
+      "relationship_records": 3000,
+      "schema_version": 1,
+      "scope": "headless full-app egui frame build (App::update, UI layout, and CPU shape generation) plus egui CPU tessellation for one deterministic fictional chart; excludes GPU, compositor, presentation, input-to-display latency, and FPS",
+      "timings": {
+        "app_update_frame_build": {
+          "max_ns": 16615825,
+          "mean_ns": 14683314,
+          "median_ns": 14731796,
+          "min_ns": 12979556,
+          "p95_ns": 16340393,
+          "samples": 30
+        },
+        "egui_cpu_tessellation": {
+          "max_ns": 17958153,
+          "mean_ns": 15964882,
+          "median_ns": 15962739,
+          "min_ns": 14101918,
+          "p95_ns": 17871700,
+          "samples": 30
+        }
+      },
+      "viewport_points": {
+        "height": 900,
+        "width": 1440
+      },
+      "warmup_runs": 5,
+      "fixture_family": "hub"
+    },
+    {
+      "benchmark": "headless_chart_ui_and_egui_tessellation_cpu",
+      "draw_output": {
+        "clipped_shapes": 4038,
+        "mesh_indices": 288531,
+        "mesh_vertices": 92082,
+        "tessellated_primitives": 13
+      },
+      "entities": 100,
+      "fixture_path": "/tmp/arch-notebook-egui-bench-jt6swiv0/disconnected-100.case.json",
+      "fixture_sha256": "39b721ec2fa44e4eb832aaa7103a788921205cc5b62dc6bffcaa0c2033e92eff",
+      "iterations": 30,
+      "labels": 0,
+      "relationship_records": 200,
+      "schema_version": 1,
+      "scope": "headless full-app egui frame build (App::update, UI layout, and CPU shape generation) plus egui CPU tessellation for one deterministic fictional chart; excludes GPU, compositor, presentation, input-to-display latency, and FPS",
+      "timings": {
+        "app_update_frame_build": {
+          "max_ns": 1299746,
+          "mean_ns": 1181899,
+          "median_ns": 1180121,
+          "min_ns": 1102317,
+          "p95_ns": 1295424,
+          "samples": 30
+        },
+        "egui_cpu_tessellation": {
+          "max_ns": 2211823,
+          "mean_ns": 1840084,
+          "median_ns": 1773658,
+          "min_ns": 1633307,
+          "p95_ns": 2176299,
+          "samples": 30
+        }
+      },
+      "viewport_points": {
+        "height": 900,
+        "width": 1440
+      },
+      "warmup_runs": 5,
+      "fixture_family": "disconnected"
+    },
+    {
+      "benchmark": "headless_chart_ui_and_egui_tessellation_cpu",
+      "draw_output": {
+        "clipped_shapes": 38538,
+        "mesh_indices": 2708403,
+        "mesh_vertices": 832938,
+        "tessellated_primitives": 13
+      },
+      "entities": 1000,
+      "fixture_path": "/tmp/arch-notebook-egui-bench-jt6swiv0/disconnected-1000.case.json",
+      "fixture_sha256": "f7339ed385394f39b7525c42d4490a939c2a56d1a4d5a3b136921616be548729",
+      "iterations": 30,
+      "labels": 0,
+      "relationship_records": 2000,
+      "schema_version": 1,
+      "scope": "headless full-app egui frame build (App::update, UI layout, and CPU shape generation) plus egui CPU tessellation for one deterministic fictional chart; excludes GPU, compositor, presentation, input-to-display latency, and FPS",
+      "timings": {
+        "app_update_frame_build": {
+          "max_ns": 13191678,
+          "mean_ns": 11446621,
+          "median_ns": 11455804,
+          "min_ns": 10003908,
+          "p95_ns": 12680271,
+          "samples": 30
+        },
+        "egui_cpu_tessellation": {
+          "max_ns": 14787844,
+          "mean_ns": 13307663,
+          "median_ns": 13196396,
+          "min_ns": 11547451,
+          "p95_ns": 14557548,
+          "samples": 30
+        }
+      },
+      "viewport_points": {
+        "height": 900,
+        "width": 1440
+      },
+      "warmup_runs": 5,
+      "fixture_family": "disconnected"
+    },
+    {
+      "benchmark": "headless_chart_ui_and_egui_tessellation_cpu",
+      "draw_output": {
+        "clipped_shapes": 15775,
+        "mesh_indices": 752037,
+        "mesh_vertices": 252358,
+        "tessellated_primitives": 13
+      },
+      "entities": 100,
+      "fixture_path": "/tmp/arch-notebook-egui-bench-jt6swiv0/dense-100.case.json",
+      "fixture_sha256": "92be2fae6dc2814eb852b0d1c23a727725a0326c986fe8dbac329a9f46bc8989",
+      "iterations": 30,
+      "labels": 0,
+      "relationship_records": 1000,
+      "schema_version": 1,
+      "scope": "headless full-app egui frame build (App::update, UI layout, and CPU shape generation) plus egui CPU tessellation for one deterministic fictional chart; excludes GPU, compositor, presentation, input-to-display latency, and FPS",
+      "timings": {
+        "app_update_frame_build": {
+          "max_ns": 5812604,
+          "mean_ns": 3843848,
+          "median_ns": 3679980,
+          "min_ns": 3240290,
+          "p95_ns": 5374006,
+          "samples": 30
+        },
+        "egui_cpu_tessellation": {
+          "max_ns": 5356101,
+          "mean_ns": 4499806,
+          "median_ns": 4438900,
+          "min_ns": 3841917,
+          "p95_ns": 5139882,
+          "samples": 30
+        }
+      },
+      "viewport_points": {
+        "height": 900,
+        "width": 1440
+      },
+      "warmup_runs": 5,
+      "fixture_family": "dense"
+    },
+    {
+      "benchmark": "headless_chart_ui_and_egui_tessellation_cpu",
+      "draw_output": {
+        "clipped_shapes": 155875,
+        "mesh_indices": 7347915,
+        "mesh_vertices": 2438006,
+        "tessellated_primitives": 13
+      },
+      "entities": 1000,
+      "fixture_path": "/tmp/arch-notebook-egui-bench-jt6swiv0/dense-1000.case.json",
+      "fixture_sha256": "73fc78d25707f556311399b50acf7b0f29c61ce9adaf2b99c72ce336a24b1b14",
+      "iterations": 30,
+      "labels": 0,
+      "relationship_records": 10000,
+      "schema_version": 1,
+      "scope": "headless full-app egui frame build (App::update, UI layout, and CPU shape generation) plus egui CPU tessellation for one deterministic fictional chart; excludes GPU, compositor, presentation, input-to-display latency, and FPS",
+      "timings": {
+        "app_update_frame_build": {
+          "max_ns": 44805773,
+          "mean_ns": 40549724,
+          "median_ns": 40111110,
+          "min_ns": 38749377,
+          "p95_ns": 44513488,
+          "samples": 30
+        },
+        "egui_cpu_tessellation": {
+          "max_ns": 40073504,
+          "mean_ns": 37465947,
+          "median_ns": 37366498,
+          "min_ns": 35541095,
+          "p95_ns": 39497555,
+          "samples": 30
+        }
+      },
+      "viewport_points": {
+        "height": 900,
+        "width": 1440
+      },
+      "warmup_runs": 5,
+      "fixture_family": "dense"
+    }
+  ],
+  "limitations": [
+    "Synthetic fictional graph fixtures only; App::update covers the full application UI at a fixed 1440x900 point viewport.",
+    "Reports egui frame-build CPU time (App::update, layout, and shape generation) separately from egui CPU tessellation, plus submitted shape and mesh counts.",
+    "Does not measure GPU execution, compositor work, buffer presentation, input-to-display latency, or FPS.",
+    "Host-specific characterization; comparisons require the same host, profile, viewport, and fixture hashes."
+  ]
+}

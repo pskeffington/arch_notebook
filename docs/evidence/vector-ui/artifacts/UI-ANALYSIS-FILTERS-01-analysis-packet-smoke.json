@@ -1,0 +1,68 @@
+{
+  "binary": "/home/sysadmin/.local/bin/arch-notebook",
+  "binary_sha256": "766229457ca4de9975ace1a044bdde1e8802b6bc9ccd4f5bb60bdf904a83274f",
+  "case_copy_sha256": "2b8c8bd712211972978652e3476cf41f42ab048f1ad18d3ef42e00a51f06a704",
+  "case_copy_unchanged": true,
+  "default_packet": {
+    "entities": 8,
+    "ok": true,
+    "options": {
+      "evidence_references": false,
+      "ids": false,
+      "names": false,
+      "relationship_labels": false
+    },
+    "output": "/tmp/arch-notebook-packet-ui-filters-20261127/default-packet",
+    "relationships": 8,
+    "schema_version": 1,
+    "source_sha256": "2b8c8bd712211972978652e3476cf41f42ab048f1ad18d3ef42e00a51f06a704"
+  },
+  "default_privacy": "Names, relationship labels, IDs, source references, and chart title omitted.",
+  "disclosed_packet": {
+    "entities": 8,
+    "ok": true,
+    "options": {
+      "evidence_references": true,
+      "ids": true,
+      "names": true,
+      "relationship_labels": true
+    },
+    "output": "/tmp/arch-notebook-packet-ui-filters-20261127/disclosed-packet",
+    "relationships": 8,
+    "schema_version": 1,
+    "source_sha256": "2b8c8bd712211972978652e3476cf41f42ab048f1ad18d3ef42e00a51f06a704"
+  },
+  "duplicate_json_created_no_output": true,
+  "duplicate_json_exit_code": 2,
+  "existing_destination_exit_code": 1,
+  "existing_destination_preserved": true,
+  "fixture": "/home/sysadmin/github/arch_notebook/fixtures/chart/correctness.case.json",
+  "fixture_sha256": "3170844fdc9db636dcb8dc9505075e486ec060790692bf6dc76cc9b32afe7f5f",
+  "fixture_unchanged": true,
+  "platform_scope": "Linux CLI only; non-Linux atomic publication currently reports unsupported.",
+  "result": "PASS",
+  "selected_chart_packet": {
+    "entities": 1,
+    "ok": true,
+    "options": {
+      "evidence_references": false,
+      "ids": false,
+      "names": true,
+      "relationship_labels": false
+    },
+    "output": "/tmp/arch-notebook-packet-ui-filters-20261127/selected-chart-packet",
+    "relationships": 0,
+    "schema_version": 1,
+    "source_sha256": "2b8c8bd712211972978652e3476cf41f42ab048f1ad18d3ef42e00a51f06a704"
+  },
+  "svg_direction_and_self_loop_markers": {
+    "directed_expected": 5,
+    "directed_rendered": 5,
+    "legend": "PASS",
+    "self_loops_expected": 1,
+    "self_loops_rendered": 1
+  },
+  "svg_relationship_records": 8,
+  "svg_xml_parse": "PASS",
+  "unix_private_permissions": "PASS"
+}

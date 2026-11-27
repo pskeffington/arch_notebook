@@ -16,9 +16,13 @@
 | Per-user launcher sync | **PASS** | `scripts/install-linux-user.sh /tmp/arch-notebook-sync-ui-filters/arch-notebook-linux-x86_64` exited 0; installed executable matches the release SHA above, desktop entries validate and match, and installed icon and helper files match repository assets. |
 | Exact-candidate native process/window creation | **PASS, scoped** | The exact launch command remained live; `xwininfo -root -tree` listed an Arch Notebook X11 window at 1440×900. |
 | Exact-candidate native visual review | **BLOCKED** | `spectacle --new-instance --activewindow --background --nonotify --no-decoration --output /tmp/arch-notebook-analysis-filters-6dd04e4.png` aborted with exit 134. No current-candidate screenshot or visual review is claimed. Host input injection also remains unavailable. |
-| GitHub Actions for this feature-branch candidate | **NOT RUN** | The build workflow runs on `main` pushes, pull requests, manual dispatch, and releases. No open PR currently targets this feature branch; manual dispatch access is unavailable from the connected tools. |
+| GitHub Actions for product changes | **PASS, ancestor candidate** | Manual workflow run [45934212852](https://github.com/pskeffington/arch_notebook/actions/runs/45934212852) completed successfully for `61fb5ebbe731761b9f53e29c0a3f8c8429e18b9e`, which includes the UI filter product changes. It predates the benchmark test/script and this evidence-only update; those newer changes are not covered by that run. |
 
 Detailed source semantics, headless assertions, host limitation, and residual gates: [UI-ANALYSIS-FILTERS-01](evidence/vector-ui/UI-ANALYSIS-FILTERS-01-linux.md).
+
+## Headless egui CPU baseline — 2026-11-27
+
+The eight-case 100/1,000-entity synthetic workload benchmark completed successfully. It records full-app frame-build and egui CPU tessellation separately; the normal offline Rust suite reports 60 passed, 0 failed, and one opt-in benchmark ignored. This is a headless CPU baseline, with no GPU/presentation or optimization-improvement claim. See [G4-EGUI-TESSELLATION-01](evidence/vector-ui/G4-EGUI-TESSELLATION-01-linux.md) and its [raw report](evidence/vector-ui/artifacts/G4-EGUI-TESSELLATION-01-linux-20261127.json).
 
 
 ## SQL automation and scale recheck — 2026-11-27
