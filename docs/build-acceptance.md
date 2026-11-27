@@ -11,6 +11,7 @@
 | Current-source Linux debug build | PASS | `CARGO_BUILD_JOBS=1 CARGO_TARGET_DIR=/tmp/arch-notebook-current-target cargo build --locked --offline` exited 0. |
 | Formatting and diff validation | PASS | `cargo fmt --all -- --check` and `git diff --check` exited 0. |
 | Native initial render on synthetic chart | PASS, render-only | Current candidate rendered all 30 entity cards inside the chart viewport with dense Auto relationship text suppressed; [G4-DENSE-LABEL-03](evidence/vector-ui/G4-DENSE-LABEL-03-current-topology-render-20261127.md). |
+| Clinton corpus SQL and redacted graph packet on current-source binary | PASS | Read-only preflight and latest-run replay pass for 6,173 rows with zero skipped rows/deltas; packet renders all 2,813 entities with default redaction and no out-of-viewport labels. Inputs remained unchanged; [CLINTON-CORPUS-QA-02](evidence/sql-automation/CLINTON-CORPUS-QA-02-current-debug-20261127.md). |
 | Native interaction, Clinton visual review, renderer performance, IBM application parity | NOT TESTED | No native input/performance measurements, real corpus capture, or IBM application/schema validation in this run. |
 | Exact-head cross-platform CI | PASS | Manual workflow run [46059559135](https://github.com/pskeffington/arch_notebook/actions/runs/46059559135) completed successfully for `ab6e29318fca406d748f6694c89b3e25cd06b347`: Linux tests/SQL/ANX/installer, Linux x86_64, Linux ARM64, Arch package, macOS Intel, and macOS Apple Silicon. |
 
