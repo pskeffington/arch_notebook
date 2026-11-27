@@ -2355,6 +2355,7 @@ struct App {
     kml_export_path: String,
     anx_export_path: String,
     selected_link: Option<usize>,
+    show_all_relationship_labels: bool,
     chart_link_overlap_point: Option<egui::Pos2>,
     chart_link_overlap_candidates: Vec<usize>,
     chart_link_overlap_cycle: usize,
@@ -3014,6 +3015,7 @@ impl Default for App {
                 .to_string_lossy()
                 .into_owned(),
             selected_link: None,
+            show_all_relationship_labels: false,
             chart_link_overlap_point: None,
             chart_link_overlap_candidates: Vec::new(),
             chart_link_overlap_cycle: 0,
@@ -4058,6 +4060,7 @@ impl App {
             kml_export_path: String::new(),
             anx_export_path: String::new(),
             selected_link: None,
+            show_all_relationship_labels: false,
             chart_link_overlap_point: None,
             chart_link_overlap_candidates: Vec::new(),
             chart_link_overlap_cycle: 0,
@@ -19218,6 +19221,23 @@ impl eframe::App for App {
                             self.restore_pre_force_layout();
                             ui.close_menu();
                         }
+                        let label_mode_changed = ui
+                            .checkbox(
+                                &mut self.show_all_relationship_labels,
+                                "Show all relationship labels",
+                            )
+                            .on_hover_text(format!(
+                                "Auto shows labels and attribute callouts when at most {} relationship routes are visible. Above that, it shows them for selected, path, and focused records only. Label visibility does not change route rendering or picking; fully offscreen routes remain culled. All records remain in Connections.",
+                                AUTO_RELATIONSHIP_LABEL_LIMIT
+                            ))
+                            .changed();
+                        if label_mode_changed {
+                            self.status = if self.show_all_relationship_labels {
+                                "ALL VISIBLE RELATIONSHIP LABELS SHOWN".into()
+                            } else {
+                                "RELATIONSHIP LABELS SET TO AUTO".into()
+                            };
+                        }
                         if self.page == WorkspacePage::Chart {
                             ui.separator();
                             if ui
@@ -23589,6 +23609,14 @@ impl eframe::App for App {
                                 egui::Stroke::new(2.0 * chart_zoom, color),
                             );
                         }
+                        let mut visible_relationship_count = 0;
+                        let mut link_label_geometry = Vec::with_capacity(if self
+                            .show_all_relationship_labels
+                        {
+                            self.case.links.len()
+                        } else {
+                            AUTO_RELATIONSHIP_LABEL_LIMIT + 1
+                        });
                         for (link_index, link) in self.case.links.iter().enumerate() {
                             if let (Some(&a_index), Some(&b_index)) =
                                 (entity_indices.get(&link.from), entity_indices.get(&link.to))
@@ -23597,7 +23625,7 @@ impl eframe::App for App {
                                 let b = &self.case.entities[b_index];
                                 let ca = entity_positions[&a.id];
                                 let cb = entity_positions[&b.id];
-                                let in_path=path_link_indices.contains(&link_index);let in_source=self.sql_source_focus.as_deref()==link.ingest_source.as_deref();let in_group=self.chart_focus_group.as_ref().is_some_and(|group|group.contains(&link.from)&&group.contains(&link.to));let in_time=timeline_range.is_none_or(|(start,end)|parse_iso_date_ordinal(&link.date).is_some_and(|date|(start..=end).contains(&date)));let col=if self.selected_link==Some(link_index){cyan}else if !in_time{egui::Color32::from_rgb(24,35,43)}else if in_path{egui::Color32::from_rgb(236,174,83)}else if in_source{egui::Color32::from_rgb(91,190,178)}else if in_group{egui::Color32::from_rgb(161,132,218)}else if has_source_focus||has_group_focus{egui::Color32::from_rgb(35,52,63)}else{chart_conditional_attribute_color(&link.attributes, &self.case.labels).map_or_else(||egui::Color32::from_rgb(72,104,120),|color|egui::Color32::from_rgb(color[0],color[1],color[2]))};
+                                let in_path=path_link_indices.contains(&link_index);let in_source=link_matches_source_focus(self.sql_source_focus.as_deref(),link.ingest_source.as_deref());let in_group=self.chart_focus_group.as_ref().is_some_and(|group|group.contains(&link.from)&&group.contains(&link.to));let in_time=timeline_range.is_none_or(|(start,end)|parse_iso_date_ordinal(&link.date).is_some_and(|date|(start..=end).contains(&date)));let col=if self.selected_link==Some(link_index){cyan}else if !in_time{egui::Color32::from_rgb(24,35,43)}else if in_path{egui::Color32::from_rgb(236,174,83)}else if in_source{egui::Color32::from_rgb(91,190,178)}else if in_group{egui::Color32::from_rgb(161,132,218)}else if has_source_focus||has_group_focus{egui::Color32::from_rgb(35,52,63)}else{chart_conditional_attribute_color(&link.attributes, &self.case.labels).map_or_else(||egui::Color32::from_rgb(72,104,120),|color|egui::Color32::from_rgb(color[0],color[1],color[2]))};
                                 let conditional_line_width = chart_conditional_attribute_line_width(
                                     &link.attributes,
                                     &self.case.labels,
@@ -23643,6 +23671,7 @@ impl eframe::App for App {
                                 if should_cull_route {
                                     continue;
                                 }
+                                visible_relationship_count += 1;
                                 for (segment_index, segment) in points.windows(2).enumerate() {
                                     match link.confidence.clamp(1, 3) {
                                         1 if segment_index % 2 == 0 => {
@@ -23703,91 +23732,145 @@ impl eframe::App for App {
                                         );
                                     }
                                 }
-                                p.rect_filled(label_rect,3.0,if self.selected_link==Some(link_index){egui::Color32::from_rgb(34,61,70)}else{egui::Color32::from_rgb(19,31,41)});
-                                let visible_label = truncate_chart_label(&link.label, 18);
-                                p.text(mid,egui::Align2::CENTER_CENTER,&visible_label,egui::FontId::proportional(9.0*self.chart_zoom),if !in_time{egui::Color32::from_rgb(45,57,64)}else if in_source{cyan}else if in_group{egui::Color32::from_rgb(190,169,227)}else if has_source_focus||has_group_focus{egui::Color32::from_rgb(65,78,87)}else{muted});
-                                let label_response = ui.interact(
-                                    label_rect,
-                                    egui::Id::new(("chart_link_label", link_index)),
-                                    egui::Sense::hover(),
-                                );
-                                let direction = if link.directed {
-                                    "directed"
-                                } else {
-                                    "undirected"
-                                };
-                                let evidence = if link.source_reference.is_empty() {
-                                    "none"
-                                } else {
-                                    &link.source_reference
-                                };
-                                label_response.on_hover_text(format!(
-                                    "{} · confidence {} · {} · {} · evidence: {}",
-                                    link.label, link.confidence, direction, link.date, evidence
-                                ));
-                                let displayed_attributes: Vec<_> = link
-                                    .attributes
-                                    .iter()
-                                    .filter_map(|(name, value)| {
-                                        let (symbol, color) = chart_attribute_styles
-                                            .get(&name.trim().to_ascii_lowercase())
-                                            .copied()?;
-                                        Some((name.as_str(), value.as_str(), symbol, color))
-                                    })
-                                    .collect();
-                                for (index, (name, value, symbol, color)) in
-                                    displayed_attributes.iter().take(2).enumerate()
+                                if self.show_all_relationship_labels
+                                    || visible_relationship_count
+                                        <= AUTO_RELATIONSHIP_LABEL_LIMIT + 1
+                                    || self.selected_link == Some(link_index)
+                                    || in_path
+                                    || in_source
+                                    || in_group
                                 {
-                                    let row_y = label_rect.bottom()
-                                        + (6.0 + index as f32 * 12.0) * self.chart_zoom;
-                                    let marker_center =
-                                        egui::pos2(mid.x - 49.0 * self.chart_zoom, row_y);
-                                    let attribute_dimmed = !in_time
-                                        || (has_source_focus && !in_source)
-                                        || (has_group_focus && !in_group);
-                                    let attribute_color = if attribute_dimmed {
-                                        egui::Color32::from_rgb(74, 91, 101)
-                                    } else {
-                                        egui::Color32::from_rgb(color[0], color[1], color[2])
-                                    };
-                                    paint_attribute_symbol(
-                                        &p,
-                                        marker_center,
-                                        self.chart_zoom,
-                                        *symbol,
-                                        attribute_color,
-                                    );
-                                    let display_value = if value.trim().is_empty() {
-                                        *name
-                                    } else {
-                                        *value
-                                    };
-                                    p.text(
-                                        egui::pos2(mid.x - 40.0 * self.chart_zoom, row_y),
-                                        egui::Align2::LEFT_CENTER,
-                                        truncate_chart_label(display_value, 18),
-                                        egui::FontId::proportional(8.0 * self.chart_zoom),
-                                        if attribute_dimmed {
-                                            egui::Color32::from_rgb(81, 95, 103)
-                                        } else {
-                                            muted
-                                        },
-                                    );
+                                    link_label_geometry.push((link_index, mid, label_rect));
                                 }
-                                if displayed_attributes.len() > 2 {
-                                    let row_y =
-                                        label_rect.bottom() + 30.0 * self.chart_zoom;
-                                    p.text(
-                                        egui::pos2(mid.x - 40.0 * self.chart_zoom, row_y),
-                                        egui::Align2::LEFT_CENTER,
-                                        format!(
-                                            "+ {} more attributes",
-                                            displayed_attributes.len() - 2
-                                        ),
-                                        egui::FontId::proportional(7.0 * self.chart_zoom),
-                                        muted,
-                                    );
-                                }
+                            }
+                        }
+                        for (link_index, mid, label_rect) in link_label_geometry {
+                            let link = &self.case.links[link_index];
+                            let in_path = path_link_indices.contains(&link_index);
+                            let in_source = link_matches_source_focus(
+                                self.sql_source_focus.as_deref(),
+                                link.ingest_source.as_deref(),
+                            );
+                            let in_group = self.chart_focus_group.as_ref().is_some_and(|group| {
+                                group.contains(&link.from) && group.contains(&link.to)
+                            });
+                            if !chart_relationship_label_is_visible(
+                                visible_relationship_count,
+                                link_index,
+                                self.selected_link,
+                                in_path || in_source || in_group,
+                                self.show_all_relationship_labels,
+                            ) {
+                                continue;
+                            }
+                            let in_time = timeline_range.is_none_or(|(start, end)| {
+                                parse_iso_date_ordinal(&link.date)
+                                    .is_some_and(|date| (start..=end).contains(&date))
+                            });
+                            let label_color = if !in_time {
+                                egui::Color32::from_rgb(45, 57, 64)
+                            } else if in_source {
+                                cyan
+                            } else if in_group {
+                                egui::Color32::from_rgb(190, 169, 227)
+                            } else if has_source_focus || has_group_focus {
+                                egui::Color32::from_rgb(65, 78, 87)
+                            } else {
+                                muted
+                            };
+                            p.rect_filled(
+                                label_rect,
+                                3.0,
+                                if self.selected_link == Some(link_index) {
+                                    egui::Color32::from_rgb(34, 61, 70)
+                                } else {
+                                    egui::Color32::from_rgb(19, 31, 41)
+                                },
+                            );
+                            p.text(
+                                mid,
+                                egui::Align2::CENTER_CENTER,
+                                truncate_chart_label(&link.label, 18),
+                                egui::FontId::proportional(9.0 * self.chart_zoom),
+                                label_color,
+                            );
+                            let label_response = ui.interact(
+                                label_rect,
+                                egui::Id::new(("chart_link_label", link_index)),
+                                egui::Sense::hover(),
+                            );
+                            let direction = if link.directed {
+                                "directed"
+                            } else {
+                                "undirected"
+                            };
+                            let evidence = if link.source_reference.is_empty() {
+                                "none"
+                            } else {
+                                &link.source_reference
+                            };
+                            label_response.on_hover_text(format!(
+                                "{} · confidence {} · {} · {} · evidence: {}",
+                                link.label, link.confidence, direction, link.date, evidence
+                            ));
+                            let displayed_attributes: Vec<_> = link
+                                .attributes
+                                .iter()
+                                .filter_map(|(name, value)| {
+                                    let (symbol, color) = chart_attribute_styles
+                                        .get(&name.trim().to_ascii_lowercase())
+                                        .copied()?;
+                                    Some((name.as_str(), value.as_str(), symbol, color))
+                                })
+                                .collect();
+                            for (index, (name, value, symbol, color)) in
+                                displayed_attributes.iter().take(2).enumerate()
+                            {
+                                let row_y = label_rect.bottom()
+                                    + (6.0 + index as f32 * 12.0) * self.chart_zoom;
+                                let marker_center =
+                                    egui::pos2(mid.x - 49.0 * self.chart_zoom, row_y);
+                                let attribute_dimmed = !in_time
+                                    || (has_source_focus && !in_source)
+                                    || (has_group_focus && !in_group);
+                                let attribute_color = if attribute_dimmed {
+                                    egui::Color32::from_rgb(74, 91, 101)
+                                } else {
+                                    egui::Color32::from_rgb(color[0], color[1], color[2])
+                                };
+                                paint_attribute_symbol(
+                                    &p,
+                                    marker_center,
+                                    self.chart_zoom,
+                                    *symbol,
+                                    attribute_color,
+                                );
+                                let display_value = if value.trim().is_empty() {
+                                    *name
+                                } else {
+                                    *value
+                                };
+                                p.text(
+                                    egui::pos2(mid.x - 40.0 * self.chart_zoom, row_y),
+                                    egui::Align2::LEFT_CENTER,
+                                    truncate_chart_label(display_value, 18),
+                                    egui::FontId::proportional(8.0 * self.chart_zoom),
+                                    if attribute_dimmed {
+                                        egui::Color32::from_rgb(81, 95, 103)
+                                    } else {
+                                        muted
+                                    },
+                                );
+                            }
+                            if displayed_attributes.len() > 2 {
+                                let row_y = label_rect.bottom() + 30.0 * self.chart_zoom;
+                                p.text(
+                                    egui::pos2(mid.x - 40.0 * self.chart_zoom, row_y),
+                                    egui::Align2::LEFT_CENTER,
+                                    format!("+ {} more attributes", displayed_attributes.len() - 2),
+                                    egui::FontId::proportional(7.0 * self.chart_zoom),
+                                    muted,
+                                );
                             }
                         }
                         for e in &self.case.entities {
@@ -28616,6 +28699,25 @@ fn chart_link_cycle_candidates(
                 .map(|(index, _)| *index)
                 .collect()
         })
+}
+
+const AUTO_RELATIONSHIP_LABEL_LIMIT: usize = 36;
+
+fn link_matches_source_focus(source_focus: Option<&str>, ingest_source: Option<&str>) -> bool {
+    source_focus.is_some_and(|source| ingest_source == Some(source))
+}
+
+fn chart_relationship_label_is_visible(
+    link_count: usize,
+    link_index: usize,
+    selected_link: Option<usize>,
+    is_focused: bool,
+    show_all: bool,
+) -> bool {
+    show_all
+        || link_count <= AUTO_RELATIONSHIP_LABEL_LIMIT
+        || selected_link == Some(link_index)
+        || is_focused
 }
 
 fn duration_summary(samples_ns: &[u128]) -> serde_json::Value {
@@ -44875,6 +44977,7 @@ mod tests {
         let mut app = App::automation_context(case, "/tmp/headless-chart-paint-cull.case.json");
         app.chart_zoom = 1.0;
         app.chart_pan = egui::Vec2::ZERO;
+        app.show_all_relationship_labels = true;
         let context = egui::Context::default();
         let mut frame = eframe::Frame::_new_kittest();
         let visible_shapes =
@@ -44924,6 +45027,251 @@ mod tests {
         assert!(
             visible_relationship_labels > offscreen_relationship_labels + 10,
             "visible relationships should emit more chart-label shapes before pan (visible={visible_relationship_labels}, panned={offscreen_relationship_labels})"
+        );
+    }
+
+    #[test]
+    fn dense_chart_auto_relationship_labels_preserve_routes_and_picking() {
+        fn count_relationship_labels(shapes: &[egui::epaint::ClippedShape]) -> usize {
+            fn count(shape: &egui::epaint::Shape) -> usize {
+                match shape {
+                    egui::epaint::Shape::Text(text) if text.galley.text() == "CONTACTS" => 1,
+                    egui::epaint::Shape::Vec(children) => children.iter().map(count).sum(),
+                    _ => 0,
+                }
+            }
+            shapes.iter().map(|clipped| count(&clipped.shape)).sum()
+        }
+
+        fn count_route_segments(shapes: &[egui::epaint::ClippedShape]) -> usize {
+            fn count(shape: &egui::epaint::Shape) -> usize {
+                match shape {
+                    egui::epaint::Shape::LineSegment { stroke, .. }
+                        if stroke.color == egui::Color32::from_rgb(72, 104, 120)
+                            || stroke.color == egui::Color32::from_rgb(73, 211, 207) =>
+                    {
+                        1
+                    }
+                    egui::epaint::Shape::Vec(children) => children.iter().map(count).sum(),
+                    _ => 0,
+                }
+            }
+            shapes.iter().map(|clipped| count(&clipped.shape)).sum()
+        }
+
+        fn pickable_route_point(
+            shapes: &[egui::epaint::ClippedShape],
+            app: &App,
+        ) -> Option<(egui::Pos2, usize)> {
+            for clipped in shapes {
+                let mut candidates = Vec::new();
+                fn collect(shape: &egui::epaint::Shape, points: &mut Vec<egui::Pos2>) {
+                    match shape {
+                        egui::epaint::Shape::LineSegment {
+                            points: segment,
+                            stroke,
+                        } if stroke.color == egui::Color32::from_rgb(72, 104, 120) => {
+                            points.push(segment[0].lerp(segment[1], 0.5));
+                        }
+                        egui::epaint::Shape::Vec(children) => {
+                            for child in children {
+                                collect(child, points);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                collect(&clipped.shape, &mut candidates);
+                if candidates.is_empty() {
+                    continue;
+                }
+                let geometry = super::chart_vector_geometry(
+                    &app.case,
+                    clipped.clip_rect,
+                    app.chart_zoom,
+                    app.chart_pan,
+                );
+                let entity_indices = super::chart_entity_indices(&app.case);
+                for point in candidates {
+                    if super::chart_entity_at_position(
+                        &app.case.entities,
+                        &geometry.entity_positions,
+                        point,
+                        app.chart_zoom,
+                    )
+                    .is_some()
+                    {
+                        continue;
+                    }
+                    let route_candidates = super::chart_link_cycle_candidates(
+                        &app.case,
+                        &geometry.entity_positions,
+                        &entity_indices,
+                        &geometry.route_lanes,
+                        point,
+                        app.chart_zoom,
+                    );
+                    if let Some(index) = route_candidates.first() {
+                        return Some((point, *index));
+                    }
+                }
+            }
+            None
+        }
+
+        let mut case: CaseFile =
+            serde_json::from_str(include_str!("../fixtures/chart/correctness.case.json"))
+                .expect("checked-in chart fixture is valid");
+        let mut from = layout_entity("Source", "PERSON", false);
+        from.id = Uuid::from_u128(1);
+        from.x = 0.25;
+        from.y = 0.5;
+        let mut to = layout_entity("Target", "PERSON", false);
+        to.id = Uuid::from_u128(2);
+        to.x = 0.75;
+        to.y = 0.5;
+        case.entities = vec![from, to];
+        case.labels.clear();
+        case.links = (0..40)
+            .map(|index| super::Link {
+                from: if index % 2 == 0 {
+                    Uuid::from_u128(1)
+                } else {
+                    Uuid::from_u128(2)
+                },
+                to: if index % 2 == 0 {
+                    Uuid::from_u128(2)
+                } else {
+                    Uuid::from_u128(1)
+                },
+                connection_id: format!("auto-label-{index}"),
+                label: "CONTACTS".into(),
+                date: String::new(),
+                confidence: 2,
+                directed: false,
+                notes: String::new(),
+                source_notes: String::new(),
+                source_reference: String::new(),
+                ingest_source: None,
+                attributes: Vec::new(),
+            })
+            .collect();
+
+        assert!(super::chart_relationship_label_is_visible(
+            36, 0, None, false, false
+        ));
+        assert!(!super::chart_relationship_label_is_visible(
+            37, 0, None, false, false
+        ));
+        assert!(super::chart_relationship_label_is_visible(
+            40,
+            0,
+            Some(0),
+            false,
+            false
+        ));
+        assert!(super::chart_relationship_label_is_visible(
+            40, 0, None, true, false
+        ));
+        assert!(super::chart_relationship_label_is_visible(
+            40, 0, None, false, true
+        ));
+        assert!(!super::link_matches_source_focus(None, None));
+        assert!(super::link_matches_source_focus(
+            Some("capture-a"),
+            Some("capture-a")
+        ));
+        assert!(!super::link_matches_source_focus(
+            Some("capture-a"),
+            Some("capture-b")
+        ));
+        assert!(!super::link_matches_source_focus(Some("capture-a"), None));
+
+        let mut app = App::automation_context(case, "/tmp/headless-chart-auto-label.case.json");
+        app.chart_zoom = 1.0;
+        app.chart_pan = egui::Vec2::ZERO;
+        let context = egui::Context::default();
+        let mut frame = eframe::Frame::_new_kittest();
+        let auto_shapes =
+            render_headless_app_frame(&context, &mut app, &mut frame, 0.0, Vec::new());
+        assert_eq!(count_relationship_labels(&auto_shapes), 0);
+        let auto_route_count = count_route_segments(&auto_shapes);
+
+        let (pointer, expected_link_index) = pickable_route_point(&auto_shapes, &app)
+            .expect("a visible route point can be picked while its label is hidden");
+        let primary_button = |pressed| egui::Event::PointerButton {
+            pos: pointer,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::default(),
+        };
+        render_headless_app_frame(
+            &context,
+            &mut app,
+            &mut frame,
+            1.0 / 60.0,
+            vec![egui::Event::PointerMoved(pointer), primary_button(true)],
+        );
+        render_headless_app_frame(
+            &context,
+            &mut app,
+            &mut frame,
+            2.0 / 60.0,
+            vec![egui::Event::PointerMoved(pointer), primary_button(false)],
+        );
+        assert!(
+            app.selected_link == Some(expected_link_index),
+            "clicking a route with a suppressed label selects its exact record"
+        );
+        let selected_shapes =
+            render_headless_app_frame(&context, &mut app, &mut frame, 3.0 / 60.0, Vec::new());
+        assert_eq!(count_relationship_labels(&selected_shapes), 1);
+        assert_eq!(count_route_segments(&selected_shapes), auto_route_count);
+
+        let mut time = 3.0 / 60.0;
+        click_headless_text(&context, &mut app, &mut frame, &mut time, "View…");
+        time += 1.0 / 60.0;
+        let label_menu =
+            render_headless_app_frame(&context, &mut app, &mut frame, time, Vec::new());
+        assert!(find_headless_text_point(&label_menu, "Show all relationship labels").is_some());
+        click_headless_visible_text(
+            &context,
+            &mut app,
+            &mut frame,
+            &mut time,
+            &label_menu,
+            "Show all relationship labels",
+        );
+        assert!(
+            app.show_all_relationship_labels,
+            "the visible menu control switches to All"
+        );
+        time += 1.0 / 60.0;
+        let all_shapes =
+            render_headless_app_frame(&context, &mut app, &mut frame, time, Vec::new());
+        assert_eq!(count_relationship_labels(&all_shapes), 40);
+        assert_eq!(count_route_segments(&all_shapes), auto_route_count);
+
+        app.show_all_relationship_labels = false;
+        app.selected_link = None;
+        let mut sparse_view_labels_reappeared = false;
+        'pan_search: for zoom in [1.0, 1.5, 2.0, 2.5, 3.0] {
+            for pan_y in (-900..=900).step_by(100) {
+                app.chart_zoom = zoom;
+                app.chart_pan = egui::vec2(0.0, pan_y as f32);
+                time += 1.0 / 60.0;
+                let panned =
+                    render_headless_app_frame(&context, &mut app, &mut frame, time, Vec::new());
+                let label_count = count_relationship_labels(&panned);
+                if (1..=super::AUTO_RELATIONSHIP_LABEL_LIMIT).contains(&label_count) {
+                    sparse_view_labels_reappeared = true;
+                    break 'pan_search;
+                }
+            }
+        }
+        assert!(
+            sparse_view_labels_reappeared,
+            "Auto should show labels again when a pan/zoom leaves at most 36 visible routes"
         );
     }
 

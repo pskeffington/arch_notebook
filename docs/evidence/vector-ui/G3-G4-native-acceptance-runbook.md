@@ -63,6 +63,20 @@ Use a fresh launch of the untouched baseline case and the same candidate binary.
 2. Inspect the parallel/reversed relationship records, self-loop, direction markers, and long labels. Confirm individual relationship picking remains possible and that culling does not remove a route merely because its endpoints are outside the viewport.
 3. Pan and zoom back to a neutral fit, capture screenshots, and record any missing route, label, marker, loop, or selectable record as FAIL with the view and steps that reproduce it.
 
+### Dense overview labels
+
+Run a second fictional chart to check the Auto/All behavior that was added after the `VECTOR UI SPARSE 30` screen review:
+
+```sh
+python3 scripts/generate-chart-fixtures.py \
+  --family sparse --nodes 30 \
+  --output /tmp/arch-notebook-g3-g4-sparse-30.case.json
+/tmp/arch-notebook-target/release/arch-notebook \
+  /tmp/arch-notebook-g3-g4-sparse-30.case.json
+```
+
+At the neutral overview with more than 36 visible routes, Auto should hide labels and attribute callouts for unselected/unfocused links. Label mode does not change route rendering or picking; fully offscreen routes remain culled. Click a visible route: the exact relationship record should become selected and its label should appear. Open **View… → Show all relationship labels**; all visible route labels and attribute callouts should appear. Uncheck it or restart the app to restore the default Auto mode. Pan a large chart until 36 or fewer routes are visible; Auto should show labels for that visible subset again. Record screenshots and the selected record's label, endpoints, connection ID, and source reference from the Connections workspace.
+
 The current matched culling A/B establishes CPU frame-build and CPU tessellation reductions on synthetic panned views only. This runbook's screenshots and pointer actions establish visual/input correctness, not GPU time, compositor work, frame rate, presentation latency, or native performance improvement. Leave those measurements **NOT MEASURED** unless a separate instrumented native comparison is provided.
 
 ## Evidence handoff
