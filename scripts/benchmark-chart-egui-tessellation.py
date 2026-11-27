@@ -39,6 +39,14 @@ def main() -> int:
     parser.add_argument("--sizes", type=int, nargs="+", default=[100, 1_000])
     parser.add_argument("--pan", type=float, nargs=2, default=(0.0, 0.0), metavar=("X", "Y"))
     parser.add_argument(
+        "--compare-pan",
+        type=float,
+        nargs=2,
+        default=None,
+        metavar=("X", "Y"),
+        help="run paired neutral and panned cases at the supplied pan",
+    )
+    parser.add_argument(
         "--families",
         nargs="+",
         choices=("sparse", "hub", "disconnected", "dense"),
@@ -50,6 +58,13 @@ def main() -> int:
         parser.error("--iterations must be between 5 and 1000")
     if any(size < 10 or size > 10_000 for size in args.sizes):
         parser.error("--sizes values must be between 10 and 10,000")
+    if args.compare_pan is not None and args.pan != (0.0, 0.0):
+        parser.error("use --compare-pan by itself; it includes the neutral pan baseline")
+    pan_settings = (
+        [(0.0, 0.0), tuple(args.compare_pan)]
+        if args.compare_pan is not None
+        else [tuple(args.pan)]
+    )
 
     env = os.environ.copy()
     env["CARGO_TARGET_DIR"] = str(args.target_dir.resolve())
@@ -88,6 +103,7 @@ def main() -> int:
     results = []
     with tempfile.TemporaryDirectory(prefix="arch-notebook-egui-bench-") as temporary:
         temp = Path(temporary)
+        fixture_index = 0
         for family in args.families:
             for size in args.sizes:
                 fixture = temp / f"{family}-{size}.case.json"
@@ -107,34 +123,40 @@ def main() -> int:
                     capture_output=True,
                     text=True,
                 )
-                if args.pan != (0.0, 0.0):
+                pan_order = pan_settings
+                if len(pan_settings) > 1 and fixture_index % 2 == 1:
+                    pan_order = list(reversed(pan_settings))
+                fixture_index += 1
+                for pan in pan_order:
+                    run_fixture = temp / f"{family}-{size}-pan-{pan[0]}-{pan[1]}.case.json"
                     case = json.loads(fixture.read_text(encoding="utf-8"))
-                    case["active_chart_pan"] = list(args.pan)
-                    fixture.write_text(
+                    case["active_chart_pan"] = list(pan)
+                    run_fixture.write_text(
                         json.dumps(case, ensure_ascii=False, indent=2) + "\n",
                         encoding="utf-8",
                     )
-                case_env = env.copy()
-                case_env["ARCH_NOTEBOOK_CHART_RENDER_BENCH_CASE"] = str(fixture)
-                case_env["ARCH_NOTEBOOK_CHART_RENDER_BENCH_ITERATIONS"] = str(args.iterations)
-                completed = subprocess.run(
-                    [
-                        str(test_binary),
-                        "--exact",
-                        TEST_NAME,
-                        "--ignored",
-                        "--nocapture",
-                        "--test-threads=1",
-                    ],
-                    cwd=ROOT,
-                    env=case_env,
-                    check=True,
-                    capture_output=True,
-                    text=True,
-                )
-                report = find_report(completed.stdout + "\n" + completed.stderr)
-                report["fixture_family"] = family
-                results.append(report)
+                    case_env = env.copy()
+                    case_env["ARCH_NOTEBOOK_CHART_RENDER_BENCH_CASE"] = str(run_fixture)
+                    case_env["ARCH_NOTEBOOK_CHART_RENDER_BENCH_ITERATIONS"] = str(args.iterations)
+                    completed = subprocess.run(
+                        [
+                            str(test_binary),
+                            "--exact",
+                            TEST_NAME,
+                            "--ignored",
+                            "--nocapture",
+                            "--test-threads=1",
+                        ],
+                        cwd=ROOT,
+                        env=case_env,
+                        check=True,
+                        capture_output=True,
+                        text=True,
+                    )
+                    report = find_report(completed.stdout + "\n" + completed.stderr)
+                    report["fixture_family"] = family
+                    report["pan_points"] = list(pan)
+                    results.append(report)
 
     binary_hash = hashlib.sha256(test_binary.read_bytes()).hexdigest()
     output = {
@@ -144,11 +166,15 @@ def main() -> int:
         "test_binary": str(test_binary.resolve()),
         "test_binary_sha256": binary_hash,
         "profile": "release test profile",
-        "view_transform": {"pan_points": list(args.pan), "zoom": 1.0},
+        "view_transform": {
+            "pan_settings_points": [list(pan) for pan in pan_settings],
+            "zoom": 1.0,
+        },
+        "sample_order": "paired pan settings are interleaved per fixture: neutral then panned for even fixture indices and panned then neutral for odd fixture indices",
         "results": results,
         "limitations": [
             "Synthetic fictional graph fixtures only; App::update covers the full application UI at a fixed 1440x900 point viewport.",
-            "Reports CPU shape generation and egui CPU tessellation separately, plus submitted shape and mesh counts.",
+            "Reports egui frame-build CPU time (App::update, layout, and shape generation) separately from egui CPU tessellation, plus submitted shape and mesh counts.",
             "Does not measure GPU execution, compositor work, buffer presentation, input-to-display latency, or FPS.",
             "Host-specific characterization; comparisons require the same host, profile, viewport, and fixture hashes.",
         ],

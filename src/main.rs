@@ -44125,10 +44125,10 @@ mod tests {
                     "mesh_indices": mesh_index_count,
                 },
                 "timings": {
-                    "app_update_shape_generation": super::duration_summary(&update_samples),
+                    "app_update_frame_build": super::duration_summary(&update_samples),
                     "egui_cpu_tessellation": super::duration_summary(&tessellation_samples),
                 },
-                "scope": "headless full-app App::update CPU shape generation and egui CPU tessellation for one deterministic fictional chart; excludes GPU, compositor, presentation, input-to-display latency, and FPS"
+                "scope": "headless full-app egui frame build (App::update, UI layout, and CPU shape generation) plus egui CPU tessellation for one deterministic fictional chart; excludes GPU, compositor, presentation, input-to-display latency, and FPS"
             }))
             .expect("serialize benchmark report")
         );
