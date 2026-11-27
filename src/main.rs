@@ -26257,7 +26257,11 @@ impl eframe::App for App {
                                                     )
                                                     .truncate(),
                                                 )
-                                                .on_hover_text(counts_summary);
+                                                .on_hover_text(format!(
+                                                    "{} relationship records, including repeated records; {} distinct unordered endpoint pairs, collapsing reversed or parallel records. → counts directed records from Community {first_number} to Community {second_number}; ← counts the reverse direction; ↔ counts undirected records.",
+                                                    interaction.relationship_record_count,
+                                                    interaction.distinct_endpoint_pair_count,
+                                                ));
                                             });
                                         }
                                     });
