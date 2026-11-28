@@ -981,11 +981,11 @@ Evidence and next gates: [XML-XSLT-IMPORT-02](evidence/anx/XML-XSLT-IMPORT-02-de
 
 ## SQL selected-entity seeded query review — 2026-11-28
 
-SQL Review binds an active-chart SQL identity to a one-off parameter, displays up to 200 selectable query rows, and adds explicitly selected relationships without recording a snapshot or automation run. It preserves saved automation configuration.
+SQL Review binds an active-chart SQL identity to a one-off parameter, pages through read-only query results 200 rows at a time, carries selections across pages, and adds explicitly selected relationships without recording a snapshot or automation run. Paging requires deterministic SQL ordering and preserves saved automation configuration.
 
 | Gate | Result | Evidence |
 | --- | --- | --- |
-| Formatting, diff, and full offline Rust suite | PASS | Formatting and diff checks exit 0; 85 passed, 0 failed, 3 ignored. |
+| Formatting, diff, and full offline Rust suite | PASS | Formatting and diff checks exit 0; 86 passed, 0 failed, 3 ignored. |
 | Locked offline check | PASS | `CARGO_TARGET_DIR=/tmp/arch-notebook-target cargo check --locked --offline` exited 0. |
 | Release build / launcher install | BLOCKED / NOT RUN | Release-build execution session does not return a cargo result; no stale binary was installed. |
 | Native interaction and IBM compatibility | NOT TESTED | Headless state regression does not prove native pointer interaction or i2 Analyze integration. |

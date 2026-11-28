@@ -33,7 +33,7 @@ Version 0.1.0 is under active development. The [2026-11-23 implementation baseli
 | Capability | State |
 | --- | --- |
 | Local entity/link chart, timelines, paths and case persistence | Implemented |
-| Read-only SQLite discovery, immutable captures, longitudinal comparisons, and seeded SQL result review | Implemented for up to 200 retained rows; selected relationships can be added without creating a snapshot |
+| Read-only SQLite discovery, immutable captures, longitudinal comparisons, and paged seeded SQL result review | Implemented; selected relationships can be added without creating a snapshot |
 | Endpoint and relationship property changes, stable identities and schema drift signal | Implemented |
 | Scheduled captures, preflight and bounded run history | Implemented |
 | CSV/TSV, GraphML and KML interchange | Implemented |

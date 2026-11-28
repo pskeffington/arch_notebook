@@ -35,6 +35,7 @@ const SQL_PLAN_TIMEOUT_SECONDS: u64 = 30;
 const SQL_PLAN_TIMEOUT: Duration = Duration::from_secs(SQL_PLAN_TIMEOUT_SECONDS);
 const SQL_ENTITY_LOOKUP_TIMEOUT_SECONDS: u64 = 120;
 const SQL_ENTITY_LOOKUP_MAX_ROWS: usize = 20;
+const SQL_SEED_REVIEW_PAGE_SIZE: usize = 200;
 const SQL_ENTITY_LOOKUP_MAX_COLUMNS: usize = 64;
 const SQL_ENTITY_LOOKUP_MAX_CELL_BYTES: usize = 1024;
 const SQL_ENTITY_LOOKUP_MAX_TOTAL_BYTES: usize = 64 * 1024;
@@ -1392,6 +1393,10 @@ struct SqlValidationPreview {
     query_result_source_key: String,
     query_result_database_path: String,
     seeded_query: bool,
+    validation_passed: bool,
+    page_offset: usize,
+    has_more_rows: bool,
+    selected_connection_facts: HashMap<String, ConnectionFact>,
     skipped_endpoints: Vec<SkippedSqlEndpoint>,
 }
 
@@ -2922,6 +2927,7 @@ struct App {
     sql_seed_parameter_name: String,
     sql_seed_identity_key: String,
     sql_seed_query_mode: bool,
+    sql_seed_page_offset: usize,
     sql_cleared_parameter_draft: Option<(String, String)>,
     sql_validation_preview: Option<SqlValidationPreview>,
     sql_skipped_endpoints: Vec<SkippedSqlEndpoint>,
@@ -3066,6 +3072,9 @@ struct SqlUiRequest {
     data_mode: DataMode,
     editing_job: Option<Uuid>,
     seeded_query: bool,
+    seed_page_offset: usize,
+    selected_seed_facts: Vec<ConnectionFact>,
+    seed_review_token: Uuid,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -3591,6 +3600,7 @@ impl Default for App {
             sql_seed_parameter_name: "seed_entity_id".into(),
             sql_seed_identity_key: String::new(),
             sql_seed_query_mode: false,
+            sql_seed_page_offset: 0,
             sql_cleared_parameter_draft: None,
             sql_validation_preview: None,
             sql_skipped_endpoints: Vec::new(),
@@ -4082,6 +4092,7 @@ impl App {
             return;
         };
         self.sql_validation_preview = None;
+        self.sql_seed_page_offset = 0;
         self.sync_active_chart_viewport();
         let target = self.case.chart_tabs.remove(position);
         let outgoing_template = self.case.active_chart_template;
@@ -4772,6 +4783,7 @@ impl App {
             sql_seed_parameter_name: "seed_entity_id".into(),
             sql_seed_identity_key: String::new(),
             sql_seed_query_mode: false,
+            sql_seed_page_offset: 0,
             sql_cleared_parameter_draft: None,
             sql_validation_preview: None,
             sql_skipped_endpoints: Vec::new(),
@@ -9114,6 +9126,10 @@ impl App {
                 query_result_source_key: snapshot.source_key.clone(),
                 query_result_database_path: snapshot.database_path.clone(),
                 seeded_query: self.sql_seed_query_mode,
+                validation_passed: false,
+                page_offset: 0,
+                has_more_rows: false,
+                selected_connection_facts: HashMap::new(),
                 skipped_endpoints,
             });
         let validation_message = if self.status.starts_with("SQL SNAPSHOT INGESTED") {
@@ -9471,15 +9487,21 @@ impl App {
             });
         }
         egui::CollapsingHeader::new(format!(
-            "SQL RESULT REVIEW · {} SELECTABLE OF {} CONNECTIONS",
+            "SQL RESULT REVIEW · {} ROWS ON PAGE",
             preview.connections.len(),
-            preview.connection_count
         ))
         .id_salt("sql_validation_preview")
         .show(ui, |ui| {
             ui.label(format!(
-                "Captured {} · at most 200 rows are retained for this transient review{}",
+                "Captured {} · rows {}–{} on this page{}{}",
                 preview.captured_at,
+                preview.page_offset + 1,
+                preview.page_offset + preview.connections.len(),
+                if preview.has_more_rows {
+                    " · more results"
+                } else {
+                    " · final page"
+                },
                 if preview.skipped_rows == 0 {
                     String::new()
                 } else {
@@ -9522,8 +9544,12 @@ impl App {
                                         preview
                                             .selected_connection_keys
                                             .insert(connection.key.clone());
+                                        preview
+                                            .selected_connection_facts
+                                            .insert(connection.key.clone(), connection.clone());
                                     } else {
                                         preview.selected_connection_keys.remove(&connection.key);
+                                        preview.selected_connection_facts.remove(&connection.key);
                                     }
                                 }
                             } else {
@@ -9562,8 +9588,7 @@ impl App {
                     });
             });
             if preview.seeded_query {
-                let selectable_count = preview.connections.len();
-                let selected_count = preview.selected_connection_keys.len();
+                let selected_count = preview.selected_connection_facts.len();
                 ui.horizontal(|ui| {
                     if ui.button("Select all retained rows").clicked() {
                         preview.selected_connection_keys = preview
@@ -9571,17 +9596,41 @@ impl App {
                             .iter()
                             .map(|connection| connection.key.clone())
                             .collect();
+                        preview.selected_connection_facts.extend(
+                            preview
+                                .connections
+                                .iter()
+                                .map(|connection| (connection.key.clone(), connection.clone())),
+                        );
                     }
                     if ui.button("Clear selection").clicked() {
                         preview.selected_connection_keys.clear();
+                        preview.selected_connection_facts.clear();
                     }
-                    ui.label(format!(
-                        "{selected_count} selected · {selectable_count} retained"
-                    ));
+                    ui.label(format!("{selected_count} selected across reviewed pages"));
+                });
+                ui.label("Pages follow the query's row order. Add a deterministic ORDER BY to avoid overlaps or gaps between pages.");
+                let previous_page = ui
+                    .add_enabled(preview.page_offset > 0, egui::Button::new("Previous page"))
+                    .clicked();
+                let next_page = ui
+                    .add_enabled(preview.has_more_rows, egui::Button::new("Next page"))
+                    .clicked();
+                ui.ctx().data_mut(|data| {
+                    data.insert_temp(
+                        egui::Id::new("sql_seed_page_navigation"),
+                        if previous_page {
+                            -1_i8
+                        } else if next_page {
+                            1_i8
+                        } else {
+                            0_i8
+                        },
+                    )
                 });
                 let add_selected = ui
                     .add_enabled(
-                        selected_count > 0,
+                        selected_count > 0 && preview.validation_passed,
                         egui::Button::new("Add selected rows to chart"),
                     )
                     .clicked();
@@ -9591,6 +9640,9 @@ impl App {
             } else {
                 ui.ctx().data_mut(|data| {
                     data.insert_temp(egui::Id::new("sql_seed_add_selected_clicked"), false)
+                });
+                ui.ctx().data_mut(|data| {
+                    data.insert_temp(egui::Id::new("sql_seed_page_navigation"), 0_i8)
                 });
             }
         });
@@ -9940,6 +9992,16 @@ impl App {
     }
 
     fn sql_ui_request(&self) -> SqlUiRequest {
+        let seeded_query = self.sql_seed_query_mode && self.data_mode != DataMode::Automation;
+        let preview_matches = self.sql_validation_preview.as_ref().is_some_and(|preview| {
+            seeded_query
+                && preview.seeded_query
+                && preview.configured_database_path == self.sql_path.trim()
+                && preview.series == self.sql_series.trim()
+                && preview.query == self.sql_query.trim()
+                && parse_sql_parameters(&self.sql_parameter_text)
+                    .is_ok_and(|parameters| parameters == preview.parameters)
+        });
         SqlUiRequest {
             database_path: self.sql_path.clone(),
             series: self.sql_series.clone(),
@@ -9961,7 +10023,34 @@ impl App {
             },
             data_mode: self.data_mode,
             editing_job: self.editing_automation_job,
-            seeded_query: self.sql_seed_query_mode && self.data_mode != DataMode::Automation,
+            seeded_query,
+            seed_page_offset: if seeded_query && preview_matches {
+                self.sql_seed_page_offset
+            } else {
+                0
+            },
+            selected_seed_facts: if preview_matches {
+                self.sql_validation_preview
+                    .as_ref()
+                    .map(|preview| {
+                        preview
+                            .selected_connection_facts
+                            .values()
+                            .cloned()
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            },
+            seed_review_token: if preview_matches {
+                self.sql_validation_preview
+                    .as_ref()
+                    .map(|preview| preview.query_result_token)
+                    .unwrap_or_else(Uuid::new_v4)
+            } else {
+                Uuid::new_v4()
+            },
         }
     }
 
@@ -9979,6 +10068,7 @@ impl App {
             return;
         };
         if !preview.seeded_query
+            || !preview.validation_passed
             || preview.configured_database_path != self.sql_path.trim()
             || preview.series != self.sql_series.trim()
             || preview.query != self.sql_query.trim()
@@ -9988,12 +10078,12 @@ impl App {
             self.sql_validation_preview = None;
             return;
         }
-        let selected = preview
-            .connections
-            .iter()
-            .filter(|connection| preview.selected_connection_keys.contains(&connection.key))
+        let mut selected = preview
+            .selected_connection_facts
+            .values()
             .cloned()
             .collect::<Vec<_>>();
+        selected.sort_by(|left, right| left.key.cmp(&right.key));
         if selected.is_empty() {
             self.status = "NO SQL RESULT ROWS SELECTED".into();
             return;
@@ -10133,13 +10223,18 @@ impl App {
             .name("arch-notebook-sql-query".into())
             .spawn(move || {
                 let mut worker = App::automation_context(case, &case_path);
+                let original_query = request.query.clone();
                 worker.automation_progress = Some(worker_progress);
                 worker.selected_link = selected_link_record
                     .as_ref()
                     .and_then(|selected| refreshed_link_index(&worker.case.links, selected));
                 worker.sql_path = request.database_path;
                 worker.sql_series = request.series;
-                worker.sql_query = request.query;
+                worker.sql_query = if request.seeded_query {
+                    wrap_seed_query_page(&request.query, request.seed_page_offset)
+                } else {
+                    request.query
+                };
                 worker.sql_parameter_text = request.parameter_text;
                 worker.automation_minimum_connections = request.minimum_connections;
                 worker.automation_minimum_confidence = request.minimum_confidence;
@@ -10155,11 +10250,61 @@ impl App {
                 worker.data_mode = request.data_mode;
                 worker.editing_automation_job = request.editing_job;
                 worker.sql_seed_query_mode = request.seeded_query;
+                worker.sql_seed_page_offset = request.seed_page_offset;
                 let result = if validate {
                     worker.validate_sql_query();
+                    let validation_passed = worker.status.starts_with("SQL QUERY VALID · ");
+                    if let Some(preview) = worker.sql_validation_preview.as_mut()
+                        && request.seeded_query
+                    {
+                        preview.validation_passed = validation_passed;
+                        preview.query = original_query;
+                        preview.page_offset = request.seed_page_offset;
+                        preview.query_result_token = request.seed_review_token;
+                        preview.has_more_rows =
+                            preview.connection_count > SQL_SEED_REVIEW_PAGE_SIZE;
+                        preview.connections.truncate(SQL_SEED_REVIEW_PAGE_SIZE);
+                        preview.connection_count = preview.connections.len();
+                        preview.selected_connection_facts = request
+                            .selected_seed_facts
+                            .into_iter()
+                            .map(|fact| (fact.key.clone(), fact))
+                            .collect();
+                        preview.selected_connection_keys = preview
+                            .connections
+                            .iter()
+                            .filter(|fact| {
+                                preview.selected_connection_facts.contains_key(&fact.key)
+                            })
+                            .map(|fact| fact.key.clone())
+                            .collect();
+                    }
+                    let status = if request.seeded_query && validation_passed {
+                        let count = worker
+                            .sql_validation_preview
+                            .as_ref()
+                            .map(|preview| preview.connections.len().min(SQL_SEED_REVIEW_PAGE_SIZE))
+                            .unwrap_or_default();
+                        format!(
+                            "SQL QUERY VALID · RESULTS {}–{}{} · CASE UNCHANGED",
+                            request.seed_page_offset + 1,
+                            request.seed_page_offset + count,
+                            if worker
+                                .sql_validation_preview
+                                .as_ref()
+                                .is_some_and(|preview| preview.has_more_rows)
+                            {
+                                " · MORE RESULTS"
+                            } else {
+                                " · FINAL PAGE"
+                            }
+                        )
+                    } else {
+                        worker.status
+                    };
                     AutomationWorkerResult::Validation {
                         preview: worker.sql_validation_preview,
-                        status: worker.status,
+                        status,
                     }
                 } else {
                     worker.ingest_sqlite_snapshot(true);
@@ -16843,6 +16988,76 @@ fn sql_seed_identity_label(source: &str, entity_id: &str) -> String {
 
 fn sql_seed_identity_key(source: &str, entity_id: &str) -> String {
     format!("{source}\0{entity_id}")
+}
+
+fn wrap_seed_query_page(query: &str, offset: usize) -> String {
+    let query = strip_sql_trailing_statement_terminator(query);
+    format!(
+        "SELECT * FROM (\n{query}\n) AS arch_seed_results LIMIT {} OFFSET {offset}",
+        SQL_SEED_REVIEW_PAGE_SIZE + 1
+    )
+}
+
+fn strip_sql_trailing_statement_terminator(query: &str) -> &str {
+    let bytes = query.as_bytes();
+    let mut index = 0;
+    let mut last_significant = None;
+    let mut terminal_semicolon = None;
+    let mut quote = None;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if let Some(quote_byte) = quote {
+            if byte == quote_byte {
+                if bytes.get(index + 1) == Some(&quote_byte)
+                    && matches!(quote_byte, b'\'' | b'"' | b'`')
+                {
+                    last_significant = Some(index + 1);
+                    terminal_semicolon = None;
+                    index += 2;
+                    continue;
+                }
+                quote = None;
+            }
+            last_significant = Some(index);
+            terminal_semicolon = None;
+            index += 1;
+            continue;
+        }
+        if byte == b'-' && bytes.get(index + 1) == Some(&b'-') {
+            index += 2;
+            while index < bytes.len() && bytes[index] != b'\n' {
+                index += 1;
+            }
+            continue;
+        }
+        if byte == b'/' && bytes.get(index + 1) == Some(&b'*') {
+            index += 2;
+            while index + 1 < bytes.len() && !(bytes[index] == b'*' && bytes[index + 1] == b'/') {
+                index += 1;
+            }
+            index = (index + 2).min(bytes.len());
+            continue;
+        }
+        if matches!(byte, b'\'' | b'"' | b'`') {
+            quote = Some(byte);
+            last_significant = Some(index);
+            terminal_semicolon = None;
+        } else if byte == b'[' {
+            quote = Some(b']');
+            last_significant = Some(index);
+            terminal_semicolon = None;
+        } else if byte.is_ascii_whitespace() {
+            // Whitespace does not affect the final SQL token.
+        } else {
+            last_significant = Some(index);
+            terminal_semicolon = (byte == b';').then_some(index);
+        }
+        index += 1;
+    }
+    let end = terminal_semicolon
+        .filter(|semicolon| Some(*semicolon) == last_significant)
+        .unwrap_or(bytes.len());
+    query[..end].trim()
 }
 
 fn parse_automation_parameter_overrides(
@@ -23852,6 +24067,7 @@ impl eframe::App for App {
                                                         self.sql_parameter_text = parameters;
                                                         self.sql_validation_preview = None;
                                                         self.sql_seed_query_mode = true;
+                                                        self.sql_seed_page_offset = 0;
                                                         self.status = format!(
                                                             "SQL SEED BOUND · use :{} in the one-off query, then validate",
                                                             self.sql_seed_parameter_name.trim()
@@ -24001,6 +24217,31 @@ impl eframe::App for App {
                                     self.automation_maximum_skipped_rows,
                                     &mut self.sql_validation_preview_regressions_only,
                                 );
+                                let seed_page_navigation = ui.ctx().data_mut(|data| {
+                                    data.get_temp::<i8>(egui::Id::new(
+                                        "sql_seed_page_navigation",
+                                    ))
+                                    .unwrap_or(0)
+                                });
+                                if seed_page_navigation != 0
+                                    && let Some(preview) = self.sql_validation_preview.as_ref()
+                                {
+                                    self.sql_seed_page_offset = if seed_page_navigation > 0 {
+                                        preview
+                                            .page_offset
+                                            .saturating_add(SQL_SEED_REVIEW_PAGE_SIZE)
+                                    } else {
+                                        preview
+                                            .page_offset
+                                            .saturating_sub(SQL_SEED_REVIEW_PAGE_SIZE)
+                                    };
+                                    ui.ctx().data_mut(|data| {
+                                        data.remove::<i8>(egui::Id::new(
+                                            "sql_seed_page_navigation",
+                                        ));
+                                    });
+                                    self.start_sql_validation();
+                                }
                                 let add_selected_sql_results = ui.ctx().data_mut(|data| {
                                     data.get_temp::<bool>(egui::Id::new(
                                         "sql_seed_add_selected_clicked",
@@ -46357,6 +46598,8 @@ mod tests {
         app.sql_series = "one-off search".into();
         app.sql_query = "SELECT ... WHERE id = :seed_entity_id".into();
         app.sql_parameter_text = "seed_entity_id=text:acct-17".into();
+        app.sql_seed_query_mode = true;
+        app.sql_seed_page_offset = super::SQL_SEED_REVIEW_PAGE_SIZE;
         app.sql_validation_preview = Some(super::SqlValidationPreview {
             configured_database_path: database_path.into(),
             series: app.sql_series.clone(),
@@ -46364,12 +46607,21 @@ mod tests {
             parameters: vec![("seed_entity_id".into(), "text:acct-17".into())],
             connections: vec![selected.clone(), unselected],
             selected_connection_keys: ["row-1".into()].into_iter().collect(),
+            selected_connection_facts: [("row-1".into(), selected.clone())].into_iter().collect(),
             query_result_token: Uuid::new_v4(),
             query_result_source_key: "accounts-search".into(),
             query_result_database_path: database_path.into(),
             seeded_query: true,
+            validation_passed: true,
+            page_offset: super::SQL_SEED_REVIEW_PAGE_SIZE,
             ..Default::default()
         });
+        let next_page_request = app.sql_ui_request();
+        assert_eq!(
+            next_page_request.seed_page_offset,
+            super::SQL_SEED_REVIEW_PAGE_SIZE
+        );
+        assert_eq!(next_page_request.selected_seed_facts.len(), 1);
 
         app.add_selected_sql_query_results();
 
@@ -46386,6 +46638,39 @@ mod tests {
                 .is_some_and(|source| source.starts_with("accounts-search#query-review:"))
         );
         assert!(app.sql_validation_preview.is_none());
+    }
+
+    #[test]
+    fn seeded_query_page_wrapper_preserves_parameters_order_and_page_boundaries() {
+        let connection = rusqlite::Connection::open_in_memory().expect("memory database opens");
+        connection
+            .execute_batch(
+                "CREATE TABLE candidates(id INTEGER PRIMARY KEY, cohort TEXT);\
+                 WITH RECURSIVE rows(id) AS (SELECT 0 UNION ALL SELECT id + 1 FROM rows WHERE id < 204)\
+                 INSERT INTO candidates SELECT id, 'selected' FROM rows;",
+            )
+            .expect("test rows are created");
+        let query = "SELECT id FROM candidates WHERE cohort = :seed_entity_id ORDER BY id; -- deterministic";
+        let read_page = |offset| {
+            let paged = super::wrap_seed_query_page(query, offset);
+            let mut statement = connection.prepare(&paged).expect("wrapped SQL prepares");
+            statement
+                .query_map(
+                    &[(":seed_entity_id", &"selected" as &dyn rusqlite::ToSql)],
+                    |row| row.get::<_, i64>(0),
+                )
+                .expect("named seed parameter binds")
+                .collect::<Result<Vec<_>, _>>()
+                .expect("page rows read")
+        };
+        let first_page = read_page(0);
+        let second_page = read_page(super::SQL_SEED_REVIEW_PAGE_SIZE);
+        assert_eq!(first_page.len(), super::SQL_SEED_REVIEW_PAGE_SIZE + 1);
+        assert_eq!(
+            &first_page[..super::SQL_SEED_REVIEW_PAGE_SIZE],
+            &(0..200).collect::<Vec<_>>()
+        );
+        assert_eq!(second_page, (200..205).collect::<Vec<_>>());
     }
 
     #[test]
