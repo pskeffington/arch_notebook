@@ -391,7 +391,7 @@ Environment=ARCH_NOTEBOOK_INSTALL_PREFLIGHT_REQUIRE_USABLE_CONNECTIONS={require_
 ExecStart={command}
 """.format(require_usable_connections=require_usable_connections, command=" ".join(map(quote_exec_arg, [
     # Scheduler output goes to the journal; report job boundaries and long-query heartbeats.
-    binary, "--run-enabled-jobs", case_file, "--progress",
+    binary, "--run-enabled-jobs", case_file, "--progress", "--resume-incomplete-scheduled-batch",
     *( ["--export-chart-csv-dir", chart_export_dir] if chart_export_dir else [] ),
 ])))
 

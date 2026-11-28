@@ -56,6 +56,10 @@ jobs:
         run: |
           python3 scripts/test-sql-scale-acceptance.py \
             --binary target/debug/arch-notebook
+      - name: Verify scheduled SQL batch interruption recovery
+        run: |
+          python3 scripts/test-scheduled-sql-batch-resume.py \
+            --binary target/debug/arch-notebook
       - name: Verify Linux SQL scheduler unit management
         run: |
           python3 scripts/test-linux-sql-scheduler-acceptance.py \

@@ -256,10 +256,10 @@ def main() -> int:
         if "Type=oneshot" not in service_text or "TimeoutStartSec=infinity" not in service_text:
             raise RuntimeError(f"service lacks bounded scheduler semantics for {label}")
         argv = decode_exec_start(service_path)
-        if argv[:4] != [str(proxy), "--run-enabled-jobs", str(case_path.resolve()), "--progress"]:
+        if argv[:5] != [str(proxy), "--run-enabled-jobs", str(case_path.resolve()), "--progress", "--resume-incomplete-scheduled-batch"]:
             raise RuntimeError(f"service ExecStart arguments changed for {label}: {argv}")
         if label == "hourly":
-            if argv[4:6] != ["--export-chart-csv-dir", str(exported_dir.resolve())]:
+            if argv[5:7] != ["--export-chart-csv-dir", str(exported_dir.resolve())]:
                 raise RuntimeError(f"special-character export path was not preserved: {argv}")
         if f"Environment=ARCH_NOTEBOOK_INSTALL_PREFLIGHT_REQUIRE_USABLE_CONNECTIONS={'false' if label == 'weekly' else 'true'}" not in service_text:
             raise RuntimeError(f"preflight policy was not recorded for {label}")

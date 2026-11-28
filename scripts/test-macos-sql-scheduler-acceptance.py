@@ -473,6 +473,7 @@ def main() -> int:
         "--run-enabled-jobs",
         str(scheduled_case_path.resolve()),
         "--progress",
+        "--resume-incomplete-scheduled-batch",
         "--export-chart-csv-dir",
         str(export_dir.resolve()),
     ]:

@@ -1300,6 +1300,10 @@ fn automation_run_schema_adaptation_hint(run: &AutomationRun) -> Option<&str> {
 #[derive(Clone, Serialize, Deserialize)]
 struct AutomationBatchCheckpoint {
     batch_id: Uuid,
+    #[serde(default = "default_automation_batch_trigger")]
+    created_trigger: String,
+    #[serde(default)]
+    has_failed_attempt: Option<bool>,
     configuration_fingerprint: String,
     #[serde(default)]
     selected_jobs: Vec<AutomationBatchJobSelection>,
@@ -1307,6 +1311,10 @@ struct AutomationBatchCheckpoint {
     effective_jobs: Vec<AutomationJob>,
     #[serde(default, alias = "successful_jobs")]
     completed_jobs: Vec<AutomationJobCheckpoint>,
+}
+
+fn default_automation_batch_trigger() -> String {
+    "legacy".into()
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -9818,6 +9826,8 @@ impl App {
                                 .automation_batches
                                 .push(AutomationBatchCheckpoint {
                                 batch_id,
+                                created_trigger: "desktop".into(),
+                                has_failed_attempt: Some(false),
                                 configuration_fingerprint: fingerprint.clone(),
                                 selected_jobs: jobs
                                     .iter()
@@ -34895,6 +34905,67 @@ fn validate_automation_batch_checkpoints(
     Ok(())
 }
 
+fn scheduled_batch_resume_candidate(case: &CaseFile) -> Result<Option<Uuid>, String> {
+    let Some(batch) = case.automation_batches.last() else {
+        return Ok(None);
+    };
+    let scheduled_runs: Vec<&AutomationRun> = case
+        .automation_runs
+        .iter()
+        .filter(|run| run.batch_id == Some(batch.batch_id) && run.trigger == "scheduled")
+        .collect();
+    let scheduled_origin = batch.created_trigger == "scheduled"
+        || (batch.created_trigger == "legacy" && !scheduled_runs.is_empty());
+    if !scheduled_origin || batch.has_failed_attempt != Some(false) {
+        return Ok(None);
+    }
+    validate_automation_batch_checkpoints(batch, &case.automation_runs, &case.snapshots)
+        .map_err(|error| format!("automation batch {} {error}", batch.batch_id))?;
+
+    if batch.selected_jobs.is_empty() || batch.effective_jobs.is_empty() {
+        return Ok(None);
+    }
+    let selected_ids: Vec<Uuid> = batch.selected_jobs.iter().map(|job| job.job_id).collect();
+    let effective_ids: Vec<Uuid> = batch.effective_jobs.iter().map(|job| job.id).collect();
+    let current_jobs: Vec<AutomationJob> = case
+        .automation_jobs
+        .iter()
+        .filter(|job| job.enabled)
+        .cloned()
+        .collect();
+    let current_ids: Vec<Uuid> = current_jobs.iter().map(|job| job.id).collect();
+    let selected_set: HashSet<Uuid> = selected_ids.iter().copied().collect();
+    let completed_ids: HashSet<Uuid> = batch
+        .completed_jobs
+        .iter()
+        .map(|checkpoint| checkpoint.job_id)
+        .collect();
+    let failed_capture = batch
+        .completed_jobs
+        .iter()
+        .any(|checkpoint| !checkpoint.success)
+        || case
+            .automation_runs
+            .iter()
+            .any(|run| run.batch_id == Some(batch.batch_id) && !run.success);
+    if selected_set.len() != selected_ids.len()
+        || selected_ids != effective_ids
+        || selected_ids != current_ids
+        || completed_ids.len() >= selected_ids.len()
+        || failed_capture
+    {
+        return Ok(None);
+    }
+    let saved_fingerprint = automation_batch_configuration_fingerprint(&batch.effective_jobs)?;
+    let current_fingerprint = automation_batch_configuration_fingerprint(&current_jobs)?;
+    if saved_fingerprint != batch.configuration_fingerprint
+        || current_fingerprint != batch.configuration_fingerprint
+    {
+        return Ok(None);
+    }
+    Ok(Some(batch.batch_id))
+}
+
 fn sha256_hex(input: &[u8]) -> String {
     const INITIAL: [u32; 8] = [
         0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
@@ -35072,6 +35143,7 @@ fn run_automation_cli(
     parameter_overrides: &[(String, String)],
     scoped_parameter_overrides: &[(String, String, String)],
     resume_batch_id: Option<Uuid>,
+    resume_incomplete_scheduled_batch: bool,
     export_chart_csv_path: Option<&str>,
     export_chart_csv_dir: Option<&str>,
     report_progress: bool,
@@ -35082,6 +35154,27 @@ fn run_automation_cli(
         fs::read_to_string(case_path).map_err(|error| format!("cannot read case: {error}"))?;
     let case = serde_json::from_str::<CaseFile>(&content)
         .map_err(|error| format!("cannot parse case: {error}"))?;
+    if resume_incomplete_scheduled_batch
+        && (env::var("ARCH_NOTEBOOK_AUTOMATION_TRIGGER").as_deref() != Ok("scheduled")
+            || resume_batch_id.is_some()
+            || job_name.is_some()
+            || selected_jobs.is_some()
+            || !parameter_overrides.is_empty()
+            || !scoped_parameter_overrides.is_empty()
+            || export_chart_csv_path.is_some())
+    {
+        return Err(
+            "automatic batch resume is restricted to an unfiltered scheduled runner invocation"
+                .into(),
+        );
+    }
+    let auto_resumed_batch_id = if resume_incomplete_scheduled_batch {
+        scheduled_batch_resume_candidate(&case)?
+    } else {
+        None
+    };
+    let resume_batch_id = resume_batch_id.or(auto_resumed_batch_id);
+    let auto_resumed = auto_resumed_batch_id.is_some();
     let resume_manifest = resume_batch_id.and_then(|resume_id| {
         case.automation_batches
             .iter()
@@ -35278,11 +35371,51 @@ fn run_automation_cli(
                 })
                 .collect()
         });
+    let created_trigger = app
+        .case
+        .automation_batches
+        .iter()
+        .find(|batch| batch.batch_id == batch_id)
+        .map(|batch| batch.created_trigger.clone())
+        .unwrap_or_else(|| {
+            if env::var("ARCH_NOTEBOOK_AUTOMATION_TRIGGER").as_deref() == Ok("scheduled") {
+                "scheduled".into()
+            } else if app
+                .case
+                .automation_runs
+                .iter()
+                .any(|run| run.batch_id == Some(batch_id))
+            {
+                "legacy".into()
+            } else {
+                "cli".into()
+            }
+        });
+    let has_failed_attempt = app
+        .case
+        .automation_batches
+        .iter()
+        .find(|batch| batch.batch_id == batch_id)
+        .map(|batch| batch.has_failed_attempt)
+        .unwrap_or_else(|| {
+            if app
+                .case
+                .automation_runs
+                .iter()
+                .any(|run| run.batch_id == Some(batch_id))
+            {
+                None
+            } else {
+                Some(false)
+            }
+        });
     app.case
         .automation_batches
         .retain(|batch| batch.batch_id != batch_id);
     app.case.automation_batches.push(AutomationBatchCheckpoint {
         batch_id,
+        created_trigger,
+        has_failed_attempt,
         configuration_fingerprint: batch_configuration_fingerprint.clone(),
         selected_jobs: jobs
             .iter()
@@ -35298,6 +35431,9 @@ fn run_automation_cli(
         app.case
             .automation_batches
             .drain(..app.case.automation_batches.len() - 200);
+    }
+    if auto_resumed {
+        eprintln!("AUTOMATION BATCH AUTO-RESUME · {batch_id}");
     }
     if resume_batch_id.is_none() {
         save_case_atomically(Path::new(case_path), &app.case)?;
@@ -35468,6 +35604,14 @@ fn run_automation_cli(
         }
         if !success {
             failures += 1;
+            if let Some(batch) = app
+                .case
+                .automation_batches
+                .iter_mut()
+                .find(|batch| batch.batch_id == batch_id)
+            {
+                batch.has_failed_attempt = Some(true);
+            }
         }
         let run = app.case.automation_runs.last();
         let run_id = run.map(|run| run.id);
@@ -35601,7 +35745,7 @@ fn run_automation_cli(
                 .iter()
                 .filter(|outcome| outcome["prior_status"] == "PASS")
                 .count();
-            println!("{}", serde_json::to_string_pretty(&serde_json::json!({"schema_version":1,"ok":failures==0 && chart_export_failures==0,"saved":false,"case":case_path,"batch_id":batch_id,"passed":passed,"failed":failures,"chart_export_failures":chart_export_failures,"skipped":skipped.len(),"outcomes":outcomes,"skipped_jobs":skipped})).map_err(|error|error.to_string())?);
+            println!("{}", serde_json::to_string_pretty(&serde_json::json!({"schema_version":1,"ok":failures==0 && chart_export_failures==0,"saved":false,"case":case_path,"batch_id":batch_id,"auto_resumed":auto_resumed,"passed":passed,"failed":failures,"chart_export_failures":chart_export_failures,"skipped":skipped.len(),"outcomes":outcomes,"skipped_jobs":skipped})).map_err(|error|error.to_string())?);
         }
         return Ok(failures == 0 && chart_export_failures == 0);
     }
@@ -35614,7 +35758,7 @@ fn run_automation_cli(
                 .iter()
                 .filter(|outcome| outcome["prior_status"] == "PASS")
                 .count();
-        println!("{}", serde_json::to_string_pretty(&serde_json::json!({"schema_version":1,"ok":failures==0 && chart_export_failures==0,"saved":!outcomes.is_empty(),"case":case_path,"batch_id":batch_id,"passed":passed,"failed":failures,"chart_export_failures":chart_export_failures,"skipped":skipped.len(),"outcomes":outcomes,"skipped_jobs":skipped})).map_err(|error|error.to_string())?);
+        println!("{}", serde_json::to_string_pretty(&serde_json::json!({"schema_version":1,"ok":failures==0 && chart_export_failures==0,"saved":!outcomes.is_empty(),"case":case_path,"batch_id":batch_id,"auto_resumed":auto_resumed,"passed":passed,"failed":failures,"chart_export_failures":chart_export_failures,"skipped":skipped.len(),"outcomes":outcomes,"skipped_jobs":skipped})).map_err(|error|error.to_string())?);
     }
     Ok(failures == 0 && chart_export_failures == 0)
 }
@@ -43099,6 +43243,8 @@ fn list_automation_batches_cli(case_path: &str, json_output: bool) -> Result<(),
             };
             serde_json::json!({
                 "batch_id": batch.batch_id,
+                "created_trigger": batch.created_trigger,
+                "has_failed_attempt": batch.has_failed_attempt,
                 "configuration_fingerprint": batch.configuration_fingerprint,
                 "selection_recorded": selection_recorded,
                 "status": status,
@@ -43305,6 +43451,7 @@ fn parse_batch_selection_args(
     Vec<(String, String)>,
     Vec<(String, String, String)>,
     Option<Uuid>,
+    bool,
     Option<String>,
 ) {
     let json_output = args.iter().any(|arg| arg == "--json");
@@ -43313,6 +43460,7 @@ fn parse_batch_selection_args(
     let mut scoped_parameter_options = Vec::new();
     let mut seen_json = false;
     let mut resume_batch_id = None;
+    let mut resume_incomplete_scheduled_batch = false;
     let mut export_chart_csv_dir = None;
     let mut index = 2;
     while index < args.len() {
@@ -43370,6 +43518,11 @@ fn parse_batch_selection_args(
                     )
                 }));
             }
+            "--resume-incomplete-scheduled-batch"
+                if allow_resume_batch && !resume_incomplete_scheduled_batch =>
+            {
+                resume_incomplete_scheduled_batch = true;
+            }
             "--export-chart-csv-dir" if allow_resume_batch && export_chart_csv_dir.is_none() => {
                 index += 1;
                 let Some(value) = args
@@ -43405,6 +43558,7 @@ fn parse_batch_selection_args(
         parameters,
         scoped_parameters,
         resume_batch_id,
+        resume_incomplete_scheduled_batch,
         export_chart_csv_dir,
     )
 }
@@ -44677,7 +44831,7 @@ fn main() -> eframe::Result<()> {
         let Some(case_path) = args.get(1) else {
             report_cli_usage_error(usage, args.iter().any(|arg| arg == "--json"));
         };
-        let (json_output, selected_jobs, parameter_overrides, scoped_parameter_overrides, _, _) =
+        let (json_output, selected_jobs, parameter_overrides, scoped_parameter_overrides, _, _, _) =
             parse_batch_selection_args(&args, usage, false);
         match validate_enabled_automation_jobs_cli(
             case_path,
@@ -44743,7 +44897,7 @@ fn main() -> eframe::Result<()> {
             })
             .cloned()
             .collect::<Vec<_>>();
-        let (json_output, selected_jobs, parameter_overrides, scoped_parameter_overrides, _, _) =
+        let (json_output, selected_jobs, parameter_overrides, scoped_parameter_overrides, _, _, _) =
             parse_batch_selection_args(&filtered_args, usage, false);
         match validate_enabled_automation_jobs_cli(
             case_path,
@@ -44766,7 +44920,7 @@ fn main() -> eframe::Result<()> {
         return Ok(());
     }
     if args.first().is_some_and(|arg| arg == "--run-enabled-jobs") {
-        let usage = "usage: arch-notebook --run-enabled-jobs <case.json> [--json] [--progress] [--resume-batch <batch-id>] [--export-chart-csv-dir <absolute-directory>] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]";
+        let usage = "usage: arch-notebook --run-enabled-jobs <case.json> [--json] [--progress] [--resume-batch <batch-id>] [--resume-incomplete-scheduled-batch] [--export-chart-csv-dir <absolute-directory>] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]";
         let Some(case_path) = args.get(1) else {
             report_cli_usage_error(usage, args.iter().any(|arg| arg == "--json"));
         };
@@ -44788,6 +44942,7 @@ fn main() -> eframe::Result<()> {
             parameter_overrides,
             scoped_parameter_overrides,
             resume_batch_id,
+            resume_incomplete_scheduled_batch,
             export_chart_csv_dir,
         ) = parse_batch_selection_args(&filtered_args, usage, true);
         match run_automation_cli(
@@ -44797,6 +44952,7 @@ fn main() -> eframe::Result<()> {
             &parameter_overrides,
             &scoped_parameter_overrides,
             resume_batch_id,
+            resume_incomplete_scheduled_batch,
             None,
             export_chart_csv_dir.as_deref(),
             report_progress,
@@ -44879,6 +45035,7 @@ fn main() -> eframe::Result<()> {
             &parameter_overrides,
             &[],
             resume_batch_id,
+            false,
             export_chart_csv_path.as_deref(),
             None,
             report_progress,
@@ -45004,7 +45161,8 @@ fn main() -> eframe::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        AnalysisPacketDisclosure, App, AutomationJob, AutomationParameterOverrides, CaseFile,
+        AnalysisPacketDisclosure, App, AutomationBatchCheckpoint, AutomationBatchJobSelection,
+        AutomationJob, AutomationJobCheckpoint, AutomationParameterOverrides, CaseFile,
         ChartDocument, ConnectionFact, ConnectionSnapshot, Entity, EntityRepresentation,
         ImportFilterOperator, ImportTransformOperation, ImportValueTransform, Uuid,
         analysis_filter_display, analysis_filter_visible_chars, apply_import_value_transforms,
@@ -45012,6 +45170,130 @@ mod tests {
         entity_type_layout_positions, export_analysis_packet_cli, grid_layout_dimensions,
         import_filter_matches,
     };
+
+    #[test]
+    fn scheduled_batch_auto_resume_requires_latest_matching_pending_batch_without_failures() {
+        let make_job = || AutomationJob {
+            id: Uuid::new_v4(),
+            chart_id: None,
+            name: "Scheduled fixture".into(),
+            database_path: "/tmp/scheduled-fixture.sqlite".into(),
+            series: "fixture".into(),
+            query: "SELECT 'A' AS source, 'B' AS target, 'CONTACT' AS relationship".into(),
+            parameters: Vec::new(),
+            query_timeout_minutes: 15,
+            enabled: true,
+            minimum_connections: 0,
+            minimum_confidence: None,
+            maximum_connections: None,
+            maximum_regressions: None,
+            maximum_added_connections: None,
+            maximum_connection_property_changes: None,
+            maximum_entity_property_changes: None,
+            maximum_skipped_rows: None,
+            require_unchanged_schema: false,
+        };
+        let mut case: CaseFile =
+            serde_json::from_str(include_str!("../fixtures/chart/correctness.case.json"))
+                .expect("chart fixture parses");
+        let job = make_job();
+        let batch_id = Uuid::new_v4();
+        let legacy_manifest: AutomationBatchCheckpoint =
+            serde_json::from_value(serde_json::json!({
+                "batch_id": batch_id,
+                "configuration_fingerprint": "sha256-v1:legacy",
+            }))
+            .expect("pre-trigger batch manifests remain readable");
+        assert_eq!(legacy_manifest.created_trigger, "legacy");
+        assert_eq!(legacy_manifest.has_failed_attempt, None);
+        let make_batch = |created_trigger: &str,
+                          job: &AutomationJob,
+                          completed_jobs: Vec<AutomationJobCheckpoint>| {
+            AutomationBatchCheckpoint {
+                batch_id,
+                created_trigger: created_trigger.into(),
+                has_failed_attempt: Some(false),
+                configuration_fingerprint: super::automation_batch_configuration_fingerprint(
+                    std::slice::from_ref(job),
+                )
+                .expect("job fingerprint"),
+                selected_jobs: vec![AutomationBatchJobSelection {
+                    job_id: job.id,
+                    job_name: job.name.clone(),
+                }],
+                effective_jobs: vec![job.clone()],
+                completed_jobs,
+            }
+        };
+        case.automation_jobs = vec![job.clone()];
+        case.automation_batches = vec![make_batch("scheduled", &job, Vec::new())];
+        assert_eq!(
+            super::scheduled_batch_resume_candidate(&case).expect("valid checkpoint"),
+            Some(batch_id),
+            "a matching, pending scheduled batch is eligible"
+        );
+
+        case.automation_batches[0].completed_jobs = vec![AutomationJobCheckpoint {
+            job_id: job.id,
+            run_id: Uuid::new_v4(),
+            finished_at: "2026-11-27T00:00:00Z".into(),
+            success: true,
+            message: "captured".into(),
+            duration_ms: Some(1),
+            sqlite_lock_retries: 0,
+            snapshot_id: None,
+        }];
+        assert_eq!(
+            super::scheduled_batch_resume_candidate(&case).expect("valid completed checkpoint"),
+            None,
+            "a complete batch is never auto-resumed"
+        );
+
+        case.automation_batches[0] = make_batch(
+            "scheduled",
+            &job,
+            vec![AutomationJobCheckpoint {
+                job_id: job.id,
+                run_id: Uuid::new_v4(),
+                finished_at: "2026-11-27T00:00:00Z".into(),
+                success: false,
+                message: "SQL failed".into(),
+                duration_ms: Some(1),
+                sqlite_lock_retries: 0,
+                snapshot_id: None,
+            }],
+        );
+        assert_eq!(
+            super::scheduled_batch_resume_candidate(&case).expect("valid failed checkpoint"),
+            None,
+            "a failed capture starts a new scheduled batch"
+        );
+
+        case.automation_batches[0] = make_batch("scheduled", &job, Vec::new());
+        case.automation_batches[0].has_failed_attempt = Some(true);
+        assert_eq!(
+            super::scheduled_batch_resume_candidate(&case).expect("retained failure marker"),
+            None,
+            "a persistent failed-attempt marker prevents retry loops after run history pruning"
+        );
+
+        case.automation_batches[0] = make_batch("scheduled", &job, Vec::new());
+        case.automation_batches
+            .push(make_batch("cli", &job, Vec::new()));
+        assert_eq!(
+            super::scheduled_batch_resume_candidate(&case).expect("valid newer CLI batch"),
+            None,
+            "an older scheduled batch is not resumed past the latest overall batch"
+        );
+
+        case.automation_batches.pop();
+        case.automation_jobs[0].query.push_str(" ORDER BY 1");
+        assert_eq!(
+            super::scheduled_batch_resume_candidate(&case).expect("configuration drift"),
+            None,
+            "changed current SQL configuration starts a fresh batch"
+        );
+    }
 
     fn render_headless_app_frame(
         context: &egui::Context,

@@ -45,6 +45,6 @@ touch "$stdout_log" "$stderr_log" || exit 1
 chmod 600 "$stdout_log" "$stderr_log" || exit 1
 export ARCH_NOTEBOOK_AUTOMATION_TRIGGER=scheduled
 if [[ -n "$chart_export_dir" ]]; then
-  exec "$binary" --run-enabled-jobs "$case_file" --progress --export-chart-csv-dir "$chart_export_dir" >>"$stdout_log" 2>>"$stderr_log"
+  exec "$binary" --run-enabled-jobs "$case_file" --progress --resume-incomplete-scheduled-batch --export-chart-csv-dir "$chart_export_dir" >>"$stdout_log" 2>>"$stderr_log"
 fi
-exec "$binary" --run-enabled-jobs "$case_file" --progress >>"$stdout_log" 2>>"$stderr_log"
+exec "$binary" --run-enabled-jobs "$case_file" --progress --resume-incomplete-scheduled-batch >>"$stdout_log" 2>>"$stderr_log"
