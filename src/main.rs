@@ -1402,6 +1402,7 @@ struct SqlValidationPreview {
     page_offset: usize,
     has_more_rows: bool,
     selected_connection_facts: HashMap<String, ConnectionFact>,
+    review_filter: String,
     skipped_endpoints: Vec<SkippedSqlEndpoint>,
 }
 
@@ -9191,6 +9192,7 @@ impl App {
                 page_offset: 0,
                 has_more_rows: false,
                 selected_connection_facts: HashMap::new(),
+                review_filter: String::new(),
                 skipped_endpoints,
             });
         let validation_message = if self.status.starts_with("SQL SNAPSHOT INGESTED") {
@@ -9552,6 +9554,7 @@ impl App {
             preview.connections.len(),
         ))
         .id_salt("sql_validation_preview")
+        .default_open(preview.seeded_query)
         .show(ui, |ui| {
             ui.label(format!(
                 "Captured {} · window starts at row {} · {} usable rows{}{}",
@@ -9572,6 +9575,32 @@ impl App {
                     )
                 }
             ));
+            let filtered_connections = if preview.seeded_query {
+                ui.horizontal(|ui| {
+                    ui.label("Filter this page");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut preview.review_filter)
+                            .hint_text("ID, entity, relationship, note, property")
+                            .desired_width(280.0),
+                    );
+                });
+                preview
+                    .connections
+                    .iter()
+                    .filter(|connection| {
+                        sql_seed_review_row_matches(connection, &preview.review_filter)
+                    })
+                    .collect::<Vec<_>>()
+            } else {
+                preview.connections.iter().collect::<Vec<_>>()
+            };
+            if preview.seeded_query {
+                ui.label(format!(
+                    "{} matching rows on this page · {} total rows on page",
+                    filtered_connections.len(),
+                    preview.connections.len()
+                ));
+            }
             egui::ScrollArea::horizontal().show(ui, |ui| {
                 egui::Grid::new("sql_validation_preview_rows")
                     .striped(true)
@@ -9597,7 +9626,7 @@ impl App {
                             ui.strong(heading);
                         }
                         ui.end_row();
-                        for connection in &preview.connections {
+                        for connection in &filtered_connections {
                             if preview.seeded_query {
                                 let mut selected =
                                     preview.selected_connection_keys.contains(&connection.key);
@@ -9608,7 +9637,7 @@ impl App {
                                             .insert(connection.key.clone());
                                         preview
                                             .selected_connection_facts
-                                            .insert(connection.key.clone(), connection.clone());
+                                            .insert(connection.key.clone(), (**connection).clone());
                                     } else {
                                         preview.selected_connection_keys.remove(&connection.key);
                                         preview.selected_connection_facts.remove(&connection.key);
@@ -9653,17 +9682,18 @@ impl App {
             if preview.seeded_query {
                 let selected_count = preview.selected_connection_facts.len();
                 ui.horizontal(|ui| {
-                    if ui.button("Select all retained rows").clicked() {
-                        preview.selected_connection_keys = preview
-                            .connections
-                            .iter()
-                            .map(|connection| connection.key.clone())
-                            .collect();
-                        preview.selected_connection_facts.extend(
-                            preview
-                                .connections
+                    if ui.button("Select visible rows").clicked() {
+                        preview.selected_connection_keys.extend(
+                            filtered_connections
                                 .iter()
-                                .map(|connection| (connection.key.clone(), connection.clone())),
+                                .map(|connection| connection.key.clone()),
+                        );
+                        preview.selected_connection_facts.extend(
+                            filtered_connections
+                                .iter()
+                                .map(|connection| {
+                                    (connection.key.clone(), (**connection).clone())
+                                }),
                         );
                     }
                     if ui.button("Clear selection").clicked() {
@@ -9700,6 +9730,9 @@ impl App {
                 ui.ctx().data_mut(|data| {
                     data.insert_temp(egui::Id::new("sql_seed_add_selected_clicked"), add_selected)
                 });
+                if filtered_connections.is_empty() {
+                    ui.label("No result rows match this page filter.");
+                }
             } else {
                 ui.ctx().data_mut(|data| {
                     data.insert_temp(egui::Id::new("sql_seed_add_selected_clicked"), false)
@@ -17082,6 +17115,42 @@ fn wrap_seed_query_page(query: &str, offset: usize) -> String {
 
 fn seed_query_page_has_more_rows(usable_rows: usize, skipped_rows: usize) -> bool {
     usable_rows.saturating_add(skipped_rows) > SQL_SEED_REVIEW_PAGE_SIZE
+}
+
+fn sql_seed_review_row_matches(fact: &ConnectionFact, filter: &str) -> bool {
+    let filter = filter.trim().to_lowercase();
+    if filter.is_empty() {
+        return true;
+    }
+    let matches = |value: &str| value.to_lowercase().contains(&filter);
+    [
+        fact.connection_id.as_str(),
+        fact.source.as_str(),
+        fact.source_type.as_str(),
+        fact.source_entity_id.as_str(),
+        fact.relationship.as_str(),
+        fact.target.as_str(),
+        fact.target_type.as_str(),
+        fact.target_entity_id.as_str(),
+        fact.date.as_str(),
+        fact.source_reference.as_str(),
+        fact.notes.as_str(),
+    ]
+    .into_iter()
+    .any(matches)
+        || matches(&fact.confidence.to_string())
+        || matches(if fact.directed {
+            "directed"
+        } else {
+            "undirected"
+        })
+        || fact
+            .source_attributes
+            .iter()
+            .chain(&fact.target_attributes)
+            .chain(&fact.attributes)
+            .chain(&fact.review_fields)
+            .any(|(name, value)| matches(name) || matches(value))
 }
 
 fn strip_sql_trailing_statement_terminator(query: &str) -> &str {
@@ -46798,6 +46867,15 @@ mod tests {
             fact.review_fields[0],
             ("investigator_note".into(), "joined source detail".into())
         );
+        assert!(super::sql_seed_review_row_matches(
+            fact,
+            "JOINED SOURCE DETAIL"
+        ));
+        assert!(super::sql_seed_review_row_matches(fact, "raw_payload"));
+        assert!(!super::sql_seed_review_row_matches(
+            fact,
+            "no such analyst value"
+        ));
         assert!(fact.review_fields[1].0 == "raw_payload");
         assert!(fact.review_fields[1].1.len() <= super::SQL_SEED_REVIEW_MAX_EXTRA_CELL_BYTES);
         assert!(
@@ -46815,6 +46893,89 @@ mod tests {
             "seeded result review leaves the source database unchanged"
         );
         std::fs::remove_dir_all(root).expect("remove isolated query-review directory");
+    }
+
+    #[test]
+    fn seeded_query_review_shows_search_and_selection_controls_at_desktop_width() {
+        let fact = ConnectionFact {
+            key: "id:row-1".into(),
+            connection_id: "row-1".into(),
+            source_entity_id: "seed-1".into(),
+            target_entity_id: "candidate-1".into(),
+            source: "Seed Entity".into(),
+            source_type: "PERSON".into(),
+            source_representation: String::new(),
+            target: "Candidate".into(),
+            target_type: "ORGANIZATION".into(),
+            target_representation: String::new(),
+            relationship: "CONTACTED".into(),
+            date: "2026-11-28".into(),
+            confidence: 3,
+            directed: true,
+            source_reference: String::new(),
+            notes: String::new(),
+            source_attributes: Vec::new(),
+            target_attributes: Vec::new(),
+            attributes: Vec::new(),
+            review_fields: vec![("investigator_note".into(), "shared address".into())],
+        };
+        let mut preview = super::SqlValidationPreview {
+            configured_database_path: "source.sqlite".into(),
+            series: "seeded search".into(),
+            query: "SELECT ...".into(),
+            captured_at: "2026-11-28T00:00:00Z".into(),
+            connections: vec![fact],
+            seeded_query: true,
+            validation_passed: true,
+            has_more_rows: true,
+            ..Default::default()
+        };
+        let context = egui::Context::default();
+        let mut regressions_only = false;
+        let output = context.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1280.0, 900.0),
+                )),
+                time: Some(0.0),
+                ..Default::default()
+            },
+            |context| {
+                egui::CentralPanel::default().show(context, |ui| {
+                    App::show_sql_validation_preview(
+                        ui,
+                        Some(&mut preview),
+                        "source.sqlite",
+                        "seeded search",
+                        "SELECT ...",
+                        "",
+                        0,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        &mut regressions_only,
+                    );
+                });
+            },
+        );
+        let texts = collect_headless_texts(&output.shapes);
+        for expected in [
+            "Filter this page",
+            "Select visible rows",
+            "Clear selection",
+            "Next page",
+            "Add selected rows to chart",
+        ] {
+            assert!(
+                texts.iter().any(|text| text.contains(expected)),
+                "missing seeded result review UI text: {expected}"
+            );
+        }
     }
 
     #[test]
