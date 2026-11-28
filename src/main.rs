@@ -4085,6 +4085,48 @@ impl App {
         self.status = "SQL SEARCH LOADED · REBIND CHART SEEDS IF NEEDED, THEN VALIDATE".into();
     }
 
+    fn prepare_saved_sql_search_for_automation(&mut self) {
+        if self.data_mode != DataMode::SqlRegressions {
+            self.status = "SQL AUTOMATION DRAFT NOT PREPARED · OPEN SQL REVIEW FIRST".into();
+            return;
+        }
+        let Some(seed_name) = self
+            .sql_saved_search_id
+            .and_then(|id| {
+                self.case
+                    .saved_sql_searches
+                    .iter()
+                    .find(|search| search.id == id)
+            })
+            .and_then(|search| search.seed_parameter_name.clone())
+            .map(|name| normalize_sql_parameter_name(&name))
+        else {
+            self.status = "SQL AUTOMATION DRAFT NOT PREPARED · SELECT A SEEDED SAVED SEARCH".into();
+            return;
+        };
+        let parameters = match parse_sql_parameters(&self.sql_parameter_text) {
+            Ok(parameters) => parameters,
+            Err(error) => {
+                self.status = format!("SQL AUTOMATION DRAFT NOT PREPARED · {error}");
+                return;
+            }
+        };
+        let parameters = parameters
+            .into_iter()
+            .filter(|(name, _)| normalize_sql_parameter_name(name) != seed_name)
+            .collect::<Vec<_>>();
+        self.sql_parameter_text = format_sql_parameters(&parameters);
+        self.sql_seed_query_mode = false;
+        self.sql_review_dynamic_seed_parameter_name = None;
+        self.sql_seed_page_offset = 0;
+        self.sql_validation_preview = None;
+        self.sql_skipped_endpoints.clear();
+        self.automation_job_name = format!("{} automation", self.sql_saved_search_name.trim());
+        self.status = format!(
+            "SQL AUTOMATION DRAFT READY · removed chart-bound parameter {seed_name} · SQL predicate was kept and may still filter results; review or edit it, then validate"
+        );
+    }
+
     fn delete_sql_review_search(&mut self) {
         let Some(id) = self.sql_saved_search_id else {
             return;
@@ -4271,6 +4313,21 @@ impl App {
                     action = Some("delete");
                 }
             });
+            if let Some(search) = self.sql_saved_search_id.and_then(|id| {
+                self.case.saved_sql_searches.iter().find(|search| search.id == id)
+            }) && search.seed_parameter_name.is_some()
+            {
+                ui.label(
+                    egui::RichText::new(
+                        "This search was chart-seeded. Recurring automation cannot retain that selected chart ID; remove the bound value and review the SQL predicate first.",
+                    )
+                    .small()
+                    .color(egui::Color32::from_rgb(236, 174, 83)),
+                );
+                if ui.button("Prepare unseeded automation draft").clicked() {
+                    action = Some("prepare_automation");
+                }
+            }
             if let Some(id) = self.sql_saved_search_id
                 && let Some((_, _, database_path)) = saved_searches
                     .iter()
@@ -4382,6 +4439,7 @@ impl App {
             Some("delete") => self.delete_sql_review_search(),
             Some("import_package") => self.import_saved_sql_search_package(),
             Some("export_package") => self.export_saved_sql_search_package(),
+            Some("prepare_automation") => self.prepare_saved_sql_search_for_automation(),
             _ => {}
         }
     }
@@ -47970,6 +48028,70 @@ mod tests {
     }
 
     #[test]
+    fn seeded_saved_search_prepares_reviewable_automation_draft_without_creating_job() {
+        let case: CaseFile =
+            serde_json::from_str(include_str!("../fixtures/chart/correctness.case.json"))
+                .expect("correctness fixture parses");
+        let search = super::SavedSqlSearch {
+            id: Uuid::from_u128(9901),
+            name: "Seeded contact lookup".into(),
+            database_path: "/tmp/contacts.sqlite".into(),
+            series: "contact lookup".into(),
+            query: "SELECT source, target FROM contacts WHERE owner_id = :entity_id AND active = :active".into(),
+            parameters: vec![
+                ("entity_id".into(), "text:stale-chart-id".into()),
+                ("active".into(), "bool:true".into()),
+            ],
+            seed_parameter_name: Some("entity_id".into()),
+        };
+        let mut case = case;
+        case.saved_sql_searches.push(search.clone());
+        let mut app = App::automation_context(case, "/tmp/seeded-search.case.json");
+        app.page = super::WorkspacePage::Data;
+        app.data_mode = super::DataMode::SqlRegressions;
+        app.sql_saved_search_id = Some(search.id);
+        app.sql_saved_search_name = search.name.clone();
+        app.sql_path = search.database_path.clone();
+        app.sql_series = search.series.clone();
+        app.sql_query = search.query.clone();
+        app.sql_parameter_text = "entity_id=text:stale-chart-id\nactive=bool:true".into();
+        app.sql_seed_query_mode = true;
+        app.sql_review_dynamic_seed_parameter_name = Some("entity_id".into());
+        app.sql_seed_page_offset = 200;
+        app.sql_validation_preview = Some(super::SqlValidationPreview {
+            configured_database_path: app.sql_path.clone(),
+            series: app.sql_series.clone(),
+            query: app.sql_query.clone(),
+            parameters: vec![
+                ("entity_id".into(), "text:stale-chart-id".into()),
+                ("active".into(), "bool:true".into()),
+            ],
+            seeded_query: true,
+            validation_passed: true,
+            ..Default::default()
+        });
+
+        app.prepare_saved_sql_search_for_automation();
+
+        assert_eq!(app.sql_path, search.database_path);
+        assert_eq!(app.sql_series, search.series);
+        assert_eq!(app.sql_query, search.query);
+        assert_eq!(app.sql_parameter_text, "active=bool:true");
+        assert!(!app.sql_seed_query_mode);
+        assert!(app.sql_review_dynamic_seed_parameter_name.is_none());
+        assert_eq!(app.sql_seed_page_offset, 0);
+        assert!(app.sql_validation_preview.is_none());
+        assert!(app.case.automation_jobs.is_empty());
+        assert_eq!(app.automation_job_name, "Seeded contact lookup automation");
+        assert!(app.status.contains("predicate was kept"));
+
+        app.sql_parameter_text = "entity_id=text:another-stale-id\nactive=bool:true".into();
+        app.prepare_saved_sql_search_for_automation();
+        assert_eq!(app.sql_parameter_text, "active=bool:true");
+        assert!(app.case.automation_jobs.is_empty());
+    }
+
+    #[test]
     fn sql_review_saved_search_ui_loads_query_without_running_or_capturing_it() {
         let case: CaseFile =
             serde_json::from_str(include_str!("../fixtures/chart/correctness.case.json"))
@@ -48065,6 +48187,20 @@ mod tests {
         assert!(app.sql_validation_preview.is_none());
         assert!(app.case.snapshots.is_empty());
         assert!(app.status.starts_with("SQL SEARCH LOADED"));
+
+        time += 1.0 / 60.0;
+        let seeded_search_shapes = render_headless_app_frame_at(
+            &context,
+            &mut app,
+            &mut frame,
+            time,
+            Vec::new(),
+            egui::vec2(1600.0, 2600.0),
+        );
+        assert!(
+            find_headless_text_rect(&seeded_search_shapes, "Prepare unseeded automation draft")
+                .is_some()
+        );
 
         app.sql_saved_search_name = "Counterparty network".into();
         app.sql_query.push_str(" ORDER BY source, target");

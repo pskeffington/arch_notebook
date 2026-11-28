@@ -31,6 +31,19 @@ The SQL Review catalog now imports and exports the same definition-only packages
 
 Exact commands, binary digest, and aggregate evidence: [SQL-SEARCH-PACKAGE-02](evidence/sql-automation/SQL-SEARCH-PACKAGE-02-desktop-ui-20261128.md).
 
+## Seeded saved search to automation draft — 2026-11-28
+
+SQL Review now provides an explicit path from a chart-seeded saved search to an unseeded automation draft. It removes only the bound ID parameter value, preserves the SQL predicate and other typed defaults, clears stale validation state, and requires the analyst to review/edit and revalidate before a disabled job can be created.
+
+| Gate | Result | Evidence |
+| --- | --- | --- |
+| Formatting, workspace check, full Rust suite | PASS | 101 passed, 0 failed, 3 ignored. |
+| Optimized release build and current-user installation | PASS | Release contains the new control/warning; installed executable matches the optimized build. |
+| Saved-search package, installer, Clinton regression | PASS | Package and install checks pass; Clinton replay returned 6,173 rows, zero skipped and zero deltas, with unchanged inputs. |
+| Native UI, live systemd dispatch, IBM interoperability | NOT RUN | Current sandbox cannot access desktop input or user systemd; IBM schema/application validation remains unavailable. |
+
+Commands, binary digest, and report hashes: [SQL-SEARCH-AUTOMATION-DRAFT-01](evidence/sql-automation/SQL-SEARCH-AUTOMATION-DRAFT-01-20261128.md).
+
 ## Case-local saved SQL searches — 2026-11-28
 
 **Repository / branch / baseline:** `arch_notebook` / `codex/ui-00-chart-nested-conditions` / `8037cbc2d0a94444aebecb9937710e34e52006de`.

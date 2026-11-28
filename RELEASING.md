@@ -16,6 +16,8 @@ The optimized Rust candidate from product source `1ca4203` is installed for the 
 
 The SQL Review package UI follow-up is installed from the optimized Rust candidate; the desktop saved-search panel import/export regression, package CLI checks, isolated install checks, and Clinton corpus replay pass. The installed binary SHA-256 is `0e3f23dcc30da9012c2d8a7cb7d2e5cc46e7539a9f7f60c05fefe0c7eebb54c0`. Native pointer/keyboard review and IBM application/schema validation remain open. See [SQL-SEARCH-PACKAGE-02](docs/evidence/sql-automation/SQL-SEARCH-PACKAGE-02-desktop-ui-20261128.md).
 
+The seeded-search automation-draft follow-up is installed from optimized source; the current binary SHA-256 is `cda40195dd721a2a1013ece65ad10b674519c19acbb19892f47068fbee01fda4`. It removes a chart-bound parameter value only after the analyst explicitly chooses the draft-preparation action; SQL review/validation and disabled job creation remain explicit. Native interaction, live systemd dispatch, and IBM application/schema validation remain open. See [SQL-SEARCH-AUTOMATION-DRAFT-01](docs/evidence/sql-automation/SQL-SEARCH-AUTOMATION-DRAFT-01-20261128.md).
+
 ## Publish a version
 
 1. Set the new semantic version in `Cargo.toml` and update user-facing release notes.
