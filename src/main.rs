@@ -4698,6 +4698,17 @@ impl App {
         };
     }
 
+    fn normalize_active_chart_coordinates(&mut self) {
+        match rebase_case_chart_coordinates(&mut self.case) {
+            Some((out_of_range_entities, entity_count, label_count)) => {
+                self.status = format!(
+                    "CHART COORDINATES NORMALIZED · {out_of_range_entities} OUT-OF-RANGE ENTITIES · {entity_count} ENTITIES AND {label_count} LABELS REBASED · SAVE CASE TO KEEP"
+                );
+            }
+            None => self.status = "CHART COORDINATES ALREADY NORMALIZED".into(),
+        }
+    }
+
     fn select_chart_label(&mut self, label_id: Uuid) {
         self.clear_chart_entity_selection();
         self.selected_link = None;
@@ -15766,6 +15777,47 @@ struct ChartCoordinateMap {
     identity: bool,
 }
 
+fn chart_coordinate_outlier_count(entities: &[Entity]) -> usize {
+    entities
+        .iter()
+        .filter(|entity| {
+            !entity.x.is_finite()
+                || !entity.y.is_finite()
+                || !(0.0..=1.0).contains(&entity.x)
+                || !(0.0..=1.0).contains(&entity.y)
+        })
+        .count()
+}
+
+fn rebase_case_chart_coordinates(case: &mut CaseFile) -> Option<(usize, usize, usize)> {
+    let outlier_count = chart_coordinate_outlier_count(&case.entities);
+    if outlier_count == 0 {
+        return None;
+    }
+
+    let mut coordinates = ChartCoordinateMap::for_case(case);
+    // A stale identity bounds record can leave outliers outside the visible frame.
+    // In that case, derive the recovery frame from the entity coordinates themselves.
+    if coordinates.identity {
+        coordinates = ChartCoordinateMap::from_entity_positions(case);
+    }
+
+    let entity_count = case.entities.len();
+    let label_count = case.labels.len();
+    for entity in &mut case.entities {
+        let rebased = coordinates.to_viewport(entity.x, entity.y);
+        entity.x = rebased.x;
+        entity.y = rebased.y;
+    }
+    for label in &mut case.labels {
+        let rebased = coordinates.to_viewport(label.x, label.y);
+        label.x = rebased.x;
+        label.y = rebased.y;
+    }
+    case.chart_coordinate_bounds = Some([0.0, 0.0, 1.0, 1.0]);
+    Some((outlier_count, entity_count, label_count))
+}
+
 impl ChartCoordinateMap {
     fn for_case(case: &CaseFile) -> Self {
         if let Some([min_x, min_y, max_x, max_y]) = case.chart_coordinate_bounds
@@ -21717,6 +21769,22 @@ impl eframe::App for App {
                         if ui.button("Arrange chart").clicked() {
                             self.auto_layout();
                             ui.close_menu();
+                        }
+                        let outlier_count = chart_coordinate_outlier_count(&self.case.entities);
+                        if self.page == WorkspacePage::Chart && outlier_count > 0 {
+                            let action = format!(
+                                "Normalize chart coordinates · {outlier_count} out of range"
+                            );
+                            if ui
+                                .button(&action)
+                                .on_hover_text(
+                                    "Rebase active-chart entities and labels into normalized 0–1 coordinates while retaining the current layout. This changes only the case; save it to keep the coordinate cleanup. SQL snapshots and source data are unchanged.",
+                                )
+                                .clicked()
+                            {
+                                self.normalize_active_chart_coordinates();
+                                ui.close_menu();
+                            }
                         }
                         let restore_enabled = self.layout_restore.as_ref().is_some_and(|snapshot| {
                             community_layout_restore_matches(
@@ -55217,6 +55285,121 @@ mod tests {
             after.to_viewport(case.entities[0].x, case.entities[0].y),
             entity_before
         );
+    }
+
+    #[test]
+    fn rebase_chart_coordinates_preserves_the_displayed_layout_and_normalizes_labels() {
+        let mut case = super::demo_case();
+        case.entities.truncate(3);
+        for (entity, (x, y)) in
+            case.entities
+                .iter_mut()
+                .zip([(0.12, 0.15), (0.48, 38.5), (0.81, 140.75)])
+        {
+            entity.x = x;
+            entity.y = y;
+        }
+        case.labels.push(super::ChartLabel {
+            id: Uuid::from_u128(999),
+            text: "Reference annotation".into(),
+            x: 0.2,
+            y: 110.0,
+            font_size: 16.0,
+            color: [0, 0, 0],
+            is_legend: false,
+            legend_entries: Vec::new(),
+            legend_entries_truncated: false,
+            template_rules_for: None,
+        });
+        let rect = egui::Rect::from_min_size(egui::pos2(23.0, 17.0), egui::vec2(1000.0, 700.0));
+        let zoom = 1.35;
+        let pan = egui::vec2(14.0, -22.0);
+        let before_map = super::ChartCoordinateMap::for_case(&case);
+        let before_transform = super::ChartTransform::with_coordinates(rect, zoom, pan, before_map);
+        let before_entities: Vec<_> = case
+            .entities
+            .iter()
+            .map(|entity| before_transform.normalized_to_screen(entity.x, entity.y))
+            .collect();
+        let before_labels: Vec<_> = case
+            .labels
+            .iter()
+            .map(|label| before_transform.normalized_to_screen(label.x, label.y))
+            .collect();
+
+        assert_eq!(
+            super::rebase_case_chart_coordinates(&mut case),
+            Some((2, 3, 1))
+        );
+        let after_map = super::ChartCoordinateMap::for_case(&case);
+        assert!(after_map.identity);
+        assert!(
+            case.entities.iter().all(|entity| {
+                (0.0..=1.0).contains(&entity.x) && (0.0..=1.0).contains(&entity.y)
+            })
+        );
+        assert!(
+            case.labels
+                .iter()
+                .all(|label| { (0.0..=1.0).contains(&label.x) && (0.0..=1.0).contains(&label.y) })
+        );
+        let after_transform = super::ChartTransform::with_coordinates(rect, zoom, pan, after_map);
+        for (entity, expected) in case.entities.iter().zip(before_entities) {
+            assert!(
+                after_transform
+                    .normalized_to_screen(entity.x, entity.y)
+                    .distance(expected)
+                    < 0.01
+            );
+        }
+        for (label, expected) in case.labels.iter().zip(before_labels) {
+            assert!(
+                after_transform
+                    .normalized_to_screen(label.x, label.y)
+                    .distance(expected)
+                    < 0.01
+            );
+        }
+        assert_eq!(super::rebase_case_chart_coordinates(&mut case), None);
+
+        let mut stale_identity_bounds = case.clone();
+        stale_identity_bounds.entities[0].y = 1.25;
+        stale_identity_bounds.entities[2].y = 140.75;
+        stale_identity_bounds.chart_coordinate_bounds = Some([0.0, 0.0, 1.0, 1.0]);
+        assert_eq!(
+            super::rebase_case_chart_coordinates(&mut stale_identity_bounds),
+            Some((2, 3, 1))
+        );
+        assert!(
+            stale_identity_bounds.entities.iter().all(|entity| {
+                (0.0..=1.0).contains(&entity.x) && (0.0..=1.0).contains(&entity.y)
+            })
+        );
+    }
+
+    #[test]
+    fn headless_view_menu_offers_normalization_for_out_of_range_chart_coordinates() {
+        let mut case: CaseFile =
+            serde_json::from_str(include_str!("../fixtures/chart/correctness.case.json"))
+                .expect("checked-in chart fixture is valid");
+        case.entities[0].y = 4.5;
+        let mut app = App::automation_context(case, "/tmp/headless-normalize-chart.case.json");
+        let context = egui::Context::default();
+        let mut frame = eframe::Frame::_new_kittest();
+        let mut time = 0.0;
+        render_headless_app_frame(&context, &mut app, &mut frame, time, Vec::new());
+        click_headless_text(&context, &mut app, &mut frame, &mut time, "View…");
+        let menu = render_headless_app_frame(&context, &mut app, &mut frame, time, Vec::new());
+        let action = "Normalize chart coordinates · 1 out of range";
+        assert!(find_headless_text_point(&menu, action).is_some());
+        click_headless_visible_text(&context, &mut app, &mut frame, &mut time, &menu, action);
+        assert!(app.case.chart_coordinate_bounds.is_some());
+        assert!(
+            app.case.entities.iter().all(|entity| {
+                (0.0..=1.0).contains(&entity.x) && (0.0..=1.0).contains(&entity.y)
+            })
+        );
+        assert!(app.status.contains("SAVE CASE TO KEEP"));
     }
 
     #[test]
