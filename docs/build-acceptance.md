@@ -2,7 +2,7 @@
 
 ## Proximity-map encoding legend — 2026-11-28
 
-The sampled topology map now explains its node colors, proxy ring, direction arrow, and relationship-count line thickness with a compact wrapped legend. Headless production-panel checks pass on the synthetic UI and retained Clinton case (2,813 entities, 6,173 records, 48 sampled groups, 47 sampled contacts). The full Rust suite passes (94 passed, 0 failed, 3 ignored), and the locked offline release was installed with synchronized launcher and icon assets. Native screenshot/pointer review remains blocked because this session cannot access the X11 or Wayland display. Details: [PROXIMITY-MAP-LEGEND-01](evidence/vector-ui/PROXIMITY-MAP-LEGEND-01-20261128.md).
+The sampled topology map now explains its node colors and size, proxy ring, direction arrow, selected/hovered tie styling, and relationship-count line thickness with a compact wrapped legend. Headless production-panel checks pass on the synthetic UI and retained Clinton case (2,813 entities, 6,173 records, 48 sampled groups, 47 sampled contacts). The full Rust suite passes (94 passed, 0 failed, 3 ignored); the locked offline release built and was installed with synchronized launcher and icon assets (SHA-256 `b9049120…f0fa80cd`). Native screenshot/pointer review remains blocked because this session cannot access the X11 or Wayland display. Details: [PROXIMITY-MAP-LEGEND-01](evidence/vector-ui/PROXIMITY-MAP-LEGEND-01-20261128.md).
 
 ## Clinton primary corpus QA rerun — 2026-11-28
 

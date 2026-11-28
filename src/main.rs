@@ -27925,6 +27925,7 @@ impl eframe::App for App {
                             ui.horizontal_wrapped(|ui| {
                                 ui.colored_label(egui::Color32::from_rgb(183, 137, 63), "● Origin · hop 0");
                                 ui.colored_label(egui::Color32::from_rgb(58, 111, 130), "● Other hop groups");
+                                ui.label(egui::RichText::new("Larger node · more entities").small().color(muted));
                                 ui.colored_label(egui::Color32::from_rgb(235, 190, 94), "◎ Proxy in group");
                                 ui.colored_label(PROXIMITY_MAP_DIRECTION_COLOR, "→ Link direction");
                                 ui.colored_label(PROXIMITY_MAP_SELECTED_EDGE_COLOR, "○ Selected group or tie");
@@ -48740,6 +48741,11 @@ mod tests {
         assert!(metric_label_height > 0.0);
         let maximum_node_hit_radius = super::proximity_map_node_hit_radius(usize::MAX, true);
         assert!(
+            super::proximity_map_node_radius(3) > super::proximity_map_node_radius(1),
+            "group nodes should grow with their entity count"
+        );
+        assert_eq!(super::proximity_map_node_radius(usize::MAX), 23.0);
+        assert!(
             super::proximity_map_node_position(0, 1).y
                 - super::proximity_map_node_position(0, 0).y
                 - maximum_node_hit_radius * 2.0
@@ -48785,6 +48791,7 @@ mod tests {
             "Link direction",
             "Selected group or tie",
             "Hovered tie",
+            "Larger node · more entities",
             "Thicker link · more records",
         ] {
             assert!(
