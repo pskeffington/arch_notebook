@@ -97,6 +97,8 @@ def main() -> int:
             raise SystemExit("successful path did not keep output and backend log private")
         if "10 page records" not in success.stdout:
             raise SystemExit("successful path omitted output validation confirmation")
+        outputs[0].unlink()
+        logs[0].unlink()
 
         call_log.unlink()
         no_device = invoke(root, fake_runner, devices="Available devices:\\n  (none)", call_log=call_log)
