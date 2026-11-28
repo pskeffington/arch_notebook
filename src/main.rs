@@ -3285,6 +3285,8 @@ enum DataMode {
 
 #[derive(Clone, Copy)]
 enum QuickCommand {
+    OpenCase,
+    NewCase,
     Chart,
     FitChart,
     Timeline,
@@ -29782,6 +29784,12 @@ impl eframe::App for App {
         }
         if self.command_palette_open {
             let commands = [
+                (
+                    "Open case",
+                    "load existing case file recent saved",
+                    QuickCommand::OpenCase,
+                ),
+                ("New case", "create blank case file", QuickCommand::NewCase),
                 ("Chart", "canvas network", QuickCommand::Chart),
                 (
                     "Fit chart",
@@ -29841,7 +29849,7 @@ impl eframe::App for App {
                         let search = ui.add(
                             egui::TextEdit::singleline(&mut self.command_palette_query)
                                 .id(egui::Id::new("command_palette_search"))
-                                .hint_text("Search workspaces and actions")
+                                .hint_text("Search cases, workspaces, and actions")
                                 .desired_width(350.0),
                         );
                         if self.command_palette_query.is_empty() {
@@ -29873,6 +29881,8 @@ impl eframe::App for App {
                 self.command_palette_open = false;
                 if let Some(command) = selected_command {
                     match command {
+                        QuickCommand::OpenCase => self.request_case_action(PendingCaseAction::Open),
+                        QuickCommand::NewCase => self.request_case_action(PendingCaseAction::New),
                         QuickCommand::Chart => {
                             self.page = WorkspacePage::Chart;
                             self.show_timeline = false;
@@ -49027,11 +49037,42 @@ mod tests {
             "Fit chart",
             "fit all entities reset zoom frame chart viewport"
         ));
+        assert!(super::quick_command_matches(
+            "open",
+            "Open case",
+            "load existing case file recent saved"
+        ));
+        assert!(super::quick_command_matches(
+            "blank",
+            "New case",
+            "create blank case file"
+        ));
         assert!(super::quick_command_matches("", "Chart", "canvas"));
         assert!(!super::quick_command_matches(
             "nonexistent",
             "Automation",
             "sql jobs scheduled captures"
+        ));
+    }
+
+    #[test]
+    fn quick_case_actions_keep_the_unsaved_change_confirmation() {
+        let case: CaseFile =
+            serde_json::from_str(include_str!("../fixtures/chart/correctness.case.json"))
+                .expect("correctness fixture is a valid case");
+        let mut app = App::automation_context(case, "/tmp/quick-case-actions.case.json");
+        app.case.description = "Unsaved edit".into();
+
+        app.request_case_action(super::PendingCaseAction::Open);
+        assert!(matches!(
+            app.pending_case_action,
+            Some(super::PendingCaseAction::Open)
+        ));
+
+        app.request_case_action(super::PendingCaseAction::New);
+        assert!(matches!(
+            app.pending_case_action,
+            Some(super::PendingCaseAction::New)
         ));
     }
 

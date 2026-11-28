@@ -851,3 +851,19 @@ Historical remote-base revalidation on `codex/ui-00-chart-nested-conditions`, de
 ## Current Linux user installation — 2026-11-28
 
 The optimized Rust release from product source `5bb4593` is installed in the current user's application directories. The isolated installer acceptance passed; the installed executable, application-menu entry, Desktop shortcut, SVG/PNG graphics, SQL automation helper, and case MIME file were checked against their release/package sources. Native launch, rendering, pointer/keyboard interaction, live scheduling, public release, and IBM compatibility remain separate gates. See [LOCAL-INSTALL-12](evidence/deployment/LOCAL-INSTALL-12-linux.md).
+
+## Quick open case actions — 2026-11-28
+
+**Repository / branch / baseline:** `arch_notebook` / `codex/ui-00-chart-nested-conditions` / `0291865fd639de1656e94f86792902df978cb0e3`.
+
+Quick open exposes Open case and New case. Both reuse the existing unsaved-change confirmation before replacing current work.
+
+| Gate | Result | Evidence |
+| --- | --- | --- |
+| Command search and unsaved-change confirmation | PASS | `quick_command_search_matches_labels_and_keywords_case_insensitively` and `quick_case_actions_keep_the_unsaved_change_confirmation` passed. |
+| Full offline suite | PASS | 79 passed, 0 failed, 3 ignored. |
+| Formatting, offline check, debug build | PASS | Locked offline check/build and formatting exited 0. |
+| Release build of this source | BLOCKED | Initial release build session and a single-job retry both stopped returning output and required interruption (exit 130). No Cargo/rustc process remained and the existing on-disk binary timestamp/hash stayed unchanged, so it belongs to an earlier source and is not accepted for this revision. `/tmp` had 1.4–1.5 GiB free at 91–92% use. |
+| Native visual / pointer review | NOT RUN | Native display access unavailable in this session. |
+
+Details: [UI-QUICK-OPEN-CASE-ACTIONS-01](evidence/vector-ui/UI-QUICK-OPEN-CASE-ACTIONS-01-20261128.md).
