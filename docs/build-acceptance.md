@@ -910,6 +910,7 @@ The Linux per-case **Check schedule** output now reports systemd's last timer di
 | --- | --- | --- |
 | Shell/Python syntax and diff check | PASS | `bash -n scripts/install-linux-automation.sh`, `python3 -m py_compile scripts/test-linux-sql-scheduler-acceptance.py`, and `git diff --check` exited 0. |
 | Linux schedule and SQL harness | PASS, stub-scoped | Five cadences, calendar parsing, query preflight, generated service invocation, SQL snapshot, CSV export, failure handling, case isolation, and last/next timer-status output passed. The synthetic `systemctl` stub does not establish live timer delivery. |
+| Current-user helper synchronization | PASS | Installed automation helper hash matches the repository script; prior helper retained for rollback. See [SQL-SCHED-10](evidence/sql-automation/SQL-SCHED-10-timer-status-linux.md). |
 | Live user-manager dispatch | BLOCKED | User-systemd bus access is denied in this sandbox; no timer was installed or fired. |
 | IBM compatibility | NOT TESTED | No IBM app or schema was involved. |
 
