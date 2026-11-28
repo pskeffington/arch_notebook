@@ -860,9 +860,9 @@ Quick open exposes Open case and New case. Both reuse the existing unsaved-chang
 
 | Gate | Result | Evidence |
 | --- | --- | --- |
-| Command search and unsaved-change confirmation | PASS | `quick_command_search_matches_labels_and_keywords_case_insensitively` and `quick_case_actions_keep_the_unsaved_change_confirmation` passed. |
-| Full offline suite | PASS | 79 passed, 0 failed, 3 ignored. |
-| Formatting, offline check, debug build | PASS | Locked offline check/build and formatting exited 0. |
+| Command search and unsaved-change confirmation | PASS | `quick_command_search_matches_labels_and_keywords_case_insensitively`, `quick_case_actions_keep_the_unsaved_change_confirmation`, and `quick_open_case_commands_reach_unsaved_change_confirmation` passed; the last test clicks both commands in the rendered Quick open palette. |
+| Full offline suite | PASS | 80 passed, 0 failed, 3 ignored. |
+| Formatting, offline check, debug build | PASS | Locked offline check and formatting exited 0; the earlier debug build passed before its generated profile was cleared to free `/tmp` space. |
 | Release build of this source | BLOCKED | Three release attempts did not produce a result: initial, single-job, and single-job after removing 2.3 GiB of generated dev-profile output. Later sessions stopped returning output and required interruption (exit 130); no Cargo/rustc process remained. The existing binary timestamp/hash stayed unchanged, so it belongs to an earlier source and is not accepted for this revision. The final retry had 3.6 GiB free at 78% `/tmp` use. |
 | Native visual / pointer review | NOT RUN | Native display access unavailable in this session. |
 
