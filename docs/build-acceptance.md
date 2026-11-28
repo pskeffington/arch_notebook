@@ -803,6 +803,18 @@ The installed release was exercised through the app's real CLI geometry and poin
 | X11/Wayland native interaction, painting, FPS, input response | BLOCKED / NOT MEASURED | X11 cannot open `:0`; Wayland connection denied by the current session. CPU-only CLI timing does not close this gate. |
 | Cross-host performance target or historical before/after claim | NOT CLAIMED | Host-specific sample; prior-path proxy is not a historical binary baseline. |
 
+### Clinton corpus topology regression recheck — 2026-11-28
+
+The current source passes the full Rust suite and the normally ignored Clinton production-topology test. On the retained case (2,813 entities, 6,173 relationship records), deterministic sampled-group ordering reduces proper crossings from 23 to 3. The test is read-only and the case digest is unchanged.
+
+| Gate | Result | Evidence |
+| --- | --- | --- |
+| Full locked offline Rust suite | PASS | 110 passed, 0 failed, 3 ignored. |
+| Clinton production-topology regression | PASS | Explicit ignored-test rerun: 1 passed; sampled crossings 23 → 3; case hash unchanged. |
+| Native chart rendering and IBM application parity | NOT TESTED | Test checks topology data and ordering; it does not render or interact with a native/IBM application. |
+
+Exact command and hashes: [current-source Clinton topology evidence](evidence/vector-ui/CLINTON-TOPOLOGY-CURRENT-SOURCE-20261128.md).
+
 ### UI-01 geometry and coincident-route follow-up
 
 | Check | Result | Evidence |
