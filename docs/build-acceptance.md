@@ -4,7 +4,7 @@
 
 **Repository / branch / baseline:** `/home/sysadmin/github/arch_notebook` / `codex/ui-00-chart-baseline` / `8af57a12649dadd5478d08289caf2cdf6de2060b`.
 
-The sampled contact map now omits interaction routes whose sampled bounds are outside the scroll area's clip rectangle. Bounds include a 10-point margin for stroke, arrow, and picking reach. Routes crossing the viewport remain available even when both endpoints are outside. Route geometry is no longer stored in a frame-sized vector; on a click, the renderer tracks only the nearest visible route candidate, preserving node-click priority. A headless regression checks crossing, offscreen, empty, and near-edge routes.
+The sampled contact map now culls against each quadratic route's convex-hull bounds before sampling, using the scroll area's clip rectangle and a 10-point margin for stroke, arrow, and picking reach. Routes crossing the viewport remain available even when both endpoints are outside. Route geometry is no longer stored in a frame-sized vector; on a click, the renderer tracks only the nearest visible route candidate, preserving node-click priority. A headless regression checks crossing, offscreen, non-finite, and near-edge routes.
 
 | Gate | Result | Evidence |
 | --- | --- | --- |
@@ -13,7 +13,7 @@ The sampled contact map now omits interaction routes whose sampled bounds are ou
 | Locked offline check / debug build / formatting | PASS | All exited 0; `git diff --check` also passed. |
 | Clinton real-corpus production UI | PASS, headless | 2,813 entities / 6,173 links; 48 groups / 47 contact pairs / 1,315 represented records. |
 | Matched topology frame shape count | PASS, observed | With the topology panel, clipped shapes decreased from 88,792 on the immediately preceding product renderer (`89ddc99`) to 88,204; the without-topology control remained 87,855. Frame-time samples were noisy; no latency or GPU speedup is claimed. |
-| Topology source review | PASS | Reviewer confirmed clip use, crossing preservation, nearest-visible-route picking, and node-click priority. Route generation still occurs before culling. |
+| Topology source review | PASS | Reviewer confirmed the quadratic control-hull bound, crossing preservation, nearest-visible-route picking, and node-click priority. Culling happens before route sampling. |
 | Native visual / GPU review | NOT RUN | Headless evidence only. |
 | Exact-head CI | PENDING | Workflow does not run on this non-main branch push; no PR was opened. |
 

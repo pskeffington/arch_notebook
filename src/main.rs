@@ -1636,15 +1636,7 @@ fn proximity_map_edge_route(
     second: egui::Pos2,
     interaction_index: usize,
 ) -> [egui::Pos2; PROXIMITY_MAP_ROUTE_SEGMENTS + 1] {
-    let delta = second - first;
-    let length = delta.length();
-    let normal = if length > f32::EPSILON {
-        egui::vec2(-delta.y / length, delta.x / length)
-    } else {
-        egui::Vec2::ZERO
-    };
-    let lane = (interaction_index % 9) as f32 - 4.0;
-    let control = first + delta * 0.5 + normal * lane * 5.0;
+    let control = proximity_map_edge_control_point(first, second, interaction_index);
     std::array::from_fn(|step| {
         let t = step as f32 / PROXIMITY_MAP_ROUTE_SEGMENTS as f32;
         let inverse = 1.0 - t;
@@ -1655,6 +1647,22 @@ fn proximity_map_edge_route(
     })
 }
 
+fn proximity_map_edge_control_point(
+    first: egui::Pos2,
+    second: egui::Pos2,
+    interaction_index: usize,
+) -> egui::Pos2 {
+    let delta = second - first;
+    let length = delta.length();
+    let normal = if length > f32::EPSILON {
+        egui::vec2(-delta.y / length, delta.x / length)
+    } else {
+        egui::Vec2::ZERO
+    };
+    let lane = (interaction_index % 9) as f32 - 4.0;
+    first + delta * 0.5 + normal * lane * 5.0
+}
+
 fn proximity_map_route_length(route: &[egui::Pos2]) -> f32 {
     route
         .windows(2)
@@ -1662,24 +1670,32 @@ fn proximity_map_route_length(route: &[egui::Pos2]) -> f32 {
         .sum()
 }
 
-fn proximity_map_route_intersects_viewport(route: &[egui::Pos2], viewport: egui::Rect) -> bool {
-    let Some(first) = route.first().copied() else {
-        return true;
-    };
-    if !first.x.is_finite() || !first.y.is_finite() {
+fn proximity_map_edge_may_intersect_viewport(
+    first: egui::Pos2,
+    second: egui::Pos2,
+    interaction_index: usize,
+    viewport: egui::Rect,
+) -> bool {
+    let control = proximity_map_edge_control_point(first, second, interaction_index);
+    if !first.x.is_finite()
+        || !first.y.is_finite()
+        || !second.x.is_finite()
+        || !second.y.is_finite()
+        || !control.x.is_finite()
+        || !control.y.is_finite()
+    {
         return true;
     }
-    let mut minimum = first;
-    let mut maximum = first;
-    for point in route.iter().copied().skip(1) {
-        if !point.x.is_finite() || !point.y.is_finite() {
-            return true;
-        }
-        minimum.x = minimum.x.min(point.x);
-        minimum.y = minimum.y.min(point.y);
-        maximum.x = maximum.x.max(point.x);
-        maximum.y = maximum.y.max(point.y);
-    }
+    // A quadratic Bézier stays within the convex hull of its endpoints and
+    // control point, so this coarse test is conservative before route sampling.
+    let minimum = egui::pos2(
+        first.x.min(second.x).min(control.x),
+        first.y.min(second.y).min(control.y),
+    );
+    let maximum = egui::pos2(
+        first.x.max(second.x).max(control.x),
+        first.y.max(second.y).max(control.y),
+    );
     // Keep route strokes, arrows and the 8-point picking tolerance available
     // when their centerline sits just beyond the scroll viewport edge.
     egui::Rect::from_min_max(minimum, maximum)
@@ -26451,17 +26467,19 @@ impl eframe::App for App {
                                         };
                                         let is_selected = self.selected_proximity_interaction
                                             == Some((interaction.first_group, interaction.second_group));
+                                        if !proximity_map_edge_may_intersect_viewport(
+                                            first,
+                                            second,
+                                            *interaction_index,
+                                            route_viewport,
+                                        ) {
+                                            continue;
+                                        }
                                         let route = proximity_map_edge_route(
                                             first,
                                             second,
                                             *interaction_index,
                                         );
-                                        if !proximity_map_route_intersects_viewport(
-                                            &route,
-                                            route_viewport,
-                                        ) {
-                                            continue;
-                                        }
                                         let edge_width = (1.0_f32
                                             + (interaction.relationship_record_count as f32).log2())
                                         .clamp(1.0, 4.0);
@@ -45127,24 +45145,41 @@ mod tests {
     #[test]
     fn proximity_map_route_culling_keeps_crossings_and_pickable_edges() {
         let viewport = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(100.0, 80.0));
-        assert!(super::proximity_map_route_intersects_viewport(
-            &[egui::pos2(-200.0, 40.0), egui::pos2(200.0, 40.0)],
+        assert!(super::proximity_map_edge_may_intersect_viewport(
+            egui::pos2(-200.0, 40.0),
+            egui::pos2(200.0, 40.0),
+            4,
             viewport,
         ));
         assert!(
-            super::proximity_map_route_intersects_viewport(
-                &[egui::pos2(-8.0, 20.0), egui::pos2(-8.0, 60.0)],
+            super::proximity_map_edge_may_intersect_viewport(
+                egui::pos2(-5.0, 20.0),
+                egui::pos2(-5.0, 60.0),
+                0,
+                viewport,
+            ),
+            "a curved lane may enter view even when both endpoints are outside"
+        );
+        assert!(
+            super::proximity_map_edge_may_intersect_viewport(
+                egui::pos2(-8.0, 20.0),
+                egui::pos2(-8.0, 60.0),
+                4,
                 viewport,
             ),
             "route within the pointer-picking margin should remain interactive"
         );
-        assert!(!super::proximity_map_route_intersects_viewport(
-            &[egui::pos2(-100.0, -100.0), egui::pos2(-50.0, -50.0)],
+        assert!(!super::proximity_map_edge_may_intersect_viewport(
+            egui::pos2(-100.0, -100.0),
+            egui::pos2(-50.0, -50.0),
+            4,
             viewport,
         ));
-        assert!(super::proximity_map_route_intersects_viewport(
-            &[],
-            viewport
+        assert!(super::proximity_map_edge_may_intersect_viewport(
+            egui::pos2(f32::NAN, 0.0),
+            egui::pos2(50.0, 40.0),
+            4,
+            viewport,
         ));
     }
 
