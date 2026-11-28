@@ -10,7 +10,7 @@
 
 ## Result
 
-The launcher uses the explicitly selected `Vulkan0` device with all model layers requested for GPU offload. It checks device enumeration before inference and exits without starting CPU inference when the GPU is absent. A completed run is accepted only if llama.cpp reports nonzero GPU-layer offload and the output contains the exact ten sampled page IDs with bounded fields and quote strings traceable to the private page text. A passing structure/quote check is still only a bounded extraction-quality demonstration and requires human review.
+The launcher automatically selects the first enumerated GPU backend (or accepts an explicit `LLAMA_GPU_DEVICE` override), requests all model layers for offload, and exits without starting CPU inference when no GPU backend is exposed. A completed run is accepted only if llama.cpp reports nonzero GPU-layer offload and the output contains the exact ten sampled page IDs with bounded fields and quote strings traceable to the private page text. A passing structure/quote check is still only a bounded extraction-quality demonstration and requires human review.
 
 ## Acceptance
 
@@ -20,7 +20,7 @@ The launcher uses the explicitly selected `Vulkan0` device with all model layers
 | Desktop entry validity | PASS | `desktop-file-validate packaging/arch/arch-notebook-qwen-gpu-demo.desktop` exited 0. |
 | Launcher syntax | PASS | `bash -n` exited 0 for both shell scripts; Python AST parsing and SVG XML parsing passed. |
 | Per-user deployment | PASS | Installer exited 0. Installed icon and launcher hashes match repository assets; application-menu and Desktop entries are identical and validated. |
-| Synthetic launcher acceptance | PASS | `python3 scripts/test-qwen-gpu-demo-launcher.py` exercised explicit device/layer flags, private output permissions, ten-page structure and quote validation, missing-device fail-closed behavior, missing-offload rejection, and untraceable-quote rejection. It uses synthetic pages and a fake runner; it does not invoke Qwen or a GPU. |
+| Synthetic launcher acceptance | PASS | `python3 scripts/test-qwen-gpu-demo-launcher.py` exercised automatic backend selection, explicit device override, layer flags, private output permissions, ten-page structure and quote validation, missing-device fail-closed behavior, missing-offload rejection, and untraceable-quote rejection. It uses synthetic pages and a fake runner; it does not invoke Qwen or a GPU. |
 | GPU-only guard on this host | PASS, guard behavior | Running the installed launcher printed `Available devices: (none)` and exited 1 with `no CPU fallback was started`; inference did not start. |
 | Qwen GPU inference | BLOCKED | The current environment exposes no llama.cpp GPU device. No output is accepted as Qwen analysis evidence. |
 
@@ -43,7 +43,7 @@ desktop-file-validate packaging/arch/arch-notebook-qwen-gpu-demo.desktop
 /home/sysadmin/.local/bin/arch-notebook-clinton-qwen-gpu-demo
 ```
 
-On this host, the final command is expected to exit 1 until `Vulkan0` is exposed. Set `LLAMA_GPU_DEVICE` to an enumerated llama.cpp GPU device on the GPU-enabled host. The runner will not use a CPU fallback.
+On this host, the final command is expected to exit 1 until llama.cpp exposes a GPU backend. The helper selects the first recognized GPU backend automatically; set `LLAMA_GPU_DEVICE` to an exact enumerated backend ID to select another one. It will not use a CPU fallback.
 
 ## Changed paths
 
@@ -57,4 +57,4 @@ On this host, the final command is expected to exit 1 until `Vulkan0` is exposed
 - `docs/build-acceptance.md`
 - this evidence record
 
-**Next action:** Run the installed launcher on a host where `llama-completion --list-devices` exposes the AMD Vulkan device, then retain aggregate validation results only after GPU offload and quote-trace checks pass.
+**Next action:** Run the installed launcher where `llama-completion --list-devices` exposes the AMD Vulkan backend, then retain aggregate validation results only after GPU offload and quote-trace checks pass.

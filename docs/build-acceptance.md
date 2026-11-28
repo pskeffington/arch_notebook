@@ -1054,11 +1054,17 @@ Use the real review-required Clinton candidate case as the primary local QA batc
 
 ### Clinton Qwen GPU demo launcher — 2026-11-28
 
-A separate GPU-demo icon and desktop launcher are installed in the current user's application menu and Desktop. The launcher uses an absolute executable path, explicitly requests the enumerated Vulkan GPU and all model layers, validates nonzero GPU offload, and checks the ten-page result structure and quote traceability against private local sample pages. The CI synthetic acceptance harness passes explicit offload, private output, structure/quote validation, missing-device fail-closed, missing-offload rejection, and untraceable-quote rejection. Its device guard was also exercised on this host: llama.cpp reported no available devices, so inference was not started and the launcher reported that there is no CPU fallback. **GPU inference remains BLOCKED; no Clinton content analysis result is established.** See [CLINTON-QWEN-GPU-DEMO-LAUNCHER-01](evidence/deployment/CLINTON-QWEN-GPU-DEMO-LAUNCHER-01-linux.md).
+A separate GPU-demo icon and desktop launcher are installed in the current user's application menu and Desktop. The launcher automatically selects an enumerated GPU backend (or accepts an explicit `LLAMA_GPU_DEVICE` override), requests all model layers, validates nonzero GPU offload, and checks the ten-page result structure and quote traceability against private local sample pages. The CI synthetic acceptance harness covers automatic selection, explicit override, private output, structure/quote validation, missing-device fail-closed, missing-offload rejection, and untraceable-quote rejection. Its device guard was also exercised on this host: llama.cpp reported no available devices, so inference was not started and the launcher reported that there is no CPU fallback. **GPU inference remains BLOCKED; no Clinton content analysis result is established.** See [CLINTON-QWEN-GPU-DEMO-LAUNCHER-01](evidence/deployment/CLINTON-QWEN-GPU-DEMO-LAUNCHER-01-linux.md).
+
+The Automation status indicator now distinguishes scheduler command success from actual dispatch readiness. A green status requires Linux `active and enabled` or macOS `loaded`; an absent timer, inactive timer, or unavailable user manager is shown as a warning rather than a pass. Focused regressions cover both healthy and unavailable states.
 
 ### Synchronized-head offline recheck — 2026-11-28
 
 The Rust workspace suite on product source `c653f31` passed: 110 tests passed, 0 failed, and 3 remained ignored. The run used `/tmp/arch-notebook-target`; a first attempt with Cargo's default repo-local target failed from a full `/tmp` filesystem and its partial generated target was removed. GPU inference and live systemd dispatch remain blocked by sandbox device/bus access; remote Actions status is unverified. Exact commands and outcomes: [SYNCED-HEAD-RECHECK-01](evidence/deployment/SYNCED-HEAD-RECHECK-01-linux-20261128.md).
+
+### SQL scheduler readiness and GPU helper follow-up — 2026-11-28
+
+Automation schedule status now shows a pass only for an active and enabled Linux timer or a loaded macOS agent; absent or unobservable schedules display a warning. The GPU demo helper selects an enumerated accelerator automatically, supports an explicit backend override, and still requires backend offload evidence. Full Rust tests (110 passed, 0 failed, 3 ignored), locked offline check, formatting, and synthetic launcher acceptance pass. Actual GPU inference and live timer dispatch remain blocked by missing sandbox device nodes and user-bus access. See [SQL-SCHEDULE-READINESS-AND-GPU-HELPER-02](evidence/deployment/SQL-SCHEDULE-READINESS-AND-GPU-HELPER-02-linux-20261128.md).
 
 ## Clinton PDF Qwen GPU demonstration — 2026-11-28
 

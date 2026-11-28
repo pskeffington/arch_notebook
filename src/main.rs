@@ -513,6 +513,17 @@ fn schedule_dispatch_summary_from_status(message: &str) -> Option<(String, Strin
     ))
 }
 
+fn schedule_check_result(message: &str) -> AutomationScheduleResult {
+    let Some((state, _, _)) = schedule_dispatch_summary_from_status(message) else {
+        return AutomationScheduleResult::Warning;
+    };
+    if matches!(state.as_str(), "active and enabled" | "loaded") {
+        AutomationScheduleResult::Pass
+    } else {
+        AutomationScheduleResult::Warning
+    }
+}
+
 fn schedule_chart_export_dir_from_status(message: &str) -> Option<String> {
     message.lines().find_map(|line| {
         let value = line.strip_prefix("Chart CSV export directory: ")?;
@@ -3110,13 +3121,20 @@ struct App {
     automation_schedule_month_day: u8,
     automation_schedule_require_usable_connections: bool,
     automation_chart_export_dir: String,
-    automation_schedule_message: Option<(String, bool, String)>,
+    automation_schedule_message: Option<(String, AutomationScheduleResult, String)>,
     automation_schedule_target_path: Option<String>,
     automation_schedule_progress: Option<Arc<Mutex<String>>>,
     automation_schedule_worker: Option<Receiver<(String, Result<String, String>)>>,
     automation_preflight_cancel: Option<Arc<AtomicBool>>,
     automation_cancel: Arc<AtomicBool>,
     close_after_automation: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AutomationScheduleResult {
+    Pass,
+    Warning,
+    Failure,
 }
 
 enum AutomationWorkerResult {
@@ -20576,15 +20594,21 @@ impl eframe::App for App {
                     self.automation_schedule_progress = None;
                     self.automation_progress = None;
                     self.automation_preflight_cancel = None;
-                    let succeeded = if self.status.starts_with("PREFLIGHTING")
+                    let result = if self.status.starts_with("PREFLIGHTING")
                         || self.status.starts_with("CANCELLING SQL PREFLIGHT")
                     {
-                        message.starts_with("SQL PREFLIGHT PASSED\n")
+                        if message.starts_with("SQL PREFLIGHT PASSED\n") {
+                            AutomationScheduleResult::Pass
+                        } else {
+                            AutomationScheduleResult::Warning
+                        }
+                    } else if self.status.starts_with("CHECKING") {
+                        schedule_check_result(&message)
                     } else {
-                        true
+                        AutomationScheduleResult::Pass
                     };
                     self.status = message.clone();
-                    self.automation_schedule_message = Some((case_path, succeeded, message));
+                    self.automation_schedule_message = Some((case_path, result, message));
                 }
                 Ok((case_path, Err(error))) => {
                     let verb = if self.status.starts_with("REMOVING") {
@@ -20605,7 +20629,8 @@ impl eframe::App for App {
                     self.automation_preflight_cancel = None;
                     let message = format!("{verb} · {error}");
                     self.status = message.clone();
-                    self.automation_schedule_message = Some((case_path, false, message));
+                    self.automation_schedule_message =
+                        Some((case_path, AutomationScheduleResult::Failure, message));
                 }
                 Err(mpsc::TryRecvError::Disconnected) => {
                     let verb = if self.status.starts_with("REMOVING") {
@@ -20629,7 +20654,8 @@ impl eframe::App for App {
                         .unwrap_or_else(|| self.case_path.clone());
                     let message = format!("{verb} · background worker stopped unexpectedly");
                     self.status = message.clone();
-                    self.automation_schedule_message = Some((case_path, false, message));
+                    self.automation_schedule_message =
+                        Some((case_path, AutomationScheduleResult::Failure, message));
                 }
                 Err(mpsc::TryRecvError::Empty) => {
                     if self.status.starts_with("INSTALLING")
@@ -23331,14 +23357,20 @@ impl eframe::App for App {
                                     });
                                 }
                                 if self.automation_schedule_worker.is_none()
-                                    && let Some((case_path, succeeded, message)) =
+                                    && let Some((case_path, result, message)) =
                                         self.automation_schedule_message.as_ref()
                                     && case_path == &self.case_path
                                 {
-                                    let color = if *succeeded {
-                                        egui::Color32::from_rgb(102, 190, 146)
-                                    } else {
-                                        egui::Color32::from_rgb(232, 116, 97)
+                                    let color = match result {
+                                        AutomationScheduleResult::Pass => {
+                                            egui::Color32::from_rgb(102, 190, 146)
+                                        }
+                                        AutomationScheduleResult::Warning => {
+                                            egui::Color32::from_rgb(236, 174, 83)
+                                        }
+                                        AutomationScheduleResult::Failure => {
+                                            egui::Color32::from_rgb(232, 116, 97)
+                                        }
                                     };
                                     ui.label(
                                         egui::RichText::new(format!(
@@ -48218,6 +48250,36 @@ mod tests {
 
     #[test]
     fn schedule_status_summary_distinguishes_dispatch_times_and_unavailable_values() {
+        assert_eq!(
+            super::schedule_check_result(
+                "Arch Notebook SQL schedule for /tmp/case.json: hourly; active and enabled.\n"
+            ),
+            super::AutomationScheduleResult::Pass
+        );
+        assert_eq!(
+            super::schedule_check_result(
+                "Arch Notebook SQL schedule for /tmp/case.json: hourly; loaded.\n"
+            ),
+            super::AutomationScheduleResult::Pass
+        );
+        assert_eq!(
+            super::schedule_check_result(
+                "Arch Notebook SQL schedule for /tmp/case.json: hourly; configured; systemd user manager status unavailable.\n"
+            ),
+            super::AutomationScheduleResult::Warning
+        );
+        assert_eq!(
+            super::schedule_check_result(
+                "Arch Notebook SQL schedule for /tmp/case.json: hourly; configured but not active or enabled.\n"
+            ),
+            super::AutomationScheduleResult::Warning
+        );
+        assert_eq!(
+            super::schedule_check_result(
+                "No Arch Notebook SQL automation schedule is installed for this user.\n"
+            ),
+            super::AutomationScheduleResult::Warning
+        );
         assert_eq!(
             super::schedule_dispatch_summary_from_status(
                 "Last timer dispatch: Sat 2026-11-28 02:00:00 EST\nNext timer dispatch: Sat 2026-11-28 04:00:00 EST\nArch Notebook SQL schedule for /tmp/case.json: hourly; active and enabled.\n"

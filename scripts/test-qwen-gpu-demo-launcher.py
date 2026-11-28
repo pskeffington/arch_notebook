@@ -30,7 +30,7 @@ with open(os.environ["FAKE_LLAMA_CALL_LOG"], "a", encoding="utf-8") as log:
 if "--list-devices" in args:
     print(os.environ.get("FAKE_LLAMA_DEVICES", "Available devices:\\n  Vulkan0 (fixture GPU)"))
     raise SystemExit(0)
-required = {"--device": "Vulkan0", "--gpu-layers": "all", "--n-predict": "900"}
+required = {"--device": os.environ["FAKE_LLAMA_EXPECTED_DEVICE"], "--gpu-layers": "all", "--n-predict": "900"}
 for name, value in required.items():
     if args[args.index(name) + 1] != value:
         raise SystemExit(f"missing explicit GPU demo argument: {name} {value}")
@@ -53,18 +53,23 @@ if os.environ.get("FAKE_LLAMA_OFFLOAD", "1") == "1":
 
 
 def invoke(root: Path, runner: Path, *, devices: str, call_log: Path,
+           device: str | None = None, expected_device: str = "Vulkan0",
            offload: bool = True, bad_quote: bool = False) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     env.update({
         "CLINTON_QWEN_DEMO_DIR": str(root),
         "CLINTON_QWEN_MODEL": str(root / "fixture-model.gguf"),
         "LLAMA_COMPLETION": str(runner),
-        "LLAMA_GPU_DEVICE": "Vulkan0",
         "FAKE_LLAMA_DEVICES": devices,
+        "FAKE_LLAMA_EXPECTED_DEVICE": expected_device,
         "FAKE_LLAMA_CALL_LOG": str(call_log),
         "FAKE_LLAMA_OFFLOAD": "1" if offload else "0",
         "FAKE_LLAMA_BAD_QUOTE": "1" if bad_quote else "0",
     })
+    if device is not None:
+        env["LLAMA_GPU_DEVICE"] = device
+    else:
+        env.pop("LLAMA_GPU_DEVICE", None)
     return subprocess.run(
         [str(RUNNER)], cwd=ROOT, env=env, capture_output=True, text=True, check=False
     )
@@ -83,12 +88,12 @@ def main() -> int:
         write_fake_runner(fake_runner)
 
         call_log = root / "gpu-calls.log"
-        success = invoke(root, fake_runner, devices="Available devices:\\n  Vulkan0 (fixture GPU)", call_log=call_log)
+        success = invoke(root, fake_runner, devices="Available devices:\n  Vulkan0: fixture GPU", call_log=call_log)
         if success.returncode != 0:
             raise SystemExit(f"synthetic GPU path failed: {success.stdout}{success.stderr}")
         invocation = call_log.read_text(encoding="utf-8")
         if "--device Vulkan0" not in invocation or "--gpu-layers all" not in invocation:
-            raise SystemExit("launcher did not request explicit Vulkan GPU layer offload")
+            raise SystemExit("launcher did not auto-select the enumerated Vulkan device and request GPU layers")
         outputs = list(root.glob("gpu-qwen-output-*.json"))
         logs = list(root.glob("gpu-qwen-output-*.log"))
         if len(outputs) != 1 or len(logs) != 1:
@@ -101,7 +106,18 @@ def main() -> int:
         logs[0].unlink()
 
         call_log.unlink()
-        no_device = invoke(root, fake_runner, devices="Available devices:\\n  (none)", call_log=call_log)
+        override = invoke(
+            root, fake_runner,
+            devices="Available devices:\n  Vulkan0: fixture Vulkan GPU\n  CUDA0: fixture CUDA GPU",
+            call_log=call_log, device="CUDA0", expected_device="CUDA0",
+        )
+        if override.returncode != 0 or "--device CUDA0" not in call_log.read_text(encoding="utf-8"):
+            raise SystemExit(f"explicit device override failed: {override.stdout}{override.stderr}")
+        list(root.glob("gpu-qwen-output-*.json"))[0].unlink()
+        list(root.glob("gpu-qwen-output-*.log"))[0].unlink()
+
+        call_log.unlink()
+        no_device = invoke(root, fake_runner, devices="Available devices:\n  (none)", call_log=call_log)
         calls = call_log.read_text(encoding="utf-8").splitlines()
         if no_device.returncode == 0 or "no CPU fallback" not in no_device.stderr:
             raise SystemExit("no-device path did not fail closed with a clear message")
@@ -109,20 +125,20 @@ def main() -> int:
             raise SystemExit("inference runner was invoked despite missing GPU device")
 
         call_log.unlink()
-        no_offload = invoke(root, fake_runner, devices="Available devices:\\n  Vulkan0 (fixture GPU)", call_log=call_log, offload=False)
+        no_offload = invoke(root, fake_runner, devices="Available devices:\n  Vulkan0: fixture GPU", call_log=call_log, offload=False)
         if no_offload.returncode == 0 or "output discarded" not in no_offload.stderr:
             raise SystemExit("backend without GPU offload evidence was incorrectly accepted")
         if list(root.glob("gpu-qwen-output-*.json")):
             raise SystemExit("output without backend offload evidence was retained")
 
         call_log.unlink()
-        bad_quote = invoke(root, fake_runner, devices="Available devices:\\n  Vulkan0 (fixture GPU)", call_log=call_log, bad_quote=True)
+        bad_quote = invoke(root, fake_runner, devices="Available devices:\n  Vulkan0: fixture GPU", call_log=call_log, bad_quote=True)
         if bad_quote.returncode == 0 or "quote validation failed" not in bad_quote.stderr:
             raise SystemExit("untraceable quote output was incorrectly accepted")
         if list(root.glob("gpu-qwen-output-*.json")):
             raise SystemExit("quote-invalid output was retained")
 
-    print("PASS: explicit GPU offload, private outputs, ten-page validation, fail-closed device/offload/quote checks")
+    print("PASS: automatic GPU selection, explicit device override, offload, private output, ten-page validation, fail-closed device/offload/quote checks")
     return 0
 
 
