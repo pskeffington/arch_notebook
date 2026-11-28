@@ -34,6 +34,9 @@ required = {"--device": os.environ["FAKE_LLAMA_EXPECTED_DEVICE"], "--gpu-layers"
 for name, value in required.items():
     if args[args.index(name) + 1] != value:
         raise SystemExit(f"missing explicit GPU demo argument: {name} {value}")
+if "--log-file" not in args:
+    raise SystemExit("launcher did not route llama.cpp diagnostics to an explicit log file")
+backend_log = Path(args[args.index("--log-file") + 1])
 root = Path(os.environ["CLINTON_QWEN_DEMO_DIR"])
 pages = [2, 828, 1499, 2266, 3179, 3936, 4716, 5491, 6308, 7121]
 records = []
@@ -46,7 +49,7 @@ for page in pages:
                     "body_text_present": True, "quote_check": quote, "qa_note": None})
 print(json.dumps({"records": records, "limitation": "synthetic acceptance output"}))
 if os.environ.get("FAKE_LLAMA_OFFLOAD", "1") == "1":
-    print("offloaded 8/8 layers to GPU", file=sys.stderr)
+    backend_log.write_text("offloaded 8/8 layers to GPU\\n", encoding="utf-8")
 '''
     path.write_text(source, encoding="utf-8")
     path.chmod(0o755)
@@ -95,15 +98,17 @@ def main() -> int:
         if "--device Vulkan0" not in invocation or "--gpu-layers all" not in invocation:
             raise SystemExit("launcher did not auto-select the enumerated Vulkan device and request GPU layers")
         outputs = list(root.glob("gpu-qwen-output-*.json"))
-        logs = list(root.glob("gpu-qwen-output-*.log"))
-        if len(outputs) != 1 or len(logs) != 1:
+        logs = [path for path in root.glob("gpu-qwen-output-*.log") if not path.name.endswith(".stderr.log")]
+        stderr_logs = list(root.glob("gpu-qwen-output-*.stderr.log"))
+        if len(outputs) != 1 or len(logs) != 1 or len(stderr_logs) != 1:
             raise SystemExit("successful path did not create exactly one private result and backend log")
-        if stat.S_IMODE(outputs[0].stat().st_mode) != 0o600 or stat.S_IMODE(logs[0].stat().st_mode) != 0o600:
+        if any(stat.S_IMODE(path.stat().st_mode) != 0o600 for path in outputs + logs + stderr_logs):
             raise SystemExit("successful path did not keep output and backend log private")
         if "10 page records" not in success.stdout:
             raise SystemExit("successful path omitted output validation confirmation")
         outputs[0].unlink()
         logs[0].unlink()
+        stderr_logs[0].unlink()
 
         call_log.unlink()
         override = invoke(
@@ -114,7 +119,8 @@ def main() -> int:
         if override.returncode != 0 or "--device CUDA0" not in call_log.read_text(encoding="utf-8"):
             raise SystemExit(f"explicit device override failed: {override.stdout}{override.stderr}")
         list(root.glob("gpu-qwen-output-*.json"))[0].unlink()
-        list(root.glob("gpu-qwen-output-*.log"))[0].unlink()
+        [path for path in root.glob("gpu-qwen-output-*.log") if not path.name.endswith(".stderr.log")][0].unlink()
+        list(root.glob("gpu-qwen-output-*.stderr.log"))[0].unlink()
 
         call_log.unlink()
         no_device = invoke(root, fake_runner, devices="Available devices:\n  (none)", call_log=call_log)
@@ -126,17 +132,23 @@ def main() -> int:
 
         call_log.unlink()
         no_offload = invoke(root, fake_runner, devices="Available devices:\n  Vulkan0: fixture GPU", call_log=call_log, offload=False)
-        if no_offload.returncode == 0 or "output discarded" not in no_offload.stderr:
+        if no_offload.returncode == 0 or "unverified private output retained" not in no_offload.stderr:
             raise SystemExit("backend without GPU offload evidence was incorrectly accepted")
-        if list(root.glob("gpu-qwen-output-*.json")):
-            raise SystemExit("output without backend offload evidence was retained")
+        if any(not path.name.endswith(".unverified.json") for path in root.glob("gpu-qwen-output-*.json")):
+            raise SystemExit("unverified output was left with the accepted-result filename")
+        if len(list(root.glob("gpu-qwen-output-*.unverified.json"))) != 1:
+            raise SystemExit("output without backend offload evidence was not retained for private diagnosis")
+        for path in list(root.glob("gpu-qwen-output-*.unverified.json")) + [path for path in root.glob("gpu-qwen-output-*.log") if not path.name.endswith(".stderr.log")] + list(root.glob("gpu-qwen-output-*.stderr.log")):
+            path.unlink()
 
         call_log.unlink()
         bad_quote = invoke(root, fake_runner, devices="Available devices:\n  Vulkan0: fixture GPU", call_log=call_log, bad_quote=True)
         if bad_quote.returncode == 0 or "quote validation failed" not in bad_quote.stderr:
             raise SystemExit("untraceable quote output was incorrectly accepted")
-        if list(root.glob("gpu-qwen-output-*.json")):
-            raise SystemExit("quote-invalid output was retained")
+        if any(not path.name.endswith(".unverified.json") for path in root.glob("gpu-qwen-output-*.json")):
+            raise SystemExit("quote-invalid output was left with the accepted-result filename")
+        if len(list(root.glob("gpu-qwen-output-*.unverified.json"))) != 1:
+            raise SystemExit("quote-invalid output was not retained privately for diagnosis")
 
     print("PASS: automatic GPU selection, explicit device override, offload, private output, ten-page validation, fail-closed device/offload/quote checks")
     return 0

@@ -37,6 +37,7 @@ fi
 umask 077
 output="$demo_dir/gpu-qwen-output-$(date -u +%Y%m%dT%H%M%SZ).json"
 log="${output%.json}.log"
+unverified_output="${output%.json}.unverified.json"
 printf 'Starting Qwen GPU inference on %s. Output and backend log stay private in %s.\n' "$device" "$demo_dir"
 "$runner" \
   --model "$model" \
@@ -48,14 +49,18 @@ printf 'Starting Qwen GPU inference on %s. Output and backend log stay private i
   --seed 42 \
   --device "$device" \
   --gpu-layers all \
+  --log-file "$log" \
   --no-display-prompt \
   --no-conversation \
   --simple-io \
-  >"$output" 2>"$log" || fail "inference failed; inspect private backend log $log"
+  >"$output" 2>"${output%.json}.stderr.log" || {
+    [[ ! -e "$output" ]] || mv -- "$output" "$unverified_output"
+    fail "inference failed; inspect private backend log $log and stderr log ${output%.json}.stderr.log; any response is retained as $unverified_output"
+  }
 
 if ! grep -Eq 'offloaded [1-9][0-9]*/[1-9][0-9]* layers to GPU' "$log"; then
-  rm -f "$output"
-  fail "backend log did not confirm nonzero GPU layer offload; output discarded"
+  mv -- "$output" "$unverified_output"
+  fail "backend log did not confirm nonzero GPU layer offload; unverified private output retained at $unverified_output; no result is accepted"
 fi
 runner_dir="$(dirname -- "${BASH_SOURCE[0]}")"
 if [[ -x "$runner_dir/arch-notebook-validate-clinton-qwen-gpu-output" ]]; then
@@ -63,11 +68,11 @@ if [[ -x "$runner_dir/arch-notebook-validate-clinton-qwen-gpu-output" ]]; then
 elif [[ -r "$runner_dir/validate-clinton-qwen-gpu-output.py" ]]; then
   validator=(python3 "$runner_dir/validate-clinton-qwen-gpu-output.py")
 else
-  rm -f "$output"
-  fail "the private result validator is not installed"
+  mv -- "$output" "$unverified_output"
+  fail "the private result validator is not installed; unverified private output retained at $unverified_output"
 fi
 "${validator[@]}" --output "$output" --pages-dir "$demo_dir" "${pages[@]}" || {
-    rm -f "$output"
-    fail "structured output or quote validation failed; output discarded"
+    mv -- "$output" "$unverified_output"
+    fail "structured output or quote validation failed; unverified private output retained at $unverified_output"
   }
 printf 'Inference and bounded structure/quote checks passed. Human review is still required:\n  %s\n  %s\n' "$output" "$log"
