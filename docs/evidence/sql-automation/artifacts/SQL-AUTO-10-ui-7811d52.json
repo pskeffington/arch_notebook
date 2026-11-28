@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "suite": "arch_notebook_automation_workspace_headless_ui",
+  "result": "PASS",
+  "source_commit": "7811d5256b50bc319c7c78b2a5e6e68a76ef41bc",
+  "viewport_points": {
+    "width": 1440,
+    "height": 900
+  },
+  "automation_workspace_visible": [
+    "AUTOMATION",
+    "Case file",
+    "SQL AUTOMATION",
+    "REPEATABLE SQL INGESTION JOBS"
+  ],
+  "automation_workspace_hidden": [
+    "CASE RECORDS",
+    "Description",
+    "Import path",
+    "Export path"
+  ],
+  "connections_workspace_retains": [
+    "CASE RECORDS",
+    "Description",
+    "Import path",
+    "Export path",
+    "Retained case description",
+    "sample.csv",
+    "chart.csv"
+  ],
+  "field_values_preserved_when_hidden": true,
+  "test": "tests::automation_workspace_hides_duplicate_navigation_and_file_exchange_fields",
+  "test_result": "1 passed",
+  "native_interaction": "NOT RUN"
+}

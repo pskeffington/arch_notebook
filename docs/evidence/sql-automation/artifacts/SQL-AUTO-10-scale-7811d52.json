@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "suite": "arch_notebook_sql_joined_header_scale",
+  "result": "PASS",
+  "source_commit": "7811d5256b50bc319c7c78b2a5e6e68a76ef41bc",
+  "binary_sha256": "979aeb9aef259dbbc410088f96a5241da659f07998e7d8e011ca71b924042976",
+  "workload": "fictional joined email headers; no bodies",
+  "snapshots": 2,
+  "source_rows": 7121,
+  "captured_relationship_records": 7121,
+  "skipped_rows": 0,
+  "endpoint_entities": 1500,
+  "distinct_composite_record_ids": 7121,
+  "repeated_endpoint_pairs": 4121,
+  "nullable_attributes_handled": true,
+  "query_only_preflight": "PASS",
+  "sqlite_source_unchanged_during_each_capture": true,
+  "capture_duration_ms": [
+    67,
+    108
+  ],
+  "work_directory": "/tmp/arch-notebook-sql-scale-current-20261128"
+}

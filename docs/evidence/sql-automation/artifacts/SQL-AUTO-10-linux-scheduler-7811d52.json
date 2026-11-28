@@ -1,0 +1,42 @@
+{
+  "cadences": [
+    "hourly",
+    "quarter-hour",
+    "daily",
+    "weekly",
+    "monthly"
+  ],
+  "case_isolated_unit_pairs": 5,
+  "case_specific_removal_preserved_other_schedules": true,
+  "dynamic_calendar_window": {
+    "excluded_connection_ids": [
+      "BEFORE-WINDOW",
+      "WINDOW-END"
+    ],
+    "included_connection_ids": [
+      "WINDOW-START"
+    ],
+    "window_end_utc_exclusive": "2026-11-01",
+    "window_start_utc": "2026-10-01"
+  },
+  "failed_sql_preflight_installed_nothing": true,
+  "generated_service_invocation": {
+    "chart_csv_rows": 1,
+    "exit_code": 0,
+    "saved_connections": 1,
+    "trigger": "scheduled"
+  },
+  "invalid_month_day_rejected": true,
+  "preflight_uses_real_arch_notebook_cli": true,
+  "result": "PASS",
+  "schema_version": 1,
+  "special_character_paths_preserved": true,
+  "systemctl_calls": 27,
+  "systemctl_is_temporary_stub": true,
+  "systemd_calendar_parser": {
+    "executable": "/usr/bin/systemd-analyze",
+    "result": "PASS",
+    "validated_expressions": 5
+  },
+  "work_dir": "/tmp/arch-notebook-linux-scheduler-7811d52-20261128"
+}
