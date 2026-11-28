@@ -15,7 +15,7 @@ Hovered group-contact routes now paint after base routes and before selected rou
 | Formatting / diff | PASS | `cargo fmt --all` and `git diff --check` exited 0. |
 | Independent topology source review | PASS | Reviewer confirmed hover geometry matches the node hit rectangle, distinct hover strokes are asserted, and node/proxy rendering remains above the route. |
 | Native visual / pointer review | BLOCKED | No accessible native display/input path in this session; headless rendering does not prove visual contrast or pointer feel. |
-| Exact-head CI | PENDING | Feature base passed Actions run 46111073491. This follow-up commit needs its own exact-head run. |
+| Exact-head CI | PASS | [Run 46111875129](https://github.com/pskeffington/arch_notebook/actions/runs/46111875129) passed all six jobs for source `36de1a1302d1775331e2a765e28b7003b3b850d8`: Linux tests/fixtures, Linux x86_64/ARM64, Arch package, macOS Intel/Apple Silicon. |
 
 Full command/evidence notes: [PROXIMITY-MAP-HOVER-ORDER-01](evidence/vector-ui/PROXIMITY-MAP-HOVER-ORDER-01-20261128.md).
 

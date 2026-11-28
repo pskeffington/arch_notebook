@@ -20,7 +20,7 @@ Hovered group-contact routes now paint after base routes and before selected rou
 | Formatting / diff | PASS | `cargo fmt --all` and `git diff --check`, exit 0. |
 | Independent topology source review | PASS | Reviewer confirmed exact square hit-target correspondence, distinct hover stroke assertions, and group nodes/proxy rings painted after routes. |
 | Native visual and pointer review | BLOCKED | Native display/input access is unavailable in this session. Headless evidence does not establish real pointer feel or contrast. |
-| Exact-head CI | PENDING | Base commit `2b6cb00` passed run [46111073491](https://github.com/pskeffington/arch_notebook/actions/runs/46111073491). A new run is required for this follow-up commit. |
+| Exact-head CI | PASS | Run [46111875129](https://github.com/pskeffington/arch_notebook/actions/runs/46111875129) completed successfully for source `36de1a1302d1775331e2a765e28b7003b3b850d8`: Linux tests/fixtures, Linux x86_64, Linux ARM64, Arch package, macOS Intel, and macOS Apple Silicon. |
 
 The first retained-corpus UI attempt exposed an existing test viewport assumption: after scrolling the topology heading into a 900-point view, the test expected the lower selected-group contact section in the same frame. The test now scrolls independently to verify the map and the selected-group panel. No case or SQLite source was modified.
 
@@ -30,4 +30,4 @@ The retained case is used for structural rendering acceptance, not email complet
 
 ## Next
 
-Collect exact-head CI for this commit and perform native visual/pointer review when the display/input path is available.
+Perform native visual/pointer review when the display/input path is available.
