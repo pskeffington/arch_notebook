@@ -138,6 +138,18 @@ See [PROXIMITY-MAP-CLINTON-01](evidence/vector-ui/PROXIMITY-MAP-CLINTON-01-linux
 
 See [ANX-ROUNDTRIP-04](evidence/anx/ANX-ROUNDTRIP-04-external-shaped-fixture-linux.md).
 
+## ANX vendor schema discovery — 2026-11-27
+
+**Repository / branch / research baseline:** `/home/sysadmin/github/arch_notebook` / `codex/ui-00-chart-baseline` / `2fd13d71ef38d37f6b7294834d9a9554ed470548`.
+
+| Gate | Result | Evidence |
+| --- | --- | --- |
+| Authoritative schema/example location research | PASS | IBM Support identifies the installed Windows `i2 Shared\XML\Schema` and `XML\Examples` locations. Its 2018 note names an ANB 7.x schema and covers older 8.9/9.0 versions, so it is not assumed valid for newer installations. |
+| Local vendor schema or chart fixture availability | BLOCKED | Searches of repository fixtures/docs, `/home/sysadmin/Research.Databases`, and the user's home found no `.xsd` or `.anx` files. |
+| IBM XSD/application validation | NOT TESTED | Requires a schema and representative chart from the matching installed IBM product version. Keep vendor artifacts local unless redistribution is permitted. |
+
+Exact Windows locations, version caveat, and the validation handoff: [Analyst's Notebook compatibility map](analyst-notebook-parity.md#interoperability-gate); primary reference: [IBM Support ANX format note](https://www.ibm.com/support/pages/node/546669).
+
 **Repository / branch / source:** `/home/sysadmin/github/arch_notebook` / `codex/ui-00-chart-baseline` / `a9f56cced2ec12c2f0f787520942939a7603b006`.
 **Candidate:** current-source Linux debug application, SHA-256 `74c900167f450e28f391506d043bfb17fe177382afe19d6f8fdd16bcab24e606`.
 
