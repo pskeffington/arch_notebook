@@ -46202,9 +46202,22 @@ mod tests {
             &selected_reciprocal_map_view,
             super::PROXIMITY_MAP_DIRECTION_COLOR,
         );
+        assert_eq!(
+            reciprocal_highlight_strokes.len(),
+            super::PROXIMITY_MAP_ROUTE_SEGMENTS,
+            "the reciprocal contact should have all route segments selected"
+        );
+        let highlight_last = *reciprocal_highlight_strokes
+            .iter()
+            .max()
+            .expect("selected reciprocal contact emits route highlight strokes");
         assert!(
-            direction_marker_strokes.iter().max() > reciprocal_highlight_strokes.iter().max(),
-            "selected reciprocal direction markers should be repainted above the route highlight"
+            direction_marker_strokes
+                .iter()
+                .filter(|position| **position > highlight_last)
+                .count()
+                >= 6,
+            "both reciprocal arrow markers should be repainted above the route highlight"
         );
         let hop_zero_center = find_headless_text_anchor_center(&selected_map_view, "HOP 0")
             .expect("sampled map's first hop label is visible");
