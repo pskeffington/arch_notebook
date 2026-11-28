@@ -987,7 +987,8 @@ SQL Review binds an active-chart SQL identity to a one-off parameter, pages thro
 | --- | --- | --- |
 | Formatting, diff, and full offline Rust suite | PASS | Formatting and diff checks exit 0; 86 passed, 0 failed, 3 ignored. |
 | Locked offline check | PASS | `CARGO_TARGET_DIR=/tmp/arch-notebook-target cargo check --locked --offline` exited 0. |
-| Release build / launcher install | BLOCKED / NOT RUN | Release-build execution session does not return a cargo result; no stale binary was installed. |
+| Locked offline release build | PASS | `CARGO_BUILD_JOBS=1 CARGO_TARGET_DIR=/tmp/arch-notebook-target cargo build --release --locked --offline` exited 0; binary SHA-256 `c4882daf55da5113ada5484744370d5752147864de8149c4ad130a4da9f5ecfb`. |
+| Per-user launcher/icon install acceptance | PASS | Installer and isolated acceptance exited 0; desktop menu and shortcut match, SVG/PNG and MIME assets match, and installed executable matches release. |
 | Native interaction and IBM compatibility | NOT TESTED | Headless state regression does not prove native pointer interaction or i2 Analyze integration. |
 
 Details: [SQL-SEED-01](evidence/sql-automation/SQL-SEED-01-one-off-parameter-20261128.md).

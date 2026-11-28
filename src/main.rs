@@ -9493,10 +9493,10 @@ impl App {
         .id_salt("sql_validation_preview")
         .show(ui, |ui| {
             ui.label(format!(
-                "Captured {} · rows {}–{} on this page{}{}",
+                "Captured {} · window starts at row {} · {} usable rows{}{}",
                 preview.captured_at,
                 preview.page_offset + 1,
-                preview.page_offset + preview.connections.len(),
+                preview.connections.len(),
                 if preview.has_more_rows {
                     " · more results"
                 } else {
@@ -10261,8 +10261,10 @@ impl App {
                         preview.query = original_query;
                         preview.page_offset = request.seed_page_offset;
                         preview.query_result_token = request.seed_review_token;
-                        preview.has_more_rows =
-                            preview.connection_count > SQL_SEED_REVIEW_PAGE_SIZE;
+                        preview.has_more_rows = seed_query_page_has_more_rows(
+                            preview.connection_count,
+                            preview.skipped_rows,
+                        );
                         preview.connections.truncate(SQL_SEED_REVIEW_PAGE_SIZE);
                         preview.connection_count = preview.connections.len();
                         preview.selected_connection_facts = request
@@ -10286,9 +10288,9 @@ impl App {
                             .map(|preview| preview.connections.len().min(SQL_SEED_REVIEW_PAGE_SIZE))
                             .unwrap_or_default();
                         format!(
-                            "SQL QUERY VALID · RESULTS {}–{}{} · CASE UNCHANGED",
+                            "SQL QUERY VALID · RESULT WINDOW STARTS AT ROW {} · {} USABLE{} · CASE UNCHANGED",
                             request.seed_page_offset + 1,
-                            request.seed_page_offset + count,
+                            count,
                             if worker
                                 .sql_validation_preview
                                 .as_ref()
@@ -16996,6 +16998,10 @@ fn wrap_seed_query_page(query: &str, offset: usize) -> String {
         "SELECT * FROM (\n{query}\n) AS arch_seed_results LIMIT {} OFFSET {offset}",
         SQL_SEED_REVIEW_PAGE_SIZE + 1
     )
+}
+
+fn seed_query_page_has_more_rows(usable_rows: usize, skipped_rows: usize) -> bool {
+    usable_rows.saturating_add(skipped_rows) > SQL_SEED_REVIEW_PAGE_SIZE
 }
 
 fn strip_sql_trailing_statement_terminator(query: &str) -> &str {
@@ -46671,6 +46677,9 @@ mod tests {
             &(0..200).collect::<Vec<_>>()
         );
         assert_eq!(second_page, (200..205).collect::<Vec<_>>());
+        assert!(!super::seed_query_page_has_more_rows(199, 1));
+        assert!(super::seed_query_page_has_more_rows(199, 2));
+        assert!(super::seed_query_page_has_more_rows(0, 201));
     }
 
     #[test]
