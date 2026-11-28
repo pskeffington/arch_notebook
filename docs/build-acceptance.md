@@ -992,3 +992,13 @@ SQL Review binds an active-chart SQL identity to a one-off parameter, pages thro
 | Native interaction and IBM compatibility | NOT TESTED | Headless state regression does not prove native pointer interaction or i2 Analyze integration. |
 
 Details: [SQL-SEED-01](evidence/sql-automation/SQL-SEED-01-one-off-parameter-20261128.md).
+
+## Commented SQL query-plan inspection — 2026-11-28
+
+Read-only query-plan inspection normalizes a terminal semicolon and comments with the SQL-aware statement parser used by seeded paging. The SQLite regression binds a typed parameter, checks returned planner steps, and verifies source bytes remain unchanged.
+
+| Gate | Result | Evidence |
+| --- | --- | --- |
+| Formatting, diff, locked check, full Rust suite | PASS | Formatting and diff checks exit 0; offline check exits 0; 90 passed, 0 failed, 3 ignored. |
+| Parameterized commented-query plan and source read-only check | PASS | [SQL-PLAN-01](evidence/sql-automation/SQL-PLAN-01-commented-readonly-query-20261128.md). |
+| Release build and native interaction | NOT RUN | This focused patch has no release build or native UI evidence. |

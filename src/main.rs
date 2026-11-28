@@ -42580,7 +42580,10 @@ fn inspect_sql_query_plan(
         return Err("SQL query must be read-only".into());
     }
     let parameter_values = sql_parameter_values(&source_statement, parameters)?;
-    let explain_query = format!("EXPLAIN QUERY PLAN {}", query.trim().trim_end_matches(';'));
+    let explain_query = format!(
+        "EXPLAIN QUERY PLAN {}",
+        strip_sql_trailing_statement_terminator(query)
+    );
     let mut statement = connection
         .prepare(&explain_query)
         .map_err(|error| sql_plan_error(&deadline, "cannot explain saved SQL query", error))?;
@@ -46905,6 +46908,46 @@ mod tests {
         assert!(!super::seed_query_page_has_more_rows(199, 1));
         assert!(super::seed_query_page_has_more_rows(199, 2));
         assert!(super::seed_query_page_has_more_rows(0, 201));
+    }
+
+    #[test]
+    fn sql_query_plan_accepts_parameterized_query_with_trailing_comment_read_only() {
+        let root =
+            std::env::temp_dir().join(format!("arch-notebook-query-plan-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).expect("create isolated query-plan directory");
+        let database_path = root.join("source.sqlite");
+        let database =
+            rusqlite::Connection::open(&database_path).expect("create query-plan SQLite database");
+        database
+            .execute_batch(
+                "CREATE TABLE records(id INTEGER PRIMARY KEY, detail TEXT);\
+                 INSERT INTO records VALUES (1, 'one');",
+            )
+            .expect("create read-only plan fixture");
+        drop(database);
+        let source_before = std::fs::read(&database_path).expect("read source before plan");
+        let query = "SELECT id, detail FROM records WHERE id = :record_id; -- reviewed plan";
+
+        let (resolved_path, steps) = super::inspect_sql_query_plan(
+            &database_path.to_string_lossy(),
+            "",
+            query,
+            &[("record_id".into(), "int:1".into())],
+        )
+        .expect("read-only query plan includes trailing SQL comment");
+
+        assert_eq!(
+            resolved_path,
+            database_path.canonicalize().expect("resolve source")
+        );
+        assert!(!steps.is_empty());
+        assert!(steps.iter().any(|step| step.detail.contains("records")));
+        assert_eq!(
+            std::fs::read(&database_path).expect("read source after plan"),
+            source_before,
+            "query-plan inspection must leave its SQLite source unchanged"
+        );
+        std::fs::remove_dir_all(root).expect("remove isolated query-plan directory");
     }
 
     #[test]
