@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Arch Notebook — Qwen GPU Demo
+Comment=Run the bounded Clinton document sample through Qwen with explicit GPU offload
+Exec=arch-notebook-clinton-qwen-gpu-demo
+Icon=arch-notebook-qwen-gpu-demo
+Terminal=true
+Categories=Utility;
+Keywords=Qwen;GPU;demo;notebook;analysis;
