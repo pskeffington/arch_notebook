@@ -985,7 +985,7 @@ SQL Review binds an active-chart SQL identity to a one-off parameter, pages thro
 
 | Gate | Result | Evidence |
 | --- | --- | --- |
-| Formatting, diff, and full offline Rust suite | PASS | `cargo fmt --all`, `git diff --check`, and `CARGO_TARGET_DIR=/tmp/arch-notebook-target cargo test --locked --offline` exit 0; 88 passed, 0 failed, 3 ignored. |
+| Formatting, diff, and full offline Rust suite | PASS | `cargo fmt --all`, `git diff --check`, and `CARGO_TARGET_DIR=/tmp/arch-notebook-target cargo test --locked --offline` exit 0; 89 passed, 0 failed, 3 ignored. |
 | Locked offline check | PASS | `CARGO_TARGET_DIR=/tmp/arch-notebook-target cargo check --locked --offline` exited 0. |
 | Locked offline release build | PASS | `CARGO_BUILD_JOBS=1 CARGO_TARGET_DIR=/tmp/arch-notebook-target cargo build --release --locked --offline` exited 0; binary SHA-256 `dbc6b600c0ef79a3e0876846b2a43fa314bf9c686826c6a02fc3800632c0003f`. |
 | Per-user launcher/icon install acceptance | PASS | Installer and isolated acceptance exited 0; desktop menu and shortcut match, SVG/PNG and MIME assets match, and installed executable matches release. |

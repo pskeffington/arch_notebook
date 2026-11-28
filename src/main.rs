@@ -46797,6 +46797,62 @@ mod tests {
     }
 
     #[test]
+    fn seeded_query_review_filter_limits_bulk_selection_to_visible_rows() {
+        let make_fact = |id: &str, note: &str| ConnectionFact {
+            key: format!("id:{id}"),
+            connection_id: id.into(),
+            source_entity_id: "seed-1".into(),
+            target_entity_id: format!("target-{id}"),
+            source: "Seed Entity".into(),
+            source_type: "PERSON".into(),
+            source_representation: String::new(),
+            target: format!("Candidate {id}"),
+            target_type: "ORGANIZATION".into(),
+            target_representation: String::new(),
+            relationship: "CONTACTED".into(),
+            date: "2026-11-28".into(),
+            confidence: 3,
+            directed: true,
+            source_reference: String::new(),
+            notes: String::new(),
+            source_attributes: Vec::new(),
+            target_attributes: Vec::new(),
+            attributes: Vec::new(),
+            review_fields: vec![("investigator_note".into(), note.into())],
+        };
+        let matching = make_fact("match", "shared office");
+        let hidden = make_fact("hidden", "different office");
+        let facts = [matching.clone(), hidden.clone()];
+        let visible = facts
+            .iter()
+            .filter(|fact| super::sql_seed_review_row_matches(fact, "SHARED OFFICE"))
+            .collect::<Vec<_>>();
+        assert_eq!(visible.len(), 1);
+        let mut preview = super::SqlValidationPreview::default();
+        preview.review_filter = "SHARED OFFICE".into();
+        preview
+            .selected_connection_keys
+            .extend(visible.iter().map(|fact| fact.key.clone()));
+        preview.selected_connection_facts.extend(
+            visible
+                .iter()
+                .map(|fact| (fact.key.clone(), (*fact).clone())),
+        );
+
+        assert_eq!(
+            preview.selected_connection_keys,
+            [matching.key.clone()].into()
+        );
+        assert_eq!(preview.selected_connection_facts.len(), 1);
+        assert!(
+            preview
+                .selected_connection_facts
+                .contains_key(&matching.key)
+        );
+        assert!(!preview.selected_connection_keys.contains(&hidden.key));
+    }
+
+    #[test]
     fn seeded_query_page_wrapper_preserves_parameters_order_and_page_boundaries() {
         let connection = rusqlite::Connection::open_in_memory().expect("memory database opens");
         connection
