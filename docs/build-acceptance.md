@@ -14,7 +14,7 @@ Solid confidence-3 chart relationships now paint as a native quadratic Bézier s
 | Formatting and diff validation | PASS | `cargo fmt --all -- --check` and `git diff --check` passed. |
 | Clinton real-corpus production UI benchmark | PASS, headless | 2,813 entities / 6,173 records loaded; 48 groups / 47 sampled pairs / 1,315 represented records. The paired frame benchmark passed. It does not measure the solid-link Bézier path because the retained corpus ties use confidence 1; no renderer speedup is claimed from these timings. |
 | Topology source review | PASS | Read-only review confirmed the midpoint-derived control point matches the sampled quadratic; native visual and GPU validation were not performed. |
-| Exact-head CI | PENDING | Candidate source has not yet been pushed through CI. |
+| Exact-head CI | PENDING | The workflow runs on `main` pushes or pull requests, not this non-main branch push; no run is attached to this candidate commit. |
 
 Exact command output and limits: [PROXIMITY-MAP-ROUTE-PAINT-01](evidence/vector-ui/PROXIMITY-MAP-ROUTE-PAINT-01-linux.md).
 
