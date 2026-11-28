@@ -6159,6 +6159,14 @@ impl App {
     }
 
     fn reinspect_import_design_last_source(&mut self, id: Uuid) {
+        if self.import_inspection_worker.is_some()
+            || self.anx_import_worker.is_some()
+            || self.xslt_import_worker.is_some()
+        {
+            self.status =
+                "IMPORT BUSY · WAIT FOR THE CURRENT INSPECTION OR IMPORT TO FINISH".into();
+            return;
+        }
         let Some((name, path)) = self
             .case
             .import_specifications
@@ -31603,12 +31611,16 @@ impl eframe::App for App {
                     QuickCommand::LoadSavedSqlSearch(search.id),
                 )
             }));
+            let import_busy = self.import_inspection_worker.is_some()
+                || self.anx_import_worker.is_some()
+                || self.xslt_import_worker.is_some();
             commands.extend(self.case.import_specifications.iter().filter_map(|spec| {
                 spec.last_source_path.as_ref().map(|_| {
                     (
                         format!("Reinspect import · {}", spec.name),
                         format!(
-                            "saved import design csv tsv source file mapping {}",
+                            "saved import design csv tsv source file mapping {}{}",
+                            if import_busy { " import busy " } else { " " },
                             spec.name
                         ),
                         QuickCommand::ReinspectImportDesign(spec.id),
@@ -31647,14 +31659,24 @@ impl eframe::App for App {
                         ui.label("No matching destinations or actions.");
                     } else {
                         for (index, (label, keywords, command)) in matches.iter().enumerate() {
+                            let command_busy = import_busy
+                                && matches!(command, QuickCommand::ReinspectImportDesign(_));
+                            let hover_text = if command_busy {
+                                "Wait for the current import or inspection to finish.".to_owned()
+                            } else {
+                                format!("Search terms: {keywords}")
+                            };
                             let response = ui
-                                .selectable_label(false, label.as_str())
-                                .on_hover_text(format!("Search terms: {keywords}"));
-                            if response.clicked() {
+                                .add_enabled(!command_busy, egui::Button::new(label.as_str()))
+                                .on_hover_text(hover_text);
+                            if response.clicked() && !command_busy {
                                 selected_command = Some(*command);
                                 close_palette = true;
                             }
-                            if index == 0 && ui.input(|input| input.key_pressed(egui::Key::Enter)) {
+                            if index == 0
+                                && !command_busy
+                                && ui.input(|input| input.key_pressed(egui::Key::Enter))
+                            {
                                 selected_command = Some(*command);
                                 close_palette = true;
                             }
@@ -53032,6 +53054,51 @@ mod tests {
         assert_eq!(app.case.entities.len(), original_entities);
         assert_eq!(app.case.links.len(), original_links);
         std::fs::remove_dir_all(root).expect("remove Quick Open import fixture directory");
+    }
+
+    #[test]
+    fn reinspect_saved_import_design_does_not_change_state_while_import_is_busy() {
+        let root = std::env::temp_dir().join(format!(
+            "arch-notebook-busy-import-design-{}",
+            Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).expect("create busy import fixture directory");
+        let source_path = root.join("contacts.csv");
+        std::fs::write(&source_path, "from_name,to_name\nAlpha,Beta\n")
+            .expect("write busy import fixture");
+        let mut case: CaseFile =
+            serde_json::from_str(include_str!("../fixtures/chart/correctness.case.json"))
+                .expect("correctness fixture parses");
+        let design_id = Uuid::from_u128(7003);
+        case.import_specifications.push(super::ImportSpecification {
+            id: design_id,
+            name: "Contacts feed".into(),
+            mapping: super::ImportColumnMapping {
+                source: "from_name".into(),
+                target: "to_name".into(),
+                ..Default::default()
+            },
+            header_signature: vec!["from_name".into(), "to_name".into()],
+            last_source_path: Some(source_path.to_string_lossy().into_owned()),
+        });
+        let mut app = App::automation_context(case, &root.join("case.json").to_string_lossy());
+        let original_path = "currently-inspected.csv";
+        app.import_path = original_path.into();
+        app.pending_import_design_source = Some(Uuid::from_u128(7004));
+        let (_sender, receiver) = std::sync::mpsc::channel();
+        app.import_inspection_worker = Some(receiver);
+
+        app.reinspect_import_design_last_source(design_id);
+
+        assert_eq!(app.import_path, original_path);
+        assert_eq!(
+            app.pending_import_design_source,
+            Some(Uuid::from_u128(7004))
+        );
+        assert!(app.import_inspection_worker.is_some());
+        assert!(app.status.contains("IMPORT BUSY"));
+        drop(app);
+        std::fs::remove_dir_all(root).expect("remove busy import fixture directory");
     }
 
     #[test]

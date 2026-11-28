@@ -1,5 +1,18 @@
 # Local build acceptance record
 
+## Quick Open import busy-state protection — 2026-11-28
+
+Quick Open now disables saved-source reinspect commands while any CSV/TSV, ANX, or XSLT import worker is active. The action method also rejects a busy request before changing the selected source or pending design, preventing a later inspection result from applying the wrong mapping.
+
+| Gate | Result | Evidence |
+| --- | --- | --- |
+| Busy-state regression | PASS | `reinspect_saved_import_design_does_not_change_state_while_import_is_busy` confirms the original import path, queued design, and active worker remain unchanged. |
+| Quick Open success path | PASS | `quick_open_reinspects_saved_import_design_without_importing_chart_data` continues to verify background inspection and mapping review without chart data changes. |
+| Locked workspace check and full Rust suite | PASS | `cargo check --workspace --locked`: exit 0; `cargo test --workspace --locked`: 105 passed, 0 failed, 3 ignored. |
+| Format and diff validation | PASS | `cargo fmt --all` and `git diff --check`: exit 0. |
+| Release, installer, and corpus QA | NOT RUN | This focused UI guard does not change the installed binary; prior evidence remains tied to its recorded candidate commit. |
+| Native pointer review and IBM navigation parity | NOT RUN | Headless tests do not establish native desktop feel or IBM compatibility. |
+
 ## Quick Open saved import designs — 2026-11-28
 
 Saved import designs that remember a source file are now searchable in Quick Open as **Reinspect import · <design name>**. Selecting the command uses the existing asynchronous CSV/TSV inspector and mapping review; it does not add chart data. The Import menu shortcut remains available.
