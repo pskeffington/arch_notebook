@@ -1,0 +1,13 @@
+{
+  "suite": "arch_notebook_saved_sql_search_package_acceptance",
+  "result": "PASS",
+  "binary_sha256": "5872cb68ebebca61961397b566fab9944ca7f958210e5a1a5b8d8e29fc6cf135",
+  "round_trip": "PASS",
+  "seed_default_values_exported": false,
+  "chart_seed_rebound_by_consumer": true,
+  "duplicate_import_case_unchanged": true,
+  "malicious_bound_seed_rejected": true,
+  "sqlite_source_overwrite_rejected_and_source_unchanged": true,
+  "query_executed_during_import": false,
+  "snapshot_count_unchanged_during_import": true
+}

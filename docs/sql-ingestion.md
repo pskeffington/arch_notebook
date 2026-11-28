@@ -81,6 +81,18 @@ When the current query is in seeded-review mode, saving it omits the bound chart
 
 This local query catalog follows the analyst-facing flow of selecting a named search, supplying parameters or chart seeds, reviewing results, and choosing records to add. IBM's External Searches are supplied by an i2 Analyze deployment and configured by administrators; this local catalog stores analyst-defined SQLite query drafts and does not connect to i2 Analyze or claim IBM compatibility. See IBM's [External Searches overview](https://docs.i2group.com/anb/10.0.2/i2_connect.html) and [searching external sources](https://docs.i2group.com/anb/9.4.0/search_i2c.html).
 
+#### Move a saved search between cases
+
+The CLI exports a selected case-local search as a versioned JSON definition package and imports it into another case:
+
+```sh
+arch-notebook --export-sql-search investigation.case.json "Counterparty lookup" counterparty-search.json --json
+arch-notebook --import-sql-search receiving.case.json counterparty-search.json \
+  --database /data/receiving/contacts.sqlite --series "Contact review" --name "Receiving contacts" --json
+```
+
+The package contains the search name, database path, series, SQL text, typed defaults, and optional chart-seed parameter name. It contains no case entities, chart IDs, bound chart-seed values, query results, snapshots, or automation history. Relative paths are resolved from the exporting case's directory; use `--database` to select the receiving machine's source. Import assigns a new search ID and refuses duplicate names. Import does not connect to SQLite or execute SQL; review and validate the query in SQL Review before using it. Export refuses paths that would replace the case, its automation lock, or a saved SQLite source. The JSON schema is `arch-notebook-sql-search`, version 1.
+
 ### Inspect current source rows for a chart entity
 
 In the selected entity inspector, expand **SQL source records** to see each saved database identity that has a matching SQL capture on the active chart. Each identity has its own **Find SQL history** and **Query live** actions, so an item linked to multiple SQL sources does not silently open only the first source. **Query live** reruns that source capture's saved query against its current database with the saved typed parameters. The query must still be read-only and return a stable source or target entity ID alias. While scanning, the inspector reports the number of query rows inspected and matching rows found. Arch Notebook displays up to 20 matching rows with bounded columns and cell text. Results remain transient and are never written to the case or source database. The lookup times out after two minutes and scans at most 1,000,000 query rows; if it reaches that scan limit, the inspector says that later matches may exist instead of reporting a definitive no-match result. This is source-record inspection, not a new snapshot capture, and it does not change the chart.

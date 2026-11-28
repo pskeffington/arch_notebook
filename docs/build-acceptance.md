@@ -1,5 +1,22 @@
 # Local build acceptance record
 
+## Portable saved SQL search packages — 2026-11-28
+
+Saved SQL search definitions can now be exported/imported as version-1 JSON packages with `--export-sql-search` and `--import-sql-search`. The package is definition-only; it carries no chart/case data or SQL results, omits bound seed IDs, rebases relative paths, and leaves imported SQL unexecuted. Export protects case files, automation locks, and referenced SQLite sources; imports reject duplicate names and bound chart-seed values.
+
+| Gate | Result | Evidence |
+| --- | --- | --- |
+| Package construction, path rebasing, stale-seed and source-overwrite unit regressions | PASS | Two focused Rust tests pass. |
+| Full Rust suite | PASS | 99 passed, 0 failed, 3 ignored. |
+| Locked offline workspace check and formatting | PASS | Both exited 0. |
+| Optimized locked offline release build | PASS | `TMPDIR=/home/sysadmin/.cache/arch-notebook-build-tmp CARGO_BUILD_JOBS=1 CARGO_TARGET_DIR=/tmp/arch-notebook-target cargo build --release --workspace --locked --offline`, exit 0. |
+| CLI saved-search package acceptance | PASS | Round-trip/override, new ID, duplicate-name no-write, bound-seed rejection, SQLite source preservation, no query execution, unchanged snapshot count. |
+| Isolated installer acceptance and current-user install | PASS | Launcher/menu/shortcut, icons, MIME definition and SQL helper pass; installed binary SHA-256 `5872cb68ebebca61961397b566fab9944ca7f958210e5a1a5b8d8e29fc6cf135` matches the candidate. |
+| Primary Clinton corpus QA | PASS | One query-only preflight passed; replayed 6,173 rows with zero skipped rows or deltas; source inputs unchanged. |
+| Native UI review and IBM interoperability | NOT RUN | Native pointer/display review unavailable; this is not an i2 Analyze connector. |
+
+Exact commands, aggregate report hashes, and scope: [SQL-SEARCH-PACKAGE-01](evidence/sql-automation/SQL-SEARCH-PACKAGE-01-current-source-20261128.md).
+
 ## Case-local saved SQL searches — 2026-11-28
 
 **Repository / branch / baseline:** `arch_notebook` / `codex/ui-00-chart-nested-conditions` / `8037cbc2d0a94444aebecb9937710e34e52006de`.
