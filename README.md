@@ -38,7 +38,7 @@ Version 0.1.0 is under active development. The [2026-11-23 implementation baseli
 | Scheduled captures, preflight and bounded run history | Implemented |
 | CSV/TSV, GraphML and KML interchange | Implemented |
 | Historical SQL capture export to chart-import CSV/TSV, via desktop and CLI | Implemented |
-| ANX XML chart import/export and XML-to-ANX XSLT adaptation | Implemented; internal round-trip, transform, and DTD rejection pass; IBM XSD and application validation pending |
+| ANX XML chart import/export and XML-to-ANX XSLT adaptation | Implemented in desktop and CLI; background transform, internal round-trip, and DTD rejection pass; IBM XSD and application validation pending |
 | Deterministic chart fixtures and automated chart regressions | Implemented on `codex/ui-00-chart-baseline` |
 | Interactive host acceptance and external IBM import validation | Pending evidence |
 | Published release and macOS notarization | Pending owner approval / signing evidence |

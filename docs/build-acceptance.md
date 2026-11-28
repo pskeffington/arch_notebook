@@ -929,3 +929,16 @@ The command-line importer can now run a trusted XSLT stylesheet over XML and imp
 | Operational SQL schedule integration | NOT TESTED | No scheduler was configured to invoke the new CLI. |
 
 Implementation detail, exact commands, file limits, fixture digest, and remaining validation: [XML-XSLT-IMPORT-01](evidence/anx/XML-XSLT-IMPORT-01-linux-20261128.md).
+
+## Desktop XML/XSLT import workflow — 2026-11-28
+
+The **Import…** menu now accepts an XML input and trusted stylesheet path. Transform and ANX parsing run in the background; a result is discarded if the analyst switches charts before completion.
+
+| Gate | Result | Evidence |
+| --- | --- | --- |
+| Offline Rust suite | PASS | 82 passed, 0 failed, 3 ignored; includes background worker DTD error routing. |
+| Locked offline check and debug/release builds | PASS | All exited 0. Final debug SHA-256 `5013c713fdac357dd2bdb691a1b1b62b4ee9edd9ed1a07a426efb8651b6b4cba`; final release SHA-256 `4f37a78a91230b8c1aeafc16d0d3aedc18638dd83bb56eaf2172d504cf24c08d`. |
+| XSLT import acceptance on debug/release | PASS | Each imported 8 entities and 8 relationships and rejected DTD cases without changing the destination case. |
+| Native UI interaction and IBM schema/application | NOT TESTED | Headless worker and CLI evidence do not prove pointer/keyboard interaction or IBM compatibility. |
+
+Evidence and next gates: [XML-XSLT-IMPORT-02](evidence/anx/XML-XSLT-IMPORT-02-desktop-20261128.md).

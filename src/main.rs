@@ -2850,6 +2850,8 @@ struct App {
     import_inspection_progress: Option<Arc<std::sync::atomic::AtomicUsize>>,
     background_imports_enabled: bool,
     anx_import_worker: Option<Receiver<(Uuid, Result<InterchangeImportPayload, String>)>>,
+    xslt_import_worker: Option<Receiver<(Uuid, Result<InterchangeImportPayload, String>)>>,
+    xslt_stylesheet_path: String,
     import_column_mapping: ImportColumnMapping,
     import_spec_name: String,
     import_design_package_path: String,
@@ -3504,6 +3506,8 @@ impl Default for App {
             import_inspection_progress: None,
             background_imports_enabled: true,
             anx_import_worker: None,
+            xslt_import_worker: None,
+            xslt_stylesheet_path: String::new(),
             import_column_mapping: ImportColumnMapping::default(),
             import_spec_name: String::new(),
             import_design_package_path: String::new(),
@@ -4323,6 +4327,7 @@ impl App {
         self.import_inspection_cancel = None;
         self.import_inspection_progress = None;
         self.anx_import_worker = None;
+        self.xslt_import_worker = None;
         self.import_column_mapping = ImportColumnMapping::default();
         self.import_spec_name.clear();
         self.selected_import_spec = None;
@@ -4687,6 +4692,8 @@ impl App {
             import_inspection_progress: None,
             background_imports_enabled: false,
             anx_import_worker: None,
+            xslt_import_worker: None,
+            xslt_stylesheet_path: String::new(),
             import_column_mapping: ImportColumnMapping::default(),
             import_spec_name: String::new(),
             import_design_package_path: String::new(),
@@ -5240,6 +5247,40 @@ impl App {
             }
             Err(error) => {
                 self.status = format!("ANX IMPORT FAILED · COULD NOT START WORKER · {error}");
+            }
+        }
+    }
+
+    fn import_xml_with_xslt(&mut self) {
+        if self.xslt_import_worker.is_some() {
+            return;
+        }
+        let source_path = self.import_path.trim().to_owned();
+        let stylesheet_path = self.xslt_stylesheet_path.trim().to_owned();
+        if source_path.is_empty() || stylesheet_path.is_empty() {
+            self.status = "XML/XSLT IMPORT FAILED · INPUT AND STYLESHEET PATHS ARE REQUIRED".into();
+            return;
+        }
+        let active_chart_id = self.case.active_chart_id;
+        if !self.background_imports_enabled {
+            let result = transform_xml_with_xslt(&source_path, &stylesheet_path).and_then(|path| {
+                let parsed = anx_import_payload(&path.to_string_lossy());
+                let _ = fs::remove_file(path);
+                parsed
+            });
+            match result {
+                Ok(payload) => self.import_interchange_payload(payload, "ANX"),
+                Err(error) => self.status = format!("XML/XSLT IMPORT FAILED · {error}"),
+            }
+            return;
+        }
+        match spawn_xml_xslt_import_worker(source_path, stylesheet_path, active_chart_id) {
+            Ok(receiver) => {
+                self.xslt_import_worker = Some(receiver);
+                self.status = "TRANSFORMING XML AND VALIDATING ANX IN BACKGROUND".into();
+            }
+            Err(error) => {
+                self.status = format!("XML/XSLT IMPORT FAILED · COULD NOT START WORKER · {error}");
             }
         }
     }
@@ -18731,6 +18772,35 @@ impl eframe::App for App {
                 }
             }
         }
+        if let Some(xslt_import_state) = self.xslt_import_worker.as_ref().map(Receiver::try_recv) {
+            match xslt_import_state {
+                Ok((target_chart_id, Ok(payload))) => {
+                    self.xslt_import_worker = None;
+                    if self.case.active_chart_id == target_chart_id {
+                        self.import_interchange_payload(payload, "ANX");
+                        if self.status.starts_with("ANX IMPORT ·") {
+                            self.status = self.status.replacen("ANX IMPORT", "XML/XSLT IMPORT", 1);
+                        }
+                    } else {
+                        self.status =
+                            "XML/XSLT IMPORT DISCARDED · ACTIVE CHART CHANGED DURING INSPECTION"
+                                .into();
+                    }
+                }
+                Ok((_, Err(error))) => {
+                    self.xslt_import_worker = None;
+                    self.status = format!("XML/XSLT IMPORT FAILED · {error}");
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.xslt_import_worker = None;
+                    self.status =
+                        "XML/XSLT IMPORT FAILED · BACKGROUND WORKER STOPPED UNEXPECTEDLY".into();
+                }
+                Err(mpsc::TryRecvError::Empty) => {
+                    ctx.request_repaint_after(Duration::from_millis(250));
+                }
+            }
+        }
         if let Some(lookup_state) = self
             .sql_entity_source_worker
             .as_ref()
@@ -19812,7 +19882,8 @@ impl eframe::App for App {
                         }
                     });
                     let import_busy = self.import_inspection_worker.is_some()
-                        || self.anx_import_worker.is_some();
+                        || self.anx_import_worker.is_some()
+                        || self.xslt_import_worker.is_some();
                     if self.import_inspection_worker.is_some() {
                         let scanned = self.import_inspection_progress.as_ref().map_or(0, |progress| {
                             progress.load(Ordering::Relaxed)
@@ -19827,13 +19898,16 @@ impl eframe::App for App {
                     if self.anx_import_worker.is_some() {
                         ui.label("Reading and validating ANX XML in background…");
                     }
+                    if self.xslt_import_worker.is_some() {
+                        ui.label("Transforming XML and validating ANX in background…");
+                    }
                     ui.menu_button("Import…", |ui| {
                         ui.label("Input file");
                         ui.add_enabled(
                             !import_busy,
                             egui::TextEdit::singleline(&mut self.import_path)
                                 .desired_width(300.0)
-                                .hint_text("CSV, GraphML, KML, ANX, or approved handoff JSONL path"),
+                                .hint_text("CSV, GraphML, KML, ANX, XML, or approved handoff JSONL path"),
                         );
                         if ui
                             .add_enabled(
@@ -19869,6 +19943,27 @@ impl eframe::App for App {
                             self.import_anx();
                             ui.close_menu();
                         }
+                        ui.separator();
+                        ui.label("Trusted XSLT stylesheet");
+                        ui.add_enabled(
+                            !import_busy,
+                            egui::TextEdit::singleline(&mut self.xslt_stylesheet_path)
+                                .desired_width(300.0)
+                                .hint_text("stylesheet.xsl"),
+                        );
+                        if ui
+                            .add_enabled(
+                                !import_busy,
+                                egui::Button::new("Transform XML with XSLT and import"),
+                            )
+                            .on_hover_text(
+                                "Runs trusted xsltproc in the background, then validates and imports its output as ANX.",
+                            )
+                            .clicked()
+                        {
+                            self.import_xml_with_xslt();
+                            ui.close_menu();
+                        }
                         if ui
                             .add_enabled(
                                 !import_busy,
@@ -19890,7 +19985,7 @@ impl eframe::App for App {
                             ),
                         )
                         .on_hover_text(
-                            "Create a separate chart for the next CSV/TSV, GraphML, KML, or ANX import instead of merging into the active chart.",
+                            "Create a separate chart for the next CSV/TSV, GraphML, KML, ANX, or XSLT-transformed XML import instead of merging into the active chart.",
                         );
                     });
                     ui.menu_button("Export…", |ui| {
@@ -33967,6 +34062,26 @@ fn spawn_anx_import_worker(
     Ok(receiver)
 }
 
+fn spawn_xml_xslt_import_worker(
+    source_path: String,
+    stylesheet_path: String,
+    target_chart_id: Uuid,
+) -> Result<Receiver<(Uuid, Result<InterchangeImportPayload, String>)>, String> {
+    let (sender, receiver) = mpsc::channel();
+    thread::Builder::new()
+        .name("arch-notebook-xml-xslt-import".into())
+        .spawn(move || {
+            let result = transform_xml_with_xslt(&source_path, &stylesheet_path).and_then(|path| {
+                let parsed = anx_import_payload(&path.to_string_lossy());
+                let _ = fs::remove_file(path);
+                parsed
+            });
+            let _ = sender.send((target_chart_id, result));
+        })
+        .map_err(|error| format!("could not start worker: {error}"))?;
+    Ok(receiver)
+}
+
 fn graphml_import_payload(path: &str) -> Result<InterchangeImportPayload, String> {
     let document = parse_graphml(path)?;
     interchange_import_payload(document, path, "graphml")
@@ -37552,66 +37667,93 @@ fn import_anx_cli(case_path: &str, input_path: &str, json_output: bool) -> Resul
     import_interchange_cli(case_path, input_path, json_output, "ANX", None)
 }
 
+const MAX_XSLT_XML_BYTES: u64 = 16 * 1024 * 1024;
+
+fn xslt_xml_contains_doctype(bytes: &[u8]) -> bool {
+    const TOKEN: &[u8] = b"<!DOCTYPE";
+    bytes
+        .windows(TOKEN.len())
+        .any(|window| window.eq_ignore_ascii_case(TOKEN))
+        || bytes.windows(TOKEN.len() * 2).any(|window| {
+            TOKEN
+                .iter()
+                .enumerate()
+                .all(|(index, byte)| window[index * 2] == *byte && window[index * 2 + 1] == 0)
+                || TOKEN
+                    .iter()
+                    .enumerate()
+                    .all(|(index, byte)| window[index * 2] == 0 && window[index * 2 + 1] == *byte)
+        })
+}
+
+fn transform_xml_with_xslt(input_path: &str, stylesheet_path: &str) -> Result<PathBuf, String> {
+    fn validate_xml_source(path: &str, label: &str) -> Result<(), String> {
+        let metadata =
+            fs::metadata(path).map_err(|error| format!("cannot inspect {label}: {error}"))?;
+        if metadata.len() > MAX_XSLT_XML_BYTES {
+            return Err(format!("{label} exceeds the 16 MiB import limit"));
+        }
+        let bytes = fs::read(path).map_err(|error| format!("cannot read {label}: {error}"))?;
+        if bytes.len() as u64 > MAX_XSLT_XML_BYTES {
+            return Err(format!("{label} exceeds the 16 MiB import limit"));
+        }
+        if xslt_xml_contains_doctype(&bytes) {
+            return Err(format!(
+                "{label} must not contain a document type declaration"
+            ));
+        }
+        Ok(())
+    }
+
+    let input_path = fs::canonicalize(input_path)
+        .map_err(|error| format!("cannot resolve XML input: {error}"))?;
+    let stylesheet_path = fs::canonicalize(stylesheet_path)
+        .map_err(|error| format!("cannot resolve XSLT stylesheet: {error}"))?;
+    validate_xml_source(&input_path.to_string_lossy(), "XML input")?;
+    validate_xml_source(&stylesheet_path.to_string_lossy(), "XSLT stylesheet")?;
+    let transformed_path =
+        env::temp_dir().join(format!("arch-notebook-xslt-import-{}.anx", Uuid::new_v4()));
+    let output = match Command::new("xsltproc")
+        .args(["--nonet", "--nowrite", "--novalid"])
+        .arg(stylesheet_path)
+        .arg(input_path)
+        .output()
+    {
+        Ok(output) => output,
+        Err(error) => return Err(format!("cannot start xsltproc: {error}")),
+    };
+    if !output.status.success() {
+        let detail = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("XSLT transformation failed: {}", detail.trim()));
+    }
+    if output.stdout.len() as u64 > MAX_XSLT_XML_BYTES {
+        return Err("transformed ANX exceeds the 16 MiB import limit".into());
+    }
+    #[cfg(unix)]
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let mut transformed_file = options
+        .open(&transformed_path)
+        .map_err(|error| format!("cannot create temporary transformed ANX: {error}"))?;
+    if let Err(error) = transformed_file.write_all(&output.stdout) {
+        let _ = fs::remove_file(&transformed_path);
+        return Err(format!("cannot stage transformed ANX: {error}"));
+    }
+    drop(transformed_file);
+    Ok(transformed_path)
+}
+
 fn import_xml_with_xslt_cli(
     case_path: &str,
     input_path: &str,
     stylesheet_path: &str,
     json_output: bool,
 ) -> Result<(), String> {
-    const MAX_XML_BYTES: u64 = 16 * 1024 * 1024;
-    fn contains_doctype(bytes: &[u8]) -> bool {
-        const TOKEN: &[u8] = b"<!DOCTYPE";
-        bytes
-            .windows(TOKEN.len())
-            .any(|window| window.eq_ignore_ascii_case(TOKEN))
-            || bytes.windows(TOKEN.len() * 2).any(|window| {
-                TOKEN
-                    .iter()
-                    .enumerate()
-                    .all(|(index, byte)| window[index * 2] == *byte && window[index * 2 + 1] == 0)
-                    || TOKEN.iter().enumerate().all(|(index, byte)| {
-                        window[index * 2] == 0 && window[index * 2 + 1] == *byte
-                    })
-            })
-    }
-    fn read_bounded_xml(path: &str, label: &str) -> Result<Vec<u8>, String> {
-        let metadata =
-            fs::metadata(path).map_err(|error| format!("cannot inspect {label}: {error}"))?;
-        if metadata.len() > MAX_XML_BYTES {
-            return Err(format!("{label} exceeds the 16 MiB import limit"));
-        }
-        let bytes = fs::read(path).map_err(|error| format!("cannot read {label}: {error}"))?;
-        if bytes.len() as u64 > MAX_XML_BYTES {
-            return Err(format!("{label} exceeds the 16 MiB import limit"));
-        }
-        if contains_doctype(&bytes) {
-            return Err(format!(
-                "{label} must not contain a document type declaration"
-            ));
-        }
-        Ok(bytes)
-    }
-
-    let _input = read_bounded_xml(input_path, "XML input")?;
-    let _stylesheet = read_bounded_xml(stylesheet_path, "XSLT stylesheet")?;
-    let transformed_path =
-        env::temp_dir().join(format!("arch-notebook-xslt-import-{}.anx", Uuid::new_v4()));
+    let transformed_path = transform_xml_with_xslt(input_path, stylesheet_path)?;
     let result = (|| {
-        let output = Command::new("xsltproc")
-            .args(["--nonet", "--nowrite", "--novalid"])
-            .arg(stylesheet_path)
-            .arg(input_path)
-            .output()
-            .map_err(|error| format!("cannot start xsltproc: {error}"))?;
-        if !output.status.success() {
-            let detail = String::from_utf8_lossy(&output.stderr);
-            return Err(format!("XSLT transformation failed: {}", detail.trim()));
-        }
-        if output.stdout.len() as u64 > MAX_XML_BYTES {
-            return Err("transformed ANX exceeds the 16 MiB import limit".into());
-        }
-        fs::write(&transformed_path, &output.stdout)
-            .map_err(|error| format!("cannot stage transformed ANX: {error}"))?;
         import_interchange_cli(
             case_path,
             &transformed_path.to_string_lossy(),
@@ -51352,6 +51494,39 @@ mod tests {
         assert!(!payload.csv_bytes.is_empty());
         assert!(String::from_utf8_lossy(&payload.csv_bytes).contains("Avery Rowan"));
         std::fs::remove_dir_all(&work_dir).expect("remove isolated ANX worker directory");
+    }
+
+    #[test]
+    fn xml_xslt_import_worker_reports_source_validation_errors_with_target_chart() {
+        let target_chart_id = Uuid::new_v4();
+        let work_dir =
+            std::env::temp_dir().join(format!("arch-notebook-xslt-worker-{}", Uuid::new_v4()));
+        std::fs::create_dir(&work_dir).expect("create isolated XSLT worker directory");
+        let input_path = work_dir.join("doctype.xml");
+        let stylesheet_path = work_dir.join("trusted.xsl");
+        std::fs::write(&input_path, b"<!DOCTYPE input><input />")
+            .expect("write DTD rejection fixture");
+        std::fs::write(
+            &stylesheet_path,
+            b"<xsl:stylesheet xmlns:xsl='http://www.w3.org/1999/XSL/Transform' version='1.0' />",
+        )
+        .expect("write stylesheet fixture");
+        let receiver = super::spawn_xml_xslt_import_worker(
+            input_path.to_string_lossy().into_owned(),
+            stylesheet_path.to_string_lossy().into_owned(),
+            target_chart_id,
+        )
+        .expect("background XML/XSLT worker starts");
+        let (received_chart_id, result) = receiver
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("background worker returns a result");
+        assert_eq!(received_chart_id, target_chart_id);
+        let error = match result {
+            Err(error) => error,
+            Ok(_) => panic!("DTD source was unexpectedly accepted"),
+        };
+        assert!(error.contains("document type declaration"));
+        std::fs::remove_dir_all(&work_dir).expect("remove isolated XSLT worker directory");
     }
 
     #[test]
