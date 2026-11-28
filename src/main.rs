@@ -49077,6 +49077,54 @@ mod tests {
     }
 
     #[test]
+    fn quick_open_case_commands_reach_unsaved_change_confirmation() {
+        let case: CaseFile =
+            serde_json::from_str(include_str!("../fixtures/chart/correctness.case.json"))
+                .expect("correctness fixture is a valid case");
+        let mut app = App::automation_context(case, "/tmp/quick-open-case-actions.case.json");
+        app.case.description = "Unsaved edit".into();
+        app.command_palette_open = true;
+
+        let context = egui::Context::default();
+        let mut frame = eframe::Frame::_new_kittest();
+        let mut time = 0.0;
+        let open_palette =
+            render_headless_app_frame(&context, &mut app, &mut frame, time, Vec::new());
+        assert!(find_headless_text_point(&open_palette, "Open case").is_some());
+        assert!(find_headless_text_point(&open_palette, "New case").is_some());
+        let _after_open = click_headless_visible_text(
+            &context,
+            &mut app,
+            &mut frame,
+            &mut time,
+            &open_palette,
+            "Open case",
+        );
+        assert!(matches!(
+            app.pending_case_action,
+            Some(super::PendingCaseAction::Open)
+        ));
+
+        app.pending_case_action = None;
+        app.command_palette_open = true;
+        time += 1.0 / 60.0;
+        let new_palette =
+            render_headless_app_frame(&context, &mut app, &mut frame, time, Vec::new());
+        let _after_new = click_headless_visible_text(
+            &context,
+            &mut app,
+            &mut frame,
+            &mut time,
+            &new_palette,
+            "New case",
+        );
+        assert!(matches!(
+            app.pending_case_action,
+            Some(super::PendingCaseAction::New)
+        ));
+    }
+
+    #[test]
     fn automation_workspace_hides_duplicate_navigation_and_file_exchange_fields() {
         let mut case: CaseFile =
             serde_json::from_str(include_str!("../fixtures/chart/correctness.case.json"))
