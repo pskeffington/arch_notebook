@@ -26642,17 +26642,23 @@ impl eframe::App for App {
                         }
                         for (rank, (entity, count)) in degrees.iter().take(5).enumerate() {
                             ui.horizontal(|ui| {
-                                let label = format!(
-                                    "{:02}  {} · {}",
-                                    rank + 1,
-                                    entity.name,
-                                    entity.kind
-                                );
+                                let label = format!("{:02}  {}", rank + 1, entity.name);
+                                let label_width = (ui.available_width() - 112.0).max(48.0);
+                                let label_response = ui
+                                    .add_sized(
+                                        egui::vec2(
+                                            label_width,
+                                            ui.spacing().interact_size.y,
+                                        ),
+                                        egui::Button::new(label.clone())
+                                            .selected(
+                                                self.selected_entities.contains(&entity.id),
+                                            )
+                                            .truncate(),
+                                    )
+                                    .on_hover_text(&label);
                                 let mut map_contacts = false;
-                                if ui
-                                    .selectable_label(self.selected_entities.contains(&entity.id), label)
-                                    .clicked()
-                                {
+                                if label_response.clicked() {
                                     self.selected_entities.clear();
                                     self.selected_entities.insert(entity.id);
                                     self.selected = Some(entity.id);
@@ -26666,9 +26672,14 @@ impl eframe::App for App {
                                     egui::Layout::right_to_left(egui::Align::Center),
                                     |ui| {
                                         ui.label(count.to_string());
-                                        if ui.small_button(format!("Map contacts · {}", entity.name)).on_hover_text(
-                                            "Build nearest-hop contact groups and proxy summaries from this entity, then open the chart topology view.",
-                                        ).clicked() {
+                                        if ui
+                                            .small_button("Map contacts")
+                                            .on_hover_text(format!(
+                                                "Build nearest-hop contact groups and proxy summaries from {}, then open the chart topology view.",
+                                                entity.name
+                                            ))
+                                            .clicked()
+                                        {
                                             map_contacts = true;
                                         }
                                     },
@@ -46543,6 +46554,9 @@ mod tests {
         let mut case: CaseFile =
             serde_json::from_str(include_str!("../fixtures/chart/correctness.case.json"))
                 .expect("checked-in chart fixture is valid");
+        for (index, entity) in case.entities.iter_mut().enumerate() {
+            entity.name = format!("Long analyst entity name {index:02} with trailing details");
+        }
         let long_label = "VERY LONG RELATIONSHIP CATEGORY FOR CONTACT CLASSIFICATION";
         for link in &mut case.links {
             link.label = long_label.to_owned();
@@ -46563,10 +46577,17 @@ mod tests {
             analysis_filter_display(long_label, analysis_filter_visible_chars(320.0));
         let selected_value_rect = find_headless_text_rect(&shapes, &selected_value)
             .expect("long relationship value uses a bounded display label");
+        assert!(find_headless_text_rect(&shapes, "Map contacts").is_some());
+        let ranked_entity_label = collect_headless_texts(&shapes)
+            .into_iter()
+            .find(|text| text.starts_with("01  Long analyst entity name"))
+            .expect("long ranked entity label is rendered");
+        assert!(headless_text_fits_clip(&shapes, &ranked_entity_label));
 
         assert!(rank_label.min.y > heading.max.y);
         assert!(relationship_label.min.y > rank_label.max.y);
         assert!(selected_value_rect.min.y > relationship_label.max.y);
+        assert!(headless_text_fits_clip(&shapes, "Map contacts"));
         assert!(headless_text_fits_clip(&shapes, &selected_value));
         assert!(
             collect_headless_texts(&shapes)
@@ -46618,6 +46639,16 @@ mod tests {
             narrow_unicode_label,
             analysis_filter_visible_chars(narrow_app.analysis_pane_width),
         );
+        assert!(find_headless_text_rect(&narrow_shapes, "Map contacts").is_some());
+        assert!(headless_text_fits_clip(&narrow_shapes, "Map contacts"));
+        let narrow_ranked_entity_label = collect_headless_texts(&narrow_shapes)
+            .into_iter()
+            .find(|text| text.starts_with("01  Long analyst entity name"))
+            .expect("long ranked entity label is rendered in a narrow pane");
+        assert!(headless_text_fits_clip(
+            &narrow_shapes,
+            &narrow_ranked_entity_label
+        ));
         assert!(find_headless_text_rect(&narrow_shapes, &narrow_selected_value).is_some());
         assert!(headless_text_fits_clip(
             &narrow_shapes,
@@ -46724,16 +46755,8 @@ mod tests {
         let mut time = 0.0;
 
         let initial = render_headless_app_frame(&context, &mut app, &mut frame, time, Vec::new());
-        let ranked_origin = entity_ids[4];
-        let ranked_origin_name = app
-            .case
-            .entities
-            .iter()
-            .find(|entity| entity.id == ranked_origin)
-            .expect("ranked origin exists")
-            .name
-            .clone();
-        let map_action_label = format!("Map contacts · {ranked_origin_name}");
+        let ranked_origin = entity_ids[3];
+        let map_action_label = "Map contacts";
         assert!(find_headless_text_point(&initial, &map_action_label).is_some());
         let map_action = find_headless_text_rect(&initial, &map_action_label)
             .expect("ranked entity map action is visible")

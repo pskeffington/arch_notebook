@@ -879,3 +879,25 @@ A read-only Poppler diagnostic succeeded on all 13 staged PDFs. It emitted 5,579
 ## Current installed-release Clinton corpus QA — 2026-11-28
 
 The current per-user Rust release (SHA-256 `8381bd57…4b62ed27`) passes the primary Clinton case's read-only SQL preflight and saved-run replay: 6,173 records, zero skipped, zero deltas. Its default-redacted packet covers all 2,813 entities, keeps every label inside the SVG viewport, and preserves private output modes. PDF extraction completeness, Qwen analysis, and human review are separate and remain unestablished. Full source hashes, output digest, command, and counts: [CLINTON-CORPUS-QA-04](evidence/sql-automation/CLINTON-CORPUS-QA-04-installed-release-current.md).
+
+
+## Recent political email and messaging-record case acquisition — 2026-11-28
+
+A separate local QA package now contains ten official NARA case-letter PDFs (21 pages) about email, messaging, and federal-record retention, with one 2020 comparator. It includes active allegations and one resolved negative/control case; case status is stated as listed by NARA, not as a criminal conclusion. PDF inventory, text-layer diagnostic, and checksums pass. The USDA index/PDF ID mismatch is flagged. No PDFs or extracted full text entered Git.
+
+| Gate | Result | Evidence |
+| --- | --- | --- |
+| Acquisition, `pdfinfo`, text-layer diagnostic, SHA-256 | PASS | [political email/messaging acquisition QA](evidence/political-email-messaging-case-acquisition-20261128.md) |
+| TRANS transcription, Eagle-Eye evidence, Qwen analysis | BLOCKED / NOT RUN | Accepted general-purpose PDF processing executables are unavailable; local Ollama endpoint is inaccessible. |
+| Arch Notebook raw-PDF ingestion | NOT RUN | Current product does not ingest raw PDFs. |
+
+Source PDFs remain local under `/home/sysadmin/TRANSCRIBE-QA/political-email-cases-2026-11-28/recent-record-cases/`; they are not committed or copied to the archive share. The Clinton SQLite QA remains a separate workflow.
+
+
+## Political records ingestion and Arch Notebook presentation QA — 2026-11-28
+
+The prior acquisition status is superseded: TRANS processing, constrained Qwen inference, and a candidate-only Arch Notebook handoff have now been exercised over ten public NARA case letters. All ten TRANS candidates attached to source entities with human review required; the notebook exported ten isolates and zero relationships. Qwen structure and source quote checks admitted five candidate outputs for presentation, held out four quote-mismatch outputs and one truncated response, and did not import model-suggested links. A fresh Qwen rerun is blocked by local Ollama endpoint unavailability. This does not validate the Clinton corpus path, IBM interoperability, semantic accuracy, or human approval. Full evidence and limits: [political records ingestion and notebook QA](evidence/political-records-qa-20261128.md).
+
+## Most connected contact-map action layout — 2026-11-28
+
+The native 1440×900 chart review showed the ranked `Map contacts · <name>` control clipping against the analysis-pane edge and obscuring long entity labels. The action is now compact, labels reserve space for the action/count, and full entity labels remain available on hover. Full Rust suite (81 passed, 0 failed, 3 ignored), locked offline check/debug/release builds, formatting, isolated launcher/icon/MIME acceptance, current-user installation, and installed-release SQL automation harness pass. Before/after screenshots show the default-width native render; the 240 px minimum-width check is headless and passes. Pointer interaction and the narrow-width native screenshot remain open. See [ANALYSIS-MAP-CONTACTS-01](evidence/vector-ui/ANALYSIS-MAP-CONTACTS-01-20261128.md). This does not establish IBM visual or schema compatibility.
