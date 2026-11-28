@@ -3344,6 +3344,7 @@ enum QuickCommand {
     Sources,
     SearchChart,
     NewChart,
+    LoadSavedSqlSearch(Uuid),
 }
 
 fn quick_command_matches(query: &str, label: &str, keywords: &str) -> bool {
@@ -31123,7 +31124,7 @@ impl eframe::App for App {
             }
         }
         if self.command_palette_open {
-            let commands = [
+            let mut commands = vec![
                 ("Chart", "canvas network", QuickCommand::Chart),
                 (
                     "Open case",
@@ -31168,7 +31169,17 @@ impl eframe::App for App {
                     QuickCommand::SearchChart,
                 ),
                 ("New chart", "create tab workspace", QuickCommand::NewChart),
-            ];
+            ]
+            .into_iter()
+            .map(|(label, keywords, command)| (label.to_owned(), keywords.to_owned(), command))
+            .collect::<Vec<_>>();
+            commands.extend(self.case.saved_sql_searches.iter().map(|search| {
+                (
+                    format!("SQL search · {}", search.name),
+                    format!("saved query sqlite {}", search.name),
+                    QuickCommand::LoadSavedSqlSearch(search.id),
+                )
+            }));
             let matches: Vec<_> = commands
                 .iter()
                 .filter(|(label, keywords, _)| {
@@ -31202,7 +31213,7 @@ impl eframe::App for App {
                     } else {
                         for (index, (label, keywords, command)) in matches.iter().enumerate() {
                             let response = ui
-                                .selectable_label(false, *label)
+                                .selectable_label(false, label.as_str())
                                 .on_hover_text(format!("Search terms: {keywords}"));
                             if response.clicked() {
                                 selected_command = Some(*command);
@@ -31265,6 +31276,13 @@ impl eframe::App for App {
                             });
                         }
                         QuickCommand::NewChart => self.create_chart(false),
+                        QuickCommand::LoadSavedSqlSearch(id) => {
+                            self.page = WorkspacePage::Data;
+                            self.show_timeline = false;
+                            self.data_mode = DataMode::SqlRegressions;
+                            self.sql_saved_search_id = Some(id);
+                            self.load_sql_review_search();
+                        }
                     }
                 }
             }
@@ -51591,6 +51609,62 @@ mod tests {
             app.pending_case_action,
             Some(super::PendingCaseAction::New)
         ));
+    }
+
+    #[test]
+    fn quick_open_loads_named_sql_search_without_running_it() {
+        let mut case: CaseFile =
+            serde_json::from_str(include_str!("../fixtures/chart/correctness.case.json"))
+                .expect("correctness fixture is a valid case");
+        let search_id = Uuid::from_u128(7001);
+        case.saved_sql_searches.push(super::SavedSqlSearch {
+            id: search_id,
+            name: "Counterparty lookup".into(),
+            database_path: "contacts.sqlite".into(),
+            series: "contact review".into(),
+            query: "SELECT source, target FROM contacts WHERE status = :status".into(),
+            parameters: vec![("status".into(), "text:active".into())],
+            seed_parameter_name: None,
+        });
+        let mut app = App::automation_context(case, "/tmp/quick-sql-search.case.json");
+        app.page = super::WorkspacePage::Chart;
+        app.command_palette_open = true;
+        assert!(super::quick_command_matches(
+            "Counterparty",
+            "SQL search · Counterparty lookup",
+            "saved query sqlite Counterparty lookup"
+        ));
+
+        let context = egui::Context::default();
+        let mut frame = eframe::Frame::_new_kittest();
+        let mut time = 0.0;
+        let _first_palette =
+            render_headless_app_frame(&context, &mut app, &mut frame, time, Vec::new());
+        time += 1.0 / 60.0;
+        let palette = render_headless_app_frame(&context, &mut app, &mut frame, time, Vec::new());
+        assert!(find_headless_text_point(&palette, "GO TO").is_some());
+        let _loaded = click_headless_visible_text(
+            &context,
+            &mut app,
+            &mut frame,
+            &mut time,
+            &palette,
+            "Counterparty lookup",
+        );
+
+        assert!(!app.command_palette_open);
+        assert!(matches!(app.page, super::WorkspacePage::Data));
+        assert!(matches!(app.data_mode, super::DataMode::SqlRegressions));
+        assert_eq!(app.sql_saved_search_id, Some(search_id));
+        assert_eq!(app.sql_path, "contacts.sqlite");
+        assert_eq!(app.sql_series, "contact review");
+        assert_eq!(
+            app.sql_query,
+            "SELECT source, target FROM contacts WHERE status = :status"
+        );
+        assert_eq!(app.sql_parameter_text, "status=text:active");
+        assert!(app.case.snapshots.is_empty());
+        assert!(app.sql_validation_preview.is_none());
     }
 
     #[test]

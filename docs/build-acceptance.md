@@ -17,6 +17,10 @@ SQL Review now stores named query definitions in the active case: database path,
 
 Exact source-level commands and acceptance limits: [SQL-SEARCH-CATALOG-01](evidence/sql-automation/SQL-SEARCH-CATALOG-01-20261128.md).
 
+## Saved SQL search Quick Open — 2026-11-28
+
+Named case-local SQL searches now appear in Quick Open and can be opened by typing their name. Selecting one opens SQL Review and restores its path, series, query, and parameters without query execution or snapshot creation. The `quick_open_loads_named_sql_search_without_running_it` headless interaction regression passes. After this follow-up, the full Rust suite passes (97 passed, 0 failed, 3 ignored), and locked offline workspace check, formatting, and diff validation pass. Full-suite, release-binary, installed-runtime, and Clinton rerun limits remain recorded in [SQL-SEARCH-CATALOG-01](evidence/sql-automation/SQL-SEARCH-CATALOG-01-20261128.md); this follow-up changes source after that release attempt and has not been installed.
+
 ## Proximity-map encoding legend — 2026-11-28
 
 The sampled topology map now explains its node colors and size, proxy ring, direction arrow, selected/hovered tie styling, and relationship-count line thickness with a compact wrapped legend. Headless production-panel checks pass on the synthetic UI and retained Clinton case (2,813 entities, 6,173 records, 48 sampled groups, 47 sampled contacts). The full Rust suite passes (94 passed, 0 failed, 3 ignored); the locked offline release built and was installed with synchronized launcher and icon assets (SHA-256 `b9049120…f0fa80cd`). Native screenshot/pointer review remains blocked because this session cannot access the X11 or Wayland display. Details: [PROXIMITY-MAP-LEGEND-01](evidence/vector-ui/PROXIMITY-MAP-LEGEND-01-20261128.md).
