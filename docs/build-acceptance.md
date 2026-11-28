@@ -892,3 +892,8 @@ A separate local QA package now contains ten official NARA case-letter PDFs (21 
 | Arch Notebook raw-PDF ingestion | NOT RUN | Current product does not ingest raw PDFs. |
 
 Source PDFs remain local under `/home/sysadmin/TRANSCRIBE-QA/political-email-cases-2026-11-28/recent-record-cases/`; they are not committed or copied to the archive share. The Clinton SQLite QA remains a separate workflow.
+
+
+## Political records ingestion and Arch Notebook presentation QA — 2026-11-28
+
+The prior acquisition status is superseded: TRANS processing, constrained Qwen inference, and a candidate-only Arch Notebook handoff have now been exercised over ten public NARA case letters. All ten TRANS candidates attached to source entities with human review required; the notebook exported ten isolates and zero relationships. Qwen structure and source quote checks admitted five candidate outputs for presentation, held out four quote-mismatch outputs and one truncated response, and did not import model-suggested links. A fresh Qwen rerun is blocked by local Ollama endpoint unavailability. This does not validate the Clinton corpus path, IBM interoperability, semantic accuracy, or human approval. Full evidence and limits: [political records ingestion and notebook QA](evidence/political-records-qa-20261128.md).
