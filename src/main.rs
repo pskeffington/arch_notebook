@@ -26472,8 +26472,6 @@ impl eframe::App for App {
                                         ) else {
                                             continue;
                                         };
-                                        let is_selected = self.selected_proximity_interaction
-                                            == Some((interaction.first_group, interaction.second_group));
                                         if !proximity_map_edge_may_intersect_viewport(
                                             first,
                                             second,
@@ -26494,18 +26492,8 @@ impl eframe::App for App {
                                                 edge_width,
                                                 egui::Color32::from_rgb(66, 111, 129),
                                             );
-                                        let selected_stroke = egui::Stroke::new(
-                                            edge_width + 2.0,
-                                            PROXIMITY_MAP_SELECTED_EDGE_COLOR,
-                                        );
                                         for segment in route.windows(2) {
                                             painter.line_segment([segment[0], segment[1]], base_stroke);
-                                            if is_selected {
-                                                painter.line_segment(
-                                                    [segment[0], segment[1]],
-                                                    selected_stroke,
-                                                );
-                                            }
                                         }
                                         let route_length = proximity_map_route_length(&route);
                                         if route_length > f32::EPSILON {
@@ -26563,6 +26551,45 @@ impl eframe::App for App {
                                                 nearest_route =
                                                     Some((distance, *interaction_index));
                                             }
+                                        }
+                                    }
+                                    if let Some((first_group, second_group)) =
+                                        self.selected_proximity_interaction
+                                        && let Some(interaction_index) =
+                                            analysis.map_interaction_indices.iter().copied().find(
+                                                |interaction_index| {
+                                                    let interaction =
+                                                        &analysis.interactions[*interaction_index];
+                                                    (interaction.first_group, interaction.second_group)
+                                                        == (first_group, second_group)
+                                                },
+                                            )
+                                        && let (Some(first), Some(second)) = (
+                                            positions.get(&first_group).copied(),
+                                            positions.get(&second_group).copied(),
+                                        )
+                                        && proximity_map_edge_may_intersect_viewport(
+                                            first,
+                                            second,
+                                            interaction_index,
+                                            route_viewport,
+                                        )
+                                    {
+                                        let route = proximity_map_edge_route(
+                                            first,
+                                            second,
+                                            interaction_index,
+                                        );
+                                        let interaction = &analysis.interactions[interaction_index];
+                                        let edge_width = (1.0_f32
+                                            + (interaction.relationship_record_count as f32).log2())
+                                        .clamp(1.0, 4.0);
+                                        let selected_stroke = egui::Stroke::new(
+                                            edge_width + 2.0,
+                                            PROXIMITY_MAP_SELECTED_EDGE_COLOR,
+                                        );
+                                        for segment in route.windows(2) {
+                                            painter.line_segment([segment[0], segment[1]], selected_stroke);
                                         }
                                     }
                                     let mut node_clicked = false;
@@ -45504,6 +45531,40 @@ mod tests {
             .sum()
     }
 
+    fn proximity_map_line_stroke_positions(
+        shapes: &[egui::epaint::ClippedShape],
+        target: egui::Color32,
+    ) -> Vec<usize> {
+        fn collect(
+            shape: &egui::epaint::Shape,
+            target: egui::Color32,
+            order: &mut usize,
+            positions: &mut Vec<usize>,
+        ) {
+            match shape {
+                egui::epaint::Shape::LineSegment { stroke, .. } => {
+                    if stroke.color == target {
+                        positions.push(*order);
+                    }
+                    *order += 1;
+                }
+                egui::epaint::Shape::Vec(children) => {
+                    for child in children {
+                        collect(child, target, order, positions);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let mut order = 0;
+        let mut positions = Vec::new();
+        for clipped in shapes {
+            collect(&clipped.shape, target, &mut order, &mut positions);
+        }
+        positions
+    }
+
     fn headless_text_clip_bounds(
         shapes: &[egui::epaint::ClippedShape],
         target: &str,
@@ -46104,6 +46165,18 @@ mod tests {
         assert!(
             count_proximity_selection_strokes(&selected_map_view, false) >= 12,
             "selected contact should highlight every segment of its routed polyline"
+        );
+        let base_route_strokes = proximity_map_line_stroke_positions(
+            &selected_map_view,
+            egui::Color32::from_rgb(66, 111, 129),
+        );
+        let selected_route_strokes = proximity_map_line_stroke_positions(
+            &selected_map_view,
+            super::PROXIMITY_MAP_SELECTED_EDGE_COLOR,
+        );
+        assert!(
+            base_route_strokes.iter().max() < selected_route_strokes.iter().min(),
+            "the selected contact should be painted above crossing base routes"
         );
         let hop_zero_center = find_headless_text_anchor_center(&selected_map_view, "HOP 0")
             .expect("sampled map's first hop label is visible");
