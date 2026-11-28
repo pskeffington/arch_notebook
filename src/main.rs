@@ -2995,6 +2995,8 @@ struct App {
     case_disk_signature: Option<(u64, SystemTime)>,
     case_disk_check_at: Instant,
     external_case_update: bool,
+    external_scheduled_run_id: Option<Uuid>,
+    pending_external_run_review: Option<Uuid>,
     pending_case_action: Option<PendingCaseAction>,
     pending_chart_delete: Option<Uuid>,
     command_palette_open: bool,
@@ -3701,6 +3703,8 @@ impl Default for App {
             case_disk_signature,
             case_disk_check_at: Instant::now(),
             external_case_update: false,
+            external_scheduled_run_id: None,
+            pending_external_run_review: None,
             pending_case_action: None,
             pending_chart_delete: None,
             command_palette_open: false,
@@ -5427,6 +5431,8 @@ impl App {
             case_disk_signature,
             case_disk_check_at: Instant::now(),
             external_case_update: false,
+            external_scheduled_run_id: None,
+            pending_external_run_review: None,
             pending_case_action: None,
             pending_chart_delete: None,
             command_palette_open: false,
@@ -5554,6 +5560,23 @@ impl App {
                 && self.disk_case_json.as_deref() != Some(contents.as_str())
             {
                 self.external_case_update = true;
+                self.external_scheduled_run_id = serde_json::from_str::<CaseFile>(&contents)
+                    .ok()
+                    .and_then(|disk_case| {
+                        disk_case
+                            .automation_runs
+                            .iter()
+                            .rev()
+                            .find(|run| {
+                                run.trigger.eq_ignore_ascii_case("scheduled")
+                                    && !self
+                                        .case
+                                        .automation_runs
+                                        .iter()
+                                        .any(|current| current.id == run.id)
+                            })
+                            .map(|run| run.id)
+                    });
             }
             self.case_disk_signature = Some(signature);
         }
@@ -5563,6 +5586,32 @@ impl App {
         self.case_disk_signature = case_disk_signature(Path::new(self.case_path.trim()));
         self.case_disk_check_at = Instant::now();
         self.external_case_update = false;
+        self.external_scheduled_run_id = None;
+    }
+
+    fn request_external_case_reload(&mut self) {
+        self.pending_external_run_review = self.external_scheduled_run_id;
+        self.request_case_action(PendingCaseAction::Open);
+    }
+
+    fn focus_reloaded_external_run(&mut self) -> Option<Uuid> {
+        let Some(run_id) = self.pending_external_run_review.take() else {
+            return None;
+        };
+        if self.case.automation_runs.iter().any(|run| run.id == run_id) {
+            self.page = WorkspacePage::Data;
+            self.show_timeline = false;
+            self.data_mode = DataMode::Automation;
+            self.automation_run_filter = run_id.to_string();
+            self.automation_run_trigger_filter = "all".into();
+            self.automation_failed_runs_only = false;
+            self.automation_runs_needing_review = false;
+            self.automation_runs_with_unreviewed_regressions = false;
+            self.status = format!("SCHEDULED SQL RUN LOADED · {run_id}");
+            Some(run_id)
+        } else {
+            None
+        }
     }
 
     fn install_automation_schedule(&mut self) {
@@ -5891,6 +5940,7 @@ impl App {
                 self.case_path_input = requested_path;
                 self.disk_case_json = Some(disk_case_json);
                 self.note_case_disk_synchronized();
+                let focused_external_run = self.focus_reloaded_external_run();
                 self.saved_case_json = self.current_case_json();
                 self.sql_snapshot_source = None;
                 self.sql_snapshot_index = None;
@@ -5917,7 +5967,9 @@ impl App {
                 self.clear_path_result();
                 self.duplicate_candidates.clear();
                 self.merge_candidate = None;
-                self.status = if cleared_one_run_overrides {
+                self.status = if let Some(run_id) = focused_external_run {
+                    format!("SCHEDULED SQL RUN LOADED · {run_id}")
+                } else if cleared_one_run_overrides {
                     "CASE LOADED · ONE-RUN SQL OVERRIDES CLEARED".into()
                 } else {
                     "CASE LOADED".into()
@@ -21048,7 +21100,7 @@ impl eframe::App for App {
                                 .clicked()
                             {
                                 self.case_path_input = self.case_path.clone();
-                                self.request_case_action(PendingCaseAction::Open);
+                                self.request_external_case_reload();
                             }
                             if ui.button("New case").clicked() { self.request_case_action(PendingCaseAction::New); }
                             ui.label(egui::RichText::new("LOCAL WORKSPACE  ·  UNCLASSIFIED").small().color(muted));
@@ -31629,6 +31681,7 @@ impl eframe::App for App {
                         }
                         if ui.button("Cancel").clicked() {
                             self.pending_case_action = None;
+                            self.pending_external_run_review = None;
                         }
                     });
                 });
@@ -53140,7 +53193,20 @@ mod tests {
         let mut externally_updated: CaseFile =
             serde_json::from_str(include_str!("../fixtures/chart/correctness.case.json"))
                 .expect("updated correctness fixture parses");
-        externally_updated.title = "Scheduled case update".into();
+        let run_id = Uuid::new_v4();
+        externally_updated.automation_runs.push(
+            serde_json::from_value(serde_json::json!({
+                "id": run_id,
+                "job_id": Uuid::new_v4(),
+                "job_name": "nightly Clinton review",
+                "started_at": "2026-11-28T00:00:00Z",
+                "finished_at": "2026-11-28T00:00:01Z",
+                "success": true,
+                "message": "captured",
+                "trigger": "scheduled"
+            }))
+            .expect("scheduled run fixture parses"),
+        );
         let updated = serde_json::to_string(&externally_updated).expect("serialize updated case");
         std::fs::write(&case_path, updated).expect("replace case with external update");
         app.case_disk_check_at = std::time::Instant::now() - std::time::Duration::from_secs(2);
@@ -53148,6 +53214,7 @@ mod tests {
         app.poll_external_case_update();
 
         assert!(app.external_case_update);
+        assert_eq!(app.external_scheduled_run_id, Some(run_id));
         assert_eq!(app.case.title, original_title);
         assert_eq!(app.disk_case_json.as_deref(), Some(baseline.as_str()));
 
@@ -53155,6 +53222,20 @@ mod tests {
         let mut frame = eframe::Frame::_new_kittest();
         let shapes = render_headless_app_frame(&context, &mut app, &mut frame, 0.0, Vec::new());
         assert!(find_headless_text_point(&shapes, "Reload updated case").is_some());
+
+        app.request_external_case_reload();
+        assert!(app.page == super::WorkspacePage::Data);
+        assert!(app.data_mode == super::DataMode::Automation);
+        assert_eq!(app.automation_run_filter, run_id.to_string());
+        assert_eq!(app.automation_run_trigger_filter, "all");
+        assert!(
+            app.status.contains("SCHEDULED SQL RUN LOADED"),
+            "unexpected load status: {}",
+            app.status
+        );
+
+        let shapes = render_headless_app_frame(&context, &mut app, &mut frame, 0.0, Vec::new());
+        assert!(find_headless_text_point(&shapes, "Reload case").is_some());
         drop(app);
         std::fs::remove_dir_all(root).expect("remove case update fixture directory");
     }

@@ -1,19 +1,20 @@
 # Local build acceptance record
 
-## External scheduled-case update indicator — 2026-11-28
+## External scheduled SQL run review navigation — 2026-11-28
 
-The desktop now checks the active case file's size and modification time once per second. When it detects a changed signature, it reads the file and compares contents with the last synchronized baseline; a real external update changes the action to **Reload updated case**. It does not replace in-memory data automatically. Reload still uses the unsaved-change confirmation, and the atomic-save conflict guard prevents stale in-memory data from overwriting the external update.
+The desktop checks the active case file's size and modification time once per second. When it detects a changed signature, it reads the file, compares contents with the last synchronized baseline, and detects scheduled SQL run IDs that were not in the open case. It does not replace in-memory data automatically. Explicit reload preserves the unsaved-change confirmation; after a successful reload with a new scheduled run, the notebook opens Automation history filtered to that run UUID. The atomic-save conflict guard prevents stale in-memory data from overwriting the external update.
 
 | Gate | Result | Evidence |
 | --- | --- | --- |
-| External update detection and UI regression | PASS | `external_case_update_is_detected_and_offered_without_replacing_memory` replaces a case file externally, verifies the app flags it, confirms in-memory case data is unchanged, and checks the explicit reload action appears. |
+| External update detection and UI regression | PASS | `external_case_update_is_detected_and_offered_without_replacing_memory` verifies the reload action appears without replacing memory, then adds a scheduled run externally and confirms explicit reload opens Automation filtered to the exact new run. |
 | Existing unsaved-reload confirmation | PASS | `quick_case_actions_keep_the_unsaved_change_confirmation` continues to cover the discard-confirmation path. |
+| Focused external update and run routing test | PASS | `CARGO_TARGET_DIR=/tmp/arch-notebook-target cargo test --locked --offline external_case_update_is_detected_and_offered_without_replacing_memory`: 1 passed. |
 | Full Rust suite | PASS | `CARGO_TARGET_DIR=/tmp/arch-notebook-target cargo test --locked --offline`: 110 passed, 0 failed, 3 ignored. |
 | Locked workspace check | PASS | `CARGO_TARGET_DIR=/tmp/arch-notebook-target cargo check --locked --offline`: exit 0. |
 | Debug build | PASS | `CARGO_TARGET_DIR=/tmp/arch-notebook-target cargo build --locked --offline`: exit 0. |
-| Optimized release build | PASS | `CARGO_TARGET_DIR=/tmp/arch-notebook-target cargo build --release --locked --offline`: exit 0; binary SHA-256 recorded in the commit handoff. |
-| Formatting and diff validation | PASS | `cargo fmt --all -- --check` and `git diff --check`: exit 0. |
-| Primary Clinton corpus QA | PASS, bounded | Current candidate release passed query-only preflight and replay: 6,173 rows, zero skipped rows and deltas; redacted topology packet covers 2,813 entities with no clipped labels; source inputs unchanged. Aggregate report: [CLINTON-CORPUS-QA-b3f45d3](evidence/sql-automation/CLINTON-CORPUS-QA-b3f45d3-20261128.md). |
+| Optimized release build | BLOCKED | Two release-build sessions emitted no further output and lost their compiler process; the second retry remained unresolved after 60 seconds. Existing release binary remains from prior baseline and is not evidence for this source revision. |
+| Formatting and diff validation | PASS | `cargo fmt --all -- --check`: exit 0; `git diff --check`: exit 0. |
+| Primary Clinton corpus QA | PASS on prior baseline | Prior candidate `1e807f4` passed query-only preflight and replay: 6,173 rows, zero skipped rows and deltas; redacted topology packet covers 2,813 entities with no clipped labels; source inputs unchanged. Aggregate report: [CLINTON-CORPUS-QA-b3f45d3](evidence/sql-automation/CLINTON-CORPUS-QA-b3f45d3-20261128.md). The present UI navigation change does not modify SQL ingestion or graph data. |
 | Live systemd timer / SQL capture | NOT TESTED | This test covers external file replacement and safe UI signaling, not actual host timer dispatch. |
 
 ## Quick Open keyboard navigation and chart destinations — 2026-11-28
