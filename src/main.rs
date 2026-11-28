@@ -17134,14 +17134,17 @@ fn sql_seed_review_row_matches(fact: &ConnectionFact, filter: &str) -> bool {
     }
     let matches = |value: &str| value.to_lowercase().contains(&filter);
     [
+        fact.key.as_str(),
         fact.connection_id.as_str(),
         fact.source.as_str(),
         fact.source_type.as_str(),
         fact.source_entity_id.as_str(),
+        fact.source_representation.as_str(),
         fact.relationship.as_str(),
         fact.target.as_str(),
         fact.target_type.as_str(),
         fact.target_entity_id.as_str(),
+        fact.target_representation.as_str(),
         fact.date.as_str(),
         fact.source_reference.as_str(),
         fact.notes.as_str(),
@@ -46817,7 +46820,7 @@ mod tests {
             target_entity_id: format!("target-{id}"),
             source: "Seed Entity".into(),
             source_type: "PERSON".into(),
-            source_representation: String::new(),
+            source_representation: "Source representation".into(),
             target: format!("Candidate {id}"),
             target_type: "ORGANIZATION".into(),
             target_representation: String::new(),
@@ -46834,6 +46837,10 @@ mod tests {
         };
         let matching = make_fact("match", "shared office");
         let hidden = make_fact("hidden", "different office");
+        assert!(super::sql_seed_review_row_matches(
+            &matching,
+            "source representation"
+        ));
         let facts = [matching.clone(), hidden.clone()];
         let visible = facts
             .iter()
@@ -46940,6 +46947,7 @@ mod tests {
             "JOINED SOURCE DETAIL"
         ));
         assert!(super::sql_seed_review_row_matches(fact, "raw_payload"));
+        assert!(super::sql_seed_review_row_matches(fact, &fact.key));
         assert!(!super::sql_seed_review_row_matches(
             fact,
             "no such analyst value"
