@@ -1,0 +1,23 @@
+{
+  "binary_sha256": "8f9f1d2da5e5bfedd54eca4bbafeb13f355cb249161b9422f5952cbb0f864c62",
+  "checks": {
+    "case_mime_definition_matches_package": true,
+    "desktop_file_validation": "PASS",
+    "desktop_menu_and_shortcut_identical": true,
+    "desktop_path": "/tmp/arch-notebook-user-install-02kxzayn/home/Desktop/Arch Notebook.desktop",
+    "desktop_shortcut_mode": "0o755",
+    "installed_binary_matches_release": true,
+    "installer_exit_code": 0,
+    "png_icon_matches_package": true,
+    "sql_automation_helper_matches_package": true,
+    "svg_icon_matches_package": true,
+    "version_json": {
+      "name": "arch-notebook",
+      "schema_version": 1,
+      "version": "0.1.0"
+    }
+  },
+  "result": "PASS",
+  "schema_version": 1,
+  "suite": "arch_notebook_linux_user_install_acceptance"
+}
