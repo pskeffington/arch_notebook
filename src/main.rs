@@ -3080,6 +3080,7 @@ struct SqlUiRequest {
     seeded_query: bool,
     seed_page_offset: usize,
     selected_seed_facts: Vec<ConnectionFact>,
+    seed_review_filter: String,
     seed_review_token: Uuid,
 }
 
@@ -10139,6 +10140,14 @@ impl App {
             } else {
                 Vec::new()
             },
+            seed_review_filter: if preview_matches {
+                self.sql_validation_preview
+                    .as_ref()
+                    .map(|preview| preview.review_filter.clone())
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            },
             seed_review_token: if preview_matches {
                 self.sql_validation_preview
                     .as_ref()
@@ -10368,6 +10377,7 @@ impl App {
                             .into_iter()
                             .map(|fact| (fact.key.clone(), fact))
                             .collect();
+                        preview.review_filter = request.seed_review_filter;
                         preview.selected_connection_keys = preview
                             .connections
                             .iter()
@@ -46764,6 +46774,7 @@ mod tests {
             connections: vec![selected.clone(), unselected],
             selected_connection_keys: ["row-1".into()].into_iter().collect(),
             selected_connection_facts: [("row-1".into(), selected.clone())].into_iter().collect(),
+            review_filter: "candidate target".into(),
             query_result_token: Uuid::new_v4(),
             query_result_source_key: "accounts-search".into(),
             query_result_database_path: database_path.into(),
@@ -46778,6 +46789,7 @@ mod tests {
             super::SQL_SEED_REVIEW_PAGE_SIZE
         );
         assert_eq!(next_page_request.selected_seed_facts.len(), 1);
+        assert_eq!(next_page_request.seed_review_filter, "candidate target");
 
         app.add_selected_sql_query_results();
 
