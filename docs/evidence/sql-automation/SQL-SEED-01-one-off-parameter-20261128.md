@@ -2,7 +2,7 @@
 
 **Repository:** `arch_notebook`  
 **Branch:** `codex/ui-00-chart-nested-conditions`  
-**Source commit:** `1c186fdf49ff5e1a78c31e6532c56a4552e70ad7`
+**Source commit:** `5b73e245828bde7cb9f149522a229b9c4115d237`
 
 SQL Review binds a selected chart entity's SQL external ID to a one-off named parameter (default `seed_entity_id`). Seeded validation fetches 200 source rows per page through a read-only SQL wrapper, retaining the original query for display/provenance. Analysts can select rows across pages and add only those chart relationships. The review exposes up to 16 otherwise-unmapped SQL columns, capped at 256 bytes per cell and 4 KiB per row. These details stay transient and are omitted from case serialization. The action reuses entity IDs, applies SQL-owned properties, creates no snapshot or automation run, then invalidates the review. Saved job parameters remain unchanged. Queries should use deterministic `ORDER BY` clauses because pagination follows query row order.
 
