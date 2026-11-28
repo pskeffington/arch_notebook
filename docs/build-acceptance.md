@@ -78,11 +78,11 @@ The hop-group contact map now spaces columns and rows further apart, scales and 
 
 ## Selected topology route layering — 2026-11-27
 
-**Repository / branch / baseline / product source:** `/home/sysadmin/github/arch_notebook` / `codex/ui-00-chart-baseline` / `76d4ac5ada34b610b0cfba1c3f9ff94a4ad26872` / `541259f`.
+**Repository / branch / baseline / product source:** `/home/sysadmin/github/arch_notebook` / `codex/ui-00-chart-baseline` / `76d4ac5ada34b610b0cfba1c3f9ff94a4ad26872` / `ef304472a3fc21b297b20c306a41281824228501`.
 
 | Gate | Result | Evidence |
 | --- | --- | --- |
-| Selected route above crossing base routes | PASS, headless UI | Regression verifies selected route strokes follow all base route strokes while group nodes remain painted afterward. |
+| Selected route and direction markers above crossing routes | PASS, headless UI and independent code review | Regression requires all 12 selected strokes and at least six reciprocal arrow strokes after the selected highlight; nodes remain above both. |
 | Focused topology UI and full offline suite | PASS | Focused test: 1 passed. Full suite: 73 passed, 0 failed, 3 ignored. |
 | Formatting, diff validation, locked offline check/debug build | PASS | All four checks exited 0. |
 | Locked offline release build | BLOCKED | The runner did not return completion status after starting application-crate compilation; interrupted without a pass claim. |
