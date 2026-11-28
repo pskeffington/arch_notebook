@@ -879,3 +879,16 @@ A read-only Poppler diagnostic succeeded on all 13 staged PDFs. It emitted 5,579
 ## Current installed-release Clinton corpus QA — 2026-11-28
 
 The current per-user Rust release (SHA-256 `8381bd57…4b62ed27`) passes the primary Clinton case's read-only SQL preflight and saved-run replay: 6,173 records, zero skipped, zero deltas. Its default-redacted packet covers all 2,813 entities, keeps every label inside the SVG viewport, and preserves private output modes. PDF extraction completeness, Qwen analysis, and human review are separate and remain unestablished. Full source hashes, output digest, command, and counts: [CLINTON-CORPUS-QA-04](evidence/sql-automation/CLINTON-CORPUS-QA-04-installed-release-current.md).
+
+
+## Recent political email and messaging-record case acquisition — 2026-11-28
+
+A separate local QA package now contains ten official NARA case-letter PDFs (21 pages) about email, messaging, and federal-record retention, with one 2020 comparator. It includes active allegations and one resolved negative/control case; case status is stated as listed by NARA, not as a criminal conclusion. PDF inventory, text-layer diagnostic, and checksums pass. The USDA index/PDF ID mismatch is flagged. No PDFs or extracted full text entered Git.
+
+| Gate | Result | Evidence |
+| --- | --- | --- |
+| Acquisition, `pdfinfo`, text-layer diagnostic, SHA-256 | PASS | [political email/messaging acquisition QA](evidence/political-email-messaging-case-acquisition-20261128.md) |
+| TRANS transcription, Eagle-Eye evidence, Qwen analysis | BLOCKED / NOT RUN | Accepted general-purpose PDF processing executables are unavailable; local Ollama endpoint is inaccessible. |
+| Arch Notebook raw-PDF ingestion | NOT RUN | Current product does not ingest raw PDFs. |
+
+Source PDFs remain local under `/home/sysadmin/TRANSCRIBE-QA/political-email-cases-2026-11-28/recent-record-cases/`; they are not committed or copied to the archive share. The Clinton SQLite QA remains a separate workflow.
