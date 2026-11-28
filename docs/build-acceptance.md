@@ -76,6 +76,20 @@ The hop-group contact map now spaces columns and rows further apart, scales and 
 
 ## Current topology renderer verification — 2026-11-27
 
+## Selected topology route layering — 2026-11-27
+
+**Repository / branch / baseline / product source:** `/home/sysadmin/github/arch_notebook` / `codex/ui-00-chart-baseline` / `76d4ac5ada34b610b0cfba1c3f9ff94a4ad26872` / `541259f`.
+
+| Gate | Result | Evidence |
+| --- | --- | --- |
+| Selected route above crossing base routes | PASS, headless UI | Regression verifies selected route strokes follow all base route strokes while group nodes remain painted afterward. |
+| Focused topology UI and full offline suite | PASS | Focused test: 1 passed. Full suite: 73 passed, 0 failed, 3 ignored. |
+| Formatting, diff validation, locked offline check/debug build | PASS | All four checks exited 0. |
+| Locked offline release build | BLOCKED | The runner did not return completion status after starting application-crate compilation; interrupted without a pass claim. |
+| Native visual acceptance / exact-head CI | NOT RUN | No screenshot or workflow result for this candidate. |
+
+See [PROXIMITY-MAP-LAYER-01](evidence/vector-ui/PROXIMITY-MAP-LAYER-01-linux.md).
+
 ### Current bounded group topology candidate
 
 **Repository / branch / baseline:** `/home/sysadmin/github/arch_notebook` / `codex/ui-00-chart-baseline` / `ff106a669320c1e5e2325a39bd407da736a15ef5`.
