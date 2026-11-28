@@ -725,3 +725,22 @@ The Linux scheduler acceptance now asks `systemd-analyze calendar` to validate t
 ## Primary Clinton corpus local QA — 2026-11-27
 
 Use the real review-required Clinton candidate case as the primary local QA batch after each candidate build; use synthetic CI fixtures as supplemental coverage. The current Rust release passes the saved job's read-only query preflight and replays its latest saved run against the local SQLite source: 6,173 rows, zero skipped, zero added/removed/changed records. Default-redacted network analysis covers 2,813 entities, with 643 structural communities and 291 proxy candidates. Its report SVG maps the out-of-range saved coordinates into 704 rows (largest row: 4), with all labels in bounds. Entity drag geometry uses one map for nodes, routes, hit targets and navigator throughout a gesture. Saved bounds travel with the active chart, packet export and chart tabs; Fit all explicitly rebases the frame. Labels do not affect entity bounds. PDF, case, and database hashes are unchanged. No raw row-level content is stored in the report or Git. PDF extraction completeness, Qwen analysis, human content review, live scheduler delivery, native interaction on this case, and IBM validation remain open. See [CLINTON-CORPUS-QA-01](evidence/sql-automation/CLINTON-CORPUS-QA-01-linux.md) and its [aggregate-only report](evidence/sql-automation/artifacts/CLINTON-CORPUS-QA-01-linux.json).
+
+## Topology contact-line hover repair — 2026-11-27
+
+**Task / owner:** Restore analyst feedback when hovering sampled proximity-map contact lines; implementation session with topology review.
+**Repository / branch:** `/home/sysadmin/github/arch_notebook` / `codex/ui-00-chart-baseline`.
+**Baseline / source commit:** `44a6900305d4e969e1bfb473a249feab5bc53fe6` / `30b8020` (`Restore topology line hover preview`), pushed to the non-main remote branch.
+**Changed paths:** `src/main.rs`; acceptance documentation and current-install evidence are recorded in the following documentation commit.
+**Scope:** Restore hover-route highlighting and a fixed-height preview of groups, record/pair totals, and direction counts. Preserve node hover/click priority and route selection for exact-record review.
+
+| Gate | Result | Evidence |
+| --- | --- | --- |
+| Full offline Rust suite | PASS | 73 passed, 0 failed, 3 ignored on candidate source. |
+| Retained Clinton topology QA | PASS | Both local topology checks passed: 2,813 entities, 6,173 records, a 48-group / 47-pair sample with 1,315 represented records. |
+| Optimized release build | PASS | Locked offline release build exited 0; SHA-256 `330bc4fe2446bf8c7bff685ac4e56ddc5ffabc7b82cb59199b2cf537bd0d09b0`. |
+| Local desktop launcher and icon sync | PASS | Installed binary matches release; menu and Desktop launchers compare equal and validate; SVG/PNG icons match repository assets. |
+| Native visual review | BLOCKED | Capture utilities failed in this session, so current-candidate layout and pointer feel were not visually accepted. |
+| Exact-head cross-platform CI | PENDING | Feature-branch push does not trigger the configured workflow; no PR or manual run was created. |
+
+See [PROXIMITY-MAP-HOVER-02 evidence](evidence/vector-ui/PROXIMITY-MAP-HOVER-02-linux.md) and refreshed [LOCAL-INSTALL-08 evidence](evidence/deployment/LOCAL-INSTALL-08-linux.md). The change makes no corpus-semantic or IBM-compatibility claim.
