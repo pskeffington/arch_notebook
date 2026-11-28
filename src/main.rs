@@ -3405,6 +3405,7 @@ enum QuickCommand {
     SearchChart,
     NewChart,
     LoadSavedSqlSearch(Uuid),
+    ReviewSqlSnapshot(usize),
     ReinspectImportDesign(Uuid),
 }
 
@@ -31650,6 +31651,25 @@ impl eframe::App for App {
                     QuickCommand::LoadSavedSqlSearch(search.id),
                 )
             }));
+            commands.extend(
+                self.case
+                    .snapshots
+                    .iter()
+                    .enumerate()
+                    .map(|(index, snapshot)| {
+                        (
+                            format!(
+                                "Review SQL capture · {} · {}",
+                                snapshot.series, snapshot.captured_at
+                            ),
+                            format!(
+                                "SQL history snapshot capture database {} {}",
+                                snapshot.database_path, snapshot.series
+                            ),
+                            QuickCommand::ReviewSqlSnapshot(index),
+                        )
+                    }),
+            );
             let import_busy = self.import_inspection_worker.is_some()
                 || self.anx_import_worker.is_some()
                 || self.xslt_import_worker.is_some();
@@ -31778,6 +31798,9 @@ impl eframe::App for App {
                             self.data_mode = DataMode::SqlRegressions;
                             self.sql_saved_search_id = Some(id);
                             self.load_sql_review_search();
+                        }
+                        QuickCommand::ReviewSqlSnapshot(index) => {
+                            self.open_sql_snapshot_review(index);
                         }
                         QuickCommand::ReinspectImportDesign(id) => {
                             self.page = WorkspacePage::Chart;
@@ -53058,6 +53081,75 @@ mod tests {
         );
         assert_eq!(app.sql_parameter_text, "status=text:active");
         assert!(app.case.snapshots.is_empty());
+        assert!(app.sql_validation_preview.is_none());
+    }
+
+    #[test]
+    fn quick_open_reviews_sql_capture_without_running_query_or_mutating_chart() {
+        let mut case: CaseFile =
+            serde_json::from_str(include_str!("../fixtures/chart/correctness.case.json"))
+                .expect("correctness fixture parses");
+        let other_chart_id = Uuid::from_u128(8101);
+        case.chart_tabs.push(super::ChartDocument {
+            id: other_chart_id,
+            title: "Historical SQL chart".into(),
+            entities: case.entities.clone(),
+            links: case.links.clone(),
+            labels: Vec::new(),
+            zoom: super::default_chart_zoom(),
+            pan: [0.0, 0.0],
+            coordinate_bounds: None,
+            template_id: None,
+        });
+        let capture = super::ConnectionSnapshot {
+            id: Uuid::from_u128(8102),
+            chart_id: Some(other_chart_id),
+            series: "monthly contacts".into(),
+            source_key: "sqlite:/tmp/contacts.sqlite::monthly contacts".into(),
+            database_path: "/tmp/contacts.sqlite".into(),
+            configured_database_path: "/tmp/contacts.sqlite".into(),
+            query: "SELECT source, target FROM contacts".into(),
+            parameters: Vec::new(),
+            captured_at: "2026-11-28T12:00:00Z".into(),
+            sqlite_schema_version: None,
+            sqlite_schema_fingerprint: None,
+            sqlite_schema_objects: None,
+            connections: Vec::new(),
+            skipped_rows: 0,
+        };
+        case.snapshots.push(capture);
+        let snapshot_id = case.snapshots[0].id;
+        let original_entities = case.entities.len();
+        let original_links = case.links.len();
+        let original_snapshots = case.snapshots.len();
+        let mut app = App::automation_context(case, "/tmp/quick-open-sql-capture.case.json");
+        app.command_palette_open = true;
+
+        let context = egui::Context::default();
+        let mut frame = eframe::Frame::_new_kittest();
+        let mut time = 0.0;
+        let _first = render_headless_app_frame(&context, &mut app, &mut frame, time, Vec::new());
+        time += 1.0 / 60.0;
+        let palette = render_headless_app_frame(&context, &mut app, &mut frame, time, Vec::new());
+        let command = "Review SQL capture · monthly contacts · 2026-11-28T12:00:00Z";
+        assert!(find_headless_text_point(&palette, command).is_some());
+        let _selected = click_headless_visible_text(
+            &context, &mut app, &mut frame, &mut time, &palette, command,
+        );
+
+        assert!(!app.command_palette_open);
+        assert_eq!(app.case.active_chart_id, other_chart_id);
+        assert_eq!(
+            app.sql_snapshot_source.as_deref(),
+            Some("sqlite:/tmp/contacts.sqlite::monthly contacts")
+        );
+        assert_eq!(app.sql_snapshot_index, Some(0));
+        assert!(matches!(app.data_mode, super::DataMode::SqlRegressions));
+        assert!(matches!(app.page, super::WorkspacePage::Data));
+        assert_eq!(app.case.snapshots.len(), original_snapshots);
+        assert_eq!(app.case.snapshots[0].id, snapshot_id);
+        assert_eq!(app.case.entities.len(), original_entities);
+        assert_eq!(app.case.links.len(), original_links);
         assert!(app.sql_validation_preview.is_none());
     }
 

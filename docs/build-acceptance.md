@@ -1,5 +1,16 @@
 # Local build acceptance record
 
+## Quick Open SQL capture navigation — 2026-11-28
+
+Quick Open now lists saved SQL captures by series and capture time. Selecting a capture opens SQL Review at that saved snapshot and switches to its destination chart when that chart is present. Navigation does not rerun the SQL query or alter chart records.
+
+| Gate | Result | Evidence |
+| --- | --- | --- |
+| Headless capture navigation regression | PASS | `quick_open_reviews_sql_capture_without_running_query_or_mutating_chart` verifies command discovery, cross-chart navigation, selected snapshot identity, and unchanged entities, links, captures, and validation state. |
+| Locked workspace check and full Rust suite | PASS | `cargo check --locked --offline`: exit 0; `cargo test --locked --offline`: 107 passed, 0 failed, 3 ignored. |
+| Formatting and diff validation | PASS | `cargo fmt --all -- --check` and `git diff --check`: exit 0. |
+| Native pointer review and IBM navigation parity | NOT RUN | Headless command dispatch does not establish native visual/input acceptance or IBM compatibility. |
+
 ## SQL schedule dispatch status summary — 2026-11-28
 
 The Automation schedule result now presents timer state and last/next dispatch times together, while retaining the complete helper output for diagnostics. Missing or unavailable dispatch data is shown explicitly as “not recorded” or “not scheduled”; this status describes timer dispatch only and does not imply a successful SQL capture.
