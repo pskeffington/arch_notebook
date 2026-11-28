@@ -793,6 +793,16 @@ These modified and untracked paths were present during acceptance. The worktree 
 
 ## Current continuation: UI-00 and local install
 
+### UI-00 installed-release CPU benchmark — 2026-11-28
+
+The installed release was exercised through the app's real CLI geometry and pointer-candidate benchmark over 12 generated fictional cases. At 10,000 entities, preparation plus pointer-candidate scanning measured 20.9 ms median for disconnected/20,000-link data, 30.2 ms for sparse/30,000, 32.3 ms for hub/30,000, and 103.1 ms for dense/100,000. These are host-specific CPU spans, not frame times or performance targets.
+
+| Gate | Result | Evidence |
+| --- | --- | --- |
+| Installed binary identity and 12-case timing run | PASS, bounded | Binary matches current-user release. Seven measured samples after three warmups per case; full timing distributions and fixture hashes are retained in [UI-00 installed-release benchmark evidence](evidence/vector-ui/UI-00-installed-cpu-benchmark-20261128.md) and its raw JSON. |
+| X11/Wayland native interaction, painting, FPS, input response | BLOCKED / NOT MEASURED | X11 cannot open `:0`; Wayland connection denied by the current session. CPU-only CLI timing does not close this gate. |
+| Cross-host performance target or historical before/after claim | NOT CLAIMED | Host-specific sample; prior-path proxy is not a historical binary baseline. |
+
 ### UI-01 geometry and coincident-route follow-up
 
 | Check | Result | Evidence |
