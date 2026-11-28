@@ -1,5 +1,24 @@
 # Local build acceptance record
 
+## Proximity-map hover layering — 2026-11-28
+
+**Repository / branch / baseline:** `arch_notebook` / `codex/ui-00-chart-nested-conditions` / `2b6cb00b59aaaf60ea05603314ab8c346e23f34c`.
+
+Hovered group-contact routes now paint after base routes and before selected routes and group nodes. This keeps a hovered tie visible where routes cross while leaving group fills, proxy rings, and node interaction on top. Route hover suppression uses the same square hit rectangle as the group click target. A distinct hover color lets the headless regression prove the full 12-segment route is painted before node fills.
+
+| Gate | Result | Evidence |
+| --- | --- | --- |
+| Hover paint order and route hit test | PASS | `headless_ui_drives_geodesic_and_detected_community_actions`: exactly 12 distinct hover-color segments paint before group nodes; clicking the line still selects the group interaction and exact-record drilldown remains available. |
+| Dense topology rendering | PASS | 48 groups / 576 contact pairs; viewport culling retains 156 candidates, skips 420, and paints 1,872 base-route segments. |
+| Clinton production Analysis-pane UI | PASS | Retained corpus has 2,813 entities / 6,173 relationship records; analysis shows 48 sampled groups, 47 pairs and 1,315 represented records; selected-group contact detail is reached by scrolling the panel. |
+| Full offline suite | PASS | 78 passed, 0 failed, 3 ignored. |
+| Formatting / diff | PASS | `cargo fmt --all` and `git diff --check` exited 0. |
+| Independent topology source review | PASS | Reviewer confirmed hover geometry matches the node hit rectangle, distinct hover strokes are asserted, and node/proxy rendering remains above the route. |
+| Native visual / pointer review | BLOCKED | No accessible native display/input path in this session; headless rendering does not prove visual contrast or pointer feel. |
+| Exact-head CI | PENDING | Feature base passed Actions run 46111073491. This follow-up commit needs its own exact-head run. |
+
+Full command/evidence notes: [PROXIMITY-MAP-HOVER-ORDER-01](evidence/vector-ui/PROXIMITY-MAP-HOVER-ORDER-01-20261128.md).
+
 ## Dense sampled topology map validation — 2026-11-27
 
 **Repository / branch / baseline:** `/home/sysadmin/github/arch_notebook` / `codex/ui-00-chart-baseline` / `2feca0710b564e28be72bc5f129e8223c2c8adf6`.
