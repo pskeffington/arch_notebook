@@ -1,5 +1,21 @@
 # Local build acceptance record
 
+## Quick Open saved import designs — 2026-11-28
+
+Saved import designs that remember a source file are now searchable in Quick Open as **Reinspect import · <design name>**. Selecting the command uses the existing asynchronous CSV/TSV inspector and mapping review; it does not add chart data. The Import menu shortcut remains available.
+
+| Gate | Result | Evidence |
+| --- | --- | --- |
+| Quick Open headless dispatch and background inspection regression | PASS | `quick_open_reinspects_saved_import_design_without_importing_chart_data`: command discovery and selection pass; the mapping wizard opens after inspection and entity/link counts remain unchanged. |
+| Full Rust suite | PASS | 104 passed, 0 failed, 3 ignored. |
+| Formatting, locked offline workspace check, and diff validation | PASS | All exited 0. |
+| Optimized release build | PASS | `TMPDIR=/home/sysadmin/.cache/arch-notebook-build-tmp CARGO_BUILD_JOBS=1 CARGO_TARGET_DIR=/tmp/arch-notebook-target cargo build --release --workspace --locked --offline`, exit 0; SHA-256 `5c92cf1023cd194c5f6ba03ec99d7fae75523624dfee9c79e384f285a30cc6fd`. |
+| Installer and current-user install | PASS | Launcher, shortcut, icons, MIME definition, SQL helper, and installed executable verified; installed binary matches release SHA-256. |
+| Primary Clinton corpus QA | PASS, bounded | One query-only preflight passed; 6,173 rows replayed with zero skipped rows and zero added/changed/removed deltas; inputs unchanged. Extraction completeness, Qwen analysis, and human content review remain unestablished. |
+| Native pointer interaction and IBM navigation parity | NOT RUN | Headless interaction checks do not establish native pointer feel; Analyst's Notebook was not available for comparison. |
+
+Exact commands, report hashes, and limits: [QUICK-OPEN-IMPORT-DESIGN-01](evidence/vector-ui/QUICK-OPEN-IMPORT-DESIGN-01-20261128.md).
+
 ## Saved SQL search to automation draft guard — 2026-11-28
 
 The SQL Review catalog now distinguishes the selected saved query from the definition loaded into the working editor. Automation draft preparation stays disabled until the selected definition has been loaded; this prevents a selected chart seed from being removed from an unrelated query draft. Both unseeded and chart-seeded saved searches can prepare automation drafts. Unseeded parameters are retained; chart-seeded preparation removes only the bound parameter value. Both clear stale validation state and require revalidation before a disabled job can be saved.

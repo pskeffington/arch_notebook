@@ -185,6 +185,8 @@ Design names must be unique in a case. Use `--name` to adapt a shared design to 
 
 After a successful desktop import using a saved design, the case stores the last source path locally. Choose **Import… → Saved import designs · reinspect last file** to reopen that file in the inspection and mapping wizard without importing chart data. The path is case-local metadata and is omitted from portable JSON packages; moving the case or source may make the shortcut unavailable. Older cases without this field continue to load.
 
+Saved designs with a remembered source also appear in **Quick open** as **Reinspect import · <design name>**. Selecting one follows the same background inspection and mapping review; the chart is unchanged until the analyst explicitly confirms import.
+
 ## Inspect and replay run history
 
 Read saved automation outcomes without opening the desktop app:

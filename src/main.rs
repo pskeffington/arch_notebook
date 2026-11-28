@@ -3376,6 +3376,7 @@ enum QuickCommand {
     SearchChart,
     NewChart,
     LoadSavedSqlSearch(Uuid),
+    ReinspectImportDesign(Uuid),
 }
 
 fn quick_command_matches(query: &str, label: &str, keywords: &str) -> bool {
@@ -31602,6 +31603,18 @@ impl eframe::App for App {
                     QuickCommand::LoadSavedSqlSearch(search.id),
                 )
             }));
+            commands.extend(self.case.import_specifications.iter().filter_map(|spec| {
+                spec.last_source_path.as_ref().map(|_| {
+                    (
+                        format!("Reinspect import · {}", spec.name),
+                        format!(
+                            "saved import design csv tsv source file mapping {}",
+                            spec.name
+                        ),
+                        QuickCommand::ReinspectImportDesign(spec.id),
+                    )
+                })
+            }));
             let matches: Vec<_> = commands
                 .iter()
                 .filter(|(label, keywords, _)| {
@@ -31704,6 +31717,11 @@ impl eframe::App for App {
                             self.data_mode = DataMode::SqlRegressions;
                             self.sql_saved_search_id = Some(id);
                             self.load_sql_review_search();
+                        }
+                        QuickCommand::ReinspectImportDesign(id) => {
+                            self.page = WorkspacePage::Chart;
+                            self.show_timeline = false;
+                            self.reinspect_import_design_last_source(id);
                         }
                     }
                 }
@@ -52942,6 +52960,78 @@ mod tests {
         assert_eq!(app.sql_parameter_text, "status=text:active");
         assert!(app.case.snapshots.is_empty());
         assert!(app.sql_validation_preview.is_none());
+    }
+
+    #[test]
+    fn quick_open_reinspects_saved_import_design_without_importing_chart_data() {
+        let root = std::env::temp_dir().join(format!(
+            "arch-notebook-quick-import-design-{}",
+            Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).expect("create Quick Open import fixture directory");
+        let source_path = root.join("contacts.csv");
+        std::fs::write(&source_path, "from_name,to_name\nAlpha,Beta\n")
+            .expect("write Quick Open import fixture");
+        let mut case: CaseFile =
+            serde_json::from_str(include_str!("../fixtures/chart/correctness.case.json"))
+                .expect("correctness fixture parses");
+        let design_id = Uuid::from_u128(7002);
+        case.import_specifications.push(super::ImportSpecification {
+            id: design_id,
+            name: "Contacts feed".into(),
+            mapping: super::ImportColumnMapping {
+                source: "from_name".into(),
+                target: "to_name".into(),
+                ..Default::default()
+            },
+            header_signature: vec!["from_name".into(), "to_name".into()],
+            last_source_path: Some(source_path.to_string_lossy().into_owned()),
+        });
+        let original_entities = case.entities.len();
+        let original_links = case.links.len();
+        let case_path = root.join("case.json");
+        let mut app = App::automation_context(case, &case_path.to_string_lossy());
+        app.command_palette_open = true;
+
+        let context = egui::Context::default();
+        let mut frame = eframe::Frame::_new_kittest();
+        let mut time = 0.0;
+        let _first = render_headless_app_frame(&context, &mut app, &mut frame, time, Vec::new());
+        time += 1.0 / 60.0;
+        let palette = render_headless_app_frame(&context, &mut app, &mut frame, time, Vec::new());
+        assert!(find_headless_text_point(&palette, "Reinspect import · Contacts feed").is_some());
+        let _selected = click_headless_visible_text(
+            &context,
+            &mut app,
+            &mut frame,
+            &mut time,
+            &palette,
+            "Reinspect import · Contacts feed",
+        );
+
+        assert!(!app.command_palette_open);
+        assert!(matches!(app.page, super::WorkspacePage::Chart));
+        assert_eq!(app.import_path, source_path.to_string_lossy());
+        assert!(app.import_inspection_worker.is_some());
+        assert!(!app.show_import_wizard);
+        assert_eq!(app.case.entities.len(), original_entities);
+        assert_eq!(app.case.links.len(), original_links);
+
+        let inspection = app
+            .import_inspection_worker
+            .take()
+            .expect("Quick Open starts background inspection")
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("background inspection completes")
+            .expect("CSV source remains valid");
+        app.apply_delimited_import_inspection(inspection);
+        assert!(app.show_import_wizard);
+        assert_eq!(app.selected_import_spec, Some(design_id));
+        assert_eq!(app.import_column_mapping.source, "from_name");
+        assert_eq!(app.import_column_mapping.target, "to_name");
+        assert_eq!(app.case.entities.len(), original_entities);
+        assert_eq!(app.case.links.len(), original_links);
+        std::fs::remove_dir_all(root).expect("remove Quick Open import fixture directory");
     }
 
     #[test]
