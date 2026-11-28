@@ -10,6 +10,10 @@ The build workflow creates Linux x86_64 and ARM64 archives, an Arch Linux x86_64
 - No published GitHub Release was listed at review time. Native installation, interactive acceptance, scheduler execution and external IBM i2 import still require recorded evidence; macOS notarization is not established.
 - Keep the release unpublished until owner approval. Verify the actual release candidate's CI and checksums rather than relying on the historical baseline.
 
+## Local user install evidence — 2026-11-28
+
+The optimized Rust candidate from product source `5bb4593` is installed for the current Linux user; its binary and synchronized Desktop/menu/icon assets pass local installation checks. This is an installation acceptance result, not authorization to publish a GitHub Release. Native interactive review, live scheduler dispatch, exact-head CI for this candidate, and IBM application/schema validation remain open. See [LOCAL-INSTALL-12](docs/evidence/deployment/LOCAL-INSTALL-12-linux.md) and [current-source SQL/build acceptance](docs/evidence/sql-automation/SQL-AUTO-11-current-source-clinton-20261128.md).
+
 ## Publish a version
 
 1. Set the new semantic version in `Cargo.toml` and update user-facing release notes.
