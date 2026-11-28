@@ -12,9 +12,9 @@ The desktop checks the active case file's size and modification time once per se
 | Full Rust suite | PASS | `CARGO_TARGET_DIR=/tmp/arch-notebook-target cargo test --locked --offline`: 110 passed, 0 failed, 3 ignored. |
 | Locked workspace check | PASS | `CARGO_TARGET_DIR=/tmp/arch-notebook-target cargo check --locked --offline`: exit 0. |
 | Debug build | PASS | `CARGO_TARGET_DIR=/tmp/arch-notebook-target cargo build --locked --offline`: exit 0. |
-| Optimized release build | BLOCKED | Two release-build sessions emitted no further output and lost their compiler process; the second retry remained unresolved after 60 seconds. Existing release binary remains from prior baseline and is not evidence for this source revision. |
+| Optimized release build | PASS | `CARGO_TARGET_DIR=/tmp/arch-notebook-target cargo build --release --locked --offline`: exit 0 in 2m11s; SHA-256 `46596680af31ba1d92314426e6fd69feb7179a9d8489038cbcca1ee48ac42c1a`. |
 | Formatting and diff validation | PASS | `cargo fmt --all -- --check`: exit 0; `git diff --check`: exit 0. |
-| Primary Clinton corpus QA | PASS on prior baseline | Prior candidate `1e807f4` passed query-only preflight and replay: 6,173 rows, zero skipped rows and deltas; redacted topology packet covers 2,813 entities with no clipped labels; source inputs unchanged. Aggregate report: [CLINTON-CORPUS-QA-b3f45d3](evidence/sql-automation/CLINTON-CORPUS-QA-b3f45d3-20261128.md). The present UI navigation change does not modify SQL ingestion or graph data. |
+| Primary Clinton corpus QA | PASS | Current source `c653f31` passed query-only preflight and replay: 6,173 rows, zero skipped rows and deltas; the redacted packet renders all 2,813 entities with no clipped labels; source inputs unchanged. Aggregate report: [CLINTON-CORPUS-QA-c653f31](evidence/sql-automation/CLINTON-CORPUS-QA-c653f31-20261128.md). |
 | Live systemd timer / SQL capture | NOT TESTED | This test covers external file replacement and safe UI signaling, not actual host timer dispatch. |
 
 ## Quick Open keyboard navigation and chart destinations — 2026-11-28
