@@ -83,7 +83,7 @@ This local query catalog follows the analyst-facing flow of selecting a named se
 
 #### Move a saved search between cases
 
-The CLI exports a selected case-local search as a versioned JSON definition package and imports it into another case:
+The **Import/export query package** panel in SQL Review and the CLI can move a selected case-local search as a versioned JSON definition package. In the desktop panel, enter the package path and choose **Import package**; optional name, database, and series fields adapt it to the receiving case. Blank fields retain the package values and rebase relative database paths from the exporting case. The imported query is loaded into SQL Review for review, but it is not executed. Enter an output path and choose **Export selected** to create a package for the selected saved search. The equivalent CLI commands are:
 
 ```sh
 arch-notebook --export-sql-search investigation.case.json "Counterparty lookup" counterparty-search.json --json
@@ -91,7 +91,7 @@ arch-notebook --import-sql-search receiving.case.json counterparty-search.json \
   --database /data/receiving/contacts.sqlite --series "Contact review" --name "Receiving contacts" --json
 ```
 
-The package contains the search name, database path, series, SQL text, typed defaults, and optional chart-seed parameter name. It contains no case entities, chart IDs, bound chart-seed values, query results, snapshots, or automation history. Relative paths are resolved from the exporting case's directory; use `--database` to select the receiving machine's source. Import assigns a new search ID and refuses duplicate names. Import does not connect to SQLite or execute SQL; review and validate the query in SQL Review before using it. Export refuses paths that would replace the case, its automation lock, or a saved SQLite source. The JSON schema is `arch-notebook-sql-search`, version 1.
+The package contains the search name, database path, series, SQL text, typed defaults, and optional chart-seed parameter name. It contains no case entities, chart IDs, bound chart-seed values, query results, snapshots, or automation history. Relative paths are resolved from the exporting case's directory; use `--database` or the desktop override to select the receiving machine's source. Import assigns a new search ID and refuses duplicate names. Import does not connect to SQLite, execute SQL, or create a snapshot; save the case to persist the imported definition. Review and validate the query in SQL Review before using it. Export refuses paths that would replace the case, its automation lock, or a saved SQLite source. The JSON schema is `arch-notebook-sql-search`, version 1.
 
 ### Inspect current source rows for a chart entity
 

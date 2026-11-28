@@ -2969,6 +2969,11 @@ struct App {
     sql_parameter_text: String,
     sql_saved_search_id: Option<Uuid>,
     sql_saved_search_name: String,
+    sql_saved_search_package_import_path: String,
+    sql_saved_search_package_export_path: String,
+    sql_saved_search_package_import_name: String,
+    sql_saved_search_package_import_database: String,
+    sql_saved_search_package_import_series: String,
     sql_seed_parameter_name: String,
     sql_review_dynamic_seed_parameter_name: Option<String>,
     sql_seed_identity_key: String,
@@ -3647,6 +3652,11 @@ impl Default for App {
             sql_parameter_text: "snapshot_id=baseline".into(),
             sql_saved_search_id: None,
             sql_saved_search_name: String::new(),
+            sql_saved_search_package_import_path: String::new(),
+            sql_saved_search_package_export_path: String::new(),
+            sql_saved_search_package_import_name: String::new(),
+            sql_saved_search_package_import_database: String::new(),
+            sql_saved_search_package_import_series: String::new(),
             sql_seed_parameter_name: "seed_entity_id".into(),
             sql_review_dynamic_seed_parameter_name: None,
             sql_seed_identity_key: String::new(),
@@ -4090,6 +4100,95 @@ impl App {
         }
     }
 
+    fn export_saved_sql_search_package(&mut self) {
+        let Some(id) = self.sql_saved_search_id else {
+            self.status = "SQL SEARCH PACKAGE EXPORT FAILED · select a saved search".into();
+            return;
+        };
+        let Some(search) = self
+            .case
+            .saved_sql_searches
+            .iter()
+            .find(|search| search.id == id)
+            .cloned()
+        else {
+            self.status = "SQL SEARCH PACKAGE EXPORT FAILED · saved search not found".into();
+            return;
+        };
+        let output_path = self.sql_saved_search_package_export_path.trim();
+        if output_path.is_empty() {
+            self.status = "SQL SEARCH PACKAGE EXPORT FAILED · enter an output path".into();
+            return;
+        }
+        match write_saved_sql_search_package(&self.case, &self.case_path, &search, output_path) {
+            Ok(()) => {
+                self.status = format!(
+                    "SQL SEARCH PACKAGE EXPORTED · {} · {output_path}",
+                    search.name
+                );
+            }
+            Err(error) => self.status = format!("SQL SEARCH PACKAGE EXPORT FAILED · {error}"),
+        }
+    }
+
+    fn import_saved_sql_search_package(&mut self) {
+        let input_path = self.sql_saved_search_package_import_path.trim();
+        if input_path.is_empty() {
+            self.status = "SQL SEARCH PACKAGE IMPORT FAILED · enter a package path".into();
+            return;
+        }
+        let name_override = (!self.sql_saved_search_package_import_name.trim().is_empty())
+            .then(|| self.sql_saved_search_package_import_name.trim().to_owned());
+        let database_path_override = (!self
+            .sql_saved_search_package_import_database
+            .trim()
+            .is_empty())
+        .then(|| {
+            self.sql_saved_search_package_import_database
+                .trim()
+                .to_owned()
+        });
+        let series_override = (!self
+            .sql_saved_search_package_import_series
+            .trim()
+            .is_empty())
+        .then(|| {
+            self.sql_saved_search_package_import_series
+                .trim()
+                .to_owned()
+        });
+        let result = read_saved_sql_search_package(input_path).and_then(|package| {
+            saved_sql_search_from_package(
+                package.search,
+                package.database_base_path.as_deref(),
+                name_override.as_deref(),
+                database_path_override.as_deref(),
+                series_override.as_deref(),
+            )
+        });
+        let search = match result {
+            Ok(search) => search,
+            Err(error) => {
+                self.status = format!("SQL SEARCH PACKAGE IMPORT FAILED · {error}");
+                return;
+            }
+        };
+        if self.sql_search_name_conflicts(&search.name, None) {
+            self.status = format!(
+                "SQL SEARCH PACKAGE IMPORT FAILED · a saved query named {} already exists",
+                search.name
+            );
+            return;
+        }
+        self.sql_saved_search_id = Some(search.id);
+        self.sql_saved_search_name = search.name.clone();
+        self.case.saved_sql_searches.push(search);
+        self.load_sql_review_search();
+        self.status =
+            "SQL SEARCH PACKAGE IMPORTED · LOADED FOR REVIEW · NOT EXECUTED · SAVE CASE TO KEEP"
+                .into();
+    }
+
     fn show_saved_sql_search_catalog(&mut self, ui: &mut egui::Ui) {
         if self.sql_saved_search_id.is_some_and(|id| {
             !self
@@ -4194,12 +4293,95 @@ impl App {
                     action = Some("save_new");
                 }
             });
+            egui::CollapsingHeader::new("Import/export query package")
+                .id_salt("sql_search_package_exchange")
+                .default_open(false)
+                .show(ui, |ui| {
+                    ui.label(
+                        egui::RichText::new(
+                            "Definition-only JSON · import never runs SQL or creates a snapshot.",
+                        )
+                        .small()
+                        .color(egui::Color32::GRAY),
+                    );
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label("Import JSON");
+                        ui.add(
+                            egui::TextEdit::singleline(
+                                &mut self.sql_saved_search_package_import_path,
+                            )
+                            .hint_text("Saved search package path")
+                            .desired_width(260.0),
+                        );
+                        if ui.button("Import package").clicked() {
+                            action = Some("import_package");
+                        }
+                    });
+                    egui::CollapsingHeader::new("Adapt imported search (optional)")
+                        .id_salt("sql_search_package_overrides")
+                        .show(ui, |ui| {
+                            ui.label(
+                                egui::RichText::new(
+                                    "Blank fields keep the package name and series, or rebase its relative database path from the exporting case.",
+                                )
+                                .small()
+                                .color(egui::Color32::GRAY),
+                            );
+                            ui.horizontal_wrapped(|ui| {
+                                ui.label("Name");
+                                ui.add(
+                                    egui::TextEdit::singleline(
+                                        &mut self.sql_saved_search_package_import_name,
+                                    )
+                                    .hint_text("Keep package name")
+                                    .desired_width(160.0),
+                                );
+                                ui.label("Database");
+                                ui.add(
+                                    egui::TextEdit::singleline(
+                                        &mut self.sql_saved_search_package_import_database,
+                                    )
+                                    .hint_text("Rebase or override")
+                                    .desired_width(220.0),
+                                );
+                                ui.label("Series");
+                                ui.add(
+                                    egui::TextEdit::singleline(
+                                        &mut self.sql_saved_search_package_import_series,
+                                    )
+                                    .hint_text("Keep package series")
+                                    .desired_width(180.0),
+                                );
+                            });
+                        });
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label("Export JSON");
+                        ui.add(
+                            egui::TextEdit::singleline(
+                                &mut self.sql_saved_search_package_export_path,
+                            )
+                            .hint_text("Output package path")
+                            .desired_width(260.0),
+                        );
+                        if ui
+                            .add_enabled(
+                                self.sql_saved_search_id.is_some(),
+                                egui::Button::new("Export selected"),
+                            )
+                            .clicked()
+                        {
+                            action = Some("export_package");
+                        }
+                    });
+                });
         });
         match action {
             Some("load") => self.load_sql_review_search(),
             Some("save_new") => self.save_sql_review_search_as_new(),
             Some("update") => self.update_sql_review_search(),
             Some("delete") => self.delete_sql_review_search(),
+            Some("import_package") => self.import_saved_sql_search_package(),
+            Some("export_package") => self.export_saved_sql_search_package(),
             _ => {}
         }
     }
@@ -5071,6 +5253,11 @@ impl App {
             sql_parameter_text: String::new(),
             sql_saved_search_id: None,
             sql_saved_search_name: String::new(),
+            sql_saved_search_package_import_path: String::new(),
+            sql_saved_search_package_export_path: String::new(),
+            sql_saved_search_package_import_name: String::new(),
+            sql_saved_search_package_import_database: String::new(),
+            sql_saved_search_package_import_series: String::new(),
             sql_seed_parameter_name: "seed_entity_id".into(),
             sql_review_dynamic_seed_parameter_name: None,
             sql_seed_identity_key: String::new(),
@@ -47706,6 +47893,83 @@ mod tests {
     }
 
     #[test]
+    fn sql_review_package_ui_imports_for_review_and_exports_selected_definition() {
+        let root = std::env::temp_dir().join(format!(
+            "arch-notebook-sql-search-package-ui-{}",
+            Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).expect("create package UI test directory");
+        let package_path = root.join("shared-search.json");
+        let package = super::SavedSqlSearchPackage {
+            format: "arch-notebook-sql-search".into(),
+            schema_version: 1,
+            database_base_path: Some(root.to_string_lossy().into_owned()),
+            search: super::SavedSqlSearchPackageDefinition {
+                name: "Imported contacts".into(),
+                database_path: "contacts.sqlite".into(),
+                series: "shared review".into(),
+                query: "SELECT source, target FROM contacts WHERE owner_id = :entity_id AND state = :state".into(),
+                parameters: vec![("state".into(), "text:active".into())],
+                seed_parameter_name: Some("entity_id".into()),
+            },
+        };
+        std::fs::write(
+            &package_path,
+            serde_json::to_vec(&package).expect("serialize UI import package"),
+        )
+        .expect("write UI import package");
+        let case: CaseFile =
+            serde_json::from_str(include_str!("../fixtures/chart/correctness.case.json"))
+                .expect("correctness fixture is a valid case");
+        let case_path = root.join("receiving.case.json");
+        let mut app = App::automation_context(case, &case_path.to_string_lossy());
+        app.page = super::WorkspacePage::Data;
+        app.data_mode = super::DataMode::SqlRegressions;
+        app.sql_saved_search_package_import_path = package_path.to_string_lossy().into_owned();
+        app.import_saved_sql_search_package();
+
+        assert_eq!(app.case.saved_sql_searches.len(), 1);
+        assert_eq!(
+            app.sql_saved_search_id,
+            app.case.saved_sql_searches.first().map(|s| s.id)
+        );
+        assert_eq!(app.sql_saved_search_name, "Imported contacts");
+        assert_eq!(app.sql_path, root.join("contacts.sqlite").to_string_lossy());
+        assert_eq!(app.sql_series, "shared review");
+        assert!(app.sql_query.contains(":entity_id"));
+        assert_eq!(app.sql_parameter_text, "state=text:active");
+        assert_eq!(
+            app.sql_review_dynamic_seed_parameter_name.as_deref(),
+            Some("entity_id")
+        );
+        assert!(app.sql_validation_preview.is_none());
+        assert!(app.case.snapshots.is_empty());
+        assert!(app.status.contains("NOT EXECUTED"));
+
+        let exported_path = root.join("exported.json");
+        app.sql_saved_search_package_export_path = exported_path.to_string_lossy().into_owned();
+        app.export_saved_sql_search_package();
+        let exported = super::read_saved_sql_search_package(&exported_path.to_string_lossy())
+            .expect("read exported UI package");
+        assert_eq!(exported.search.name, "Imported contacts");
+        assert_eq!(
+            exported.search.parameters,
+            vec![("state".into(), "text:active".into())]
+        );
+        assert_eq!(
+            exported.search.seed_parameter_name.as_deref(),
+            Some("entity_id")
+        );
+        assert!(app.status.starts_with("SQL SEARCH PACKAGE EXPORTED"));
+
+        app.import_saved_sql_search_package();
+        assert_eq!(app.case.saved_sql_searches.len(), 1);
+        assert!(app.status.contains("already exists"));
+        assert!(app.case.snapshots.is_empty());
+        std::fs::remove_dir_all(root).expect("remove package UI test directory");
+    }
+
+    #[test]
     fn sql_review_saved_search_ui_loads_query_without_running_or_capturing_it() {
         let case: CaseFile =
             serde_json::from_str(include_str!("../fixtures/chart/correctness.case.json"))
@@ -47730,7 +47994,7 @@ mod tests {
             &mut frame,
             time,
             Vec::new(),
-            egui::vec2(1600.0, 1800.0),
+            egui::vec2(1600.0, 2600.0),
         );
         assert!(find_headless_text_rect(&shapes, "SAVED SQL SEARCHES · 0").is_some());
         let _expanded = click_headless_visible_text(
@@ -47748,7 +48012,7 @@ mod tests {
             &mut frame,
             time,
             Vec::new(),
-            egui::vec2(1600.0, 1800.0),
+            egui::vec2(1600.0, 2600.0),
         );
         let _saved = click_headless_visible_text(
             &context,
@@ -47854,6 +48118,80 @@ mod tests {
         );
         assert!(app.case.saved_sql_searches.is_empty());
         assert!(app.status.starts_with("SQL SEARCH REMOVED"));
+
+        app.case.saved_sql_searches.push(super::SavedSqlSearch {
+            id: Uuid::from_u128(9001),
+            name: "Export fixture".into(),
+            database_path: "/tmp/accounts.sqlite".into(),
+            series: "counterparty search".into(),
+            query: "SELECT source, target FROM records".into(),
+            parameters: Vec::new(),
+            seed_parameter_name: None,
+        });
+        app.sql_saved_search_id = Some(Uuid::from_u128(9001));
+        app.page = super::WorkspacePage::Chart;
+        time += 1.0 / 60.0;
+        let mut package_app =
+            App::automation_context(app.case.clone(), "/tmp/saved-search-package-ui.case.json");
+        package_app.page = super::WorkspacePage::Data;
+        package_app.data_mode = super::DataMode::SqlRegressions;
+        let package_header_shapes = render_headless_app_frame_at(
+            &context,
+            &mut package_app,
+            &mut frame,
+            time,
+            Vec::new(),
+            egui::vec2(1600.0, 1800.0),
+        );
+        assert!(
+            find_headless_text_rect(&package_header_shapes, "Import/export query package")
+                .is_some()
+        );
+        let _expanded_package = click_headless_visible_text(
+            &context,
+            &mut package_app,
+            &mut frame,
+            &mut time,
+            &package_header_shapes,
+            "Import/export query package",
+        );
+        time += 1.0 / 60.0;
+        let overrides_shapes = render_headless_app_frame_at(
+            &context,
+            &mut package_app,
+            &mut frame,
+            time,
+            Vec::new(),
+            egui::vec2(1600.0, 1800.0),
+        );
+        let _collapsed_overrides = click_headless_visible_text(
+            &context,
+            &mut package_app,
+            &mut frame,
+            &mut time,
+            &overrides_shapes,
+            "Adapt imported search (optional)",
+        );
+        time += 1.0 / 60.0;
+        let package_controls_shapes = render_headless_app_frame_at(
+            &context,
+            &mut package_app,
+            &mut frame,
+            time,
+            Vec::new(),
+            egui::vec2(1600.0, 1800.0),
+        );
+        for label in [
+            "Import JSON",
+            "Import package",
+            "Export JSON",
+            "Export selected",
+        ] {
+            assert!(
+                find_headless_text_rect(&package_controls_shapes, label).is_some(),
+                "expected visible saved SQL search package control: {label}"
+            );
+        }
     }
 
     #[test]

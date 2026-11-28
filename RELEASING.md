@@ -14,6 +14,8 @@ The build workflow creates Linux x86_64 and ARM64 archives, an Arch Linux x86_64
 
 The optimized Rust candidate from product source `1ca4203` is installed for the current Linux user; its binary and synchronized Desktop/menu/icon/MIME assets pass local install checks. The saved SQL search package CLI acceptance and current-source Clinton preflight/replay pass; the latter processed 6,173 rows with zero skipped rows or deltas. This is an installation acceptance result, not authorization to publish a GitHub Release. Native interactive review, live scheduler dispatch, exact-head CI for this candidate, human email-content review, and IBM application/schema validation remain open. See [SQL-SEARCH-PACKAGE-01](docs/evidence/sql-automation/SQL-SEARCH-PACKAGE-01-current-source-20261128.md).
 
+The SQL Review package UI follow-up is installed from the optimized Rust candidate; the desktop saved-search panel import/export regression, package CLI checks, isolated install checks, and Clinton corpus replay pass. The installed binary SHA-256 is `0e3f23dcc30da9012c2d8a7cb7d2e5cc46e7539a9f7f60c05fefe0c7eebb54c0`. Native pointer/keyboard review and IBM application/schema validation remain open. See [SQL-SEARCH-PACKAGE-02](docs/evidence/sql-automation/SQL-SEARCH-PACKAGE-02-desktop-ui-20261128.md).
+
 ## Publish a version
 
 1. Set the new semantic version in `Cargo.toml` and update user-facing release notes.

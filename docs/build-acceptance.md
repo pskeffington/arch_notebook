@@ -17,6 +17,20 @@ Saved SQL search definitions can now be exported/imported as version-1 JSON pack
 
 Exact commands, aggregate report hashes, and scope: [SQL-SEARCH-PACKAGE-01](evidence/sql-automation/SQL-SEARCH-PACKAGE-01-current-source-20261128.md).
 
+## SQL search package workflow in SQL Review — 2026-11-28
+
+The SQL Review catalog now imports and exports the same definition-only packages as the CLI. Import loads a draft without query execution or snapshot creation; optional overrides adapt the package name, source database path, and series. The case must still be explicitly saved to retain the imported search.
+
+| Gate | Result | Evidence |
+| --- | --- | --- |
+| Formatting, workspace check, and full Rust suite | PASS | 100 passed, 0 failed, 3 ignored; locked offline check and formatting exited 0. |
+| Optimized release build | PASS | Locked offline workspace release build exited 0. |
+| CLI package acceptance and isolated installer | PASS | Package safety checks passed; installed binary, launchers, icons, MIME definition, and helper synchronized. |
+| Clinton corpus SQL regression | PASS, bounded | 6,173 relationship rows, zero skipped rows and deltas, inputs unchanged. Extraction completeness, Qwen analysis, and human content review remain unestablished. |
+| Native UI appearance/input and IBM interoperability | NOT RUN | Headless checks do not establish native display acceptance; no IBM schema/application validation was performed. |
+
+Exact commands, binary digest, and aggregate evidence: [SQL-SEARCH-PACKAGE-02](evidence/sql-automation/SQL-SEARCH-PACKAGE-02-desktop-ui-20261128.md).
+
 ## Case-local saved SQL searches — 2026-11-28
 
 **Repository / branch / baseline:** `arch_notebook` / `codex/ui-00-chart-nested-conditions` / `8037cbc2d0a94444aebecb9937710e34e52006de`.
