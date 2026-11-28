@@ -11,6 +11,8 @@
 | Gate | Result | Evidence |
 | --- | --- | --- |
 | Locked offline Rust debug build | PASS | `CARGO_TARGET_DIR=/tmp/arch-notebook-target cargo build --locked --offline` exited 0. |
+| Formatting / workspace tests / locked offline check | PASS | `cargo fmt --all -- --check`, `CARGO_TARGET_DIR=/tmp/arch-notebook-target cargo test --workspace --locked --offline` (78 passed, 0 failed, 3 ignored), and `CARGO_TARGET_DIR=/tmp/arch-notebook-target cargo check --workspace --locked --offline` all exited 0. |
+| Locked offline optimized release build | PASS | `CARGO_TARGET_DIR=/tmp/arch-notebook-target cargo build --release --workspace --locked --offline` exited 0 in 2m 11s. Binary SHA-256: `d5fcb5b6bba6f6b53f1bddf3bca3105a0ae638555cb00931080bcd2131c706c3`. |
 | Clinton query-only job validation | PASS | Current binary returned `ok=true`, `status=PASS`, 6,173 connections, 0 skipped rows, and `saved=false`; command exited 0. |
 | Saved-run replay | PASS | Current binary replayed the saved run on a disposable case copy; `ok=true`, 1 passed, 0 failed, 6,173 connections, 0 skipped rows, and all delta counters zero; command exited 0. |
 | Source immutability | PASS | The original case and SQLite hashes match the recorded hashes before/after. Replay wrote only to `/tmp/clinton-sql-acceptance/preflight-case.json`. |
@@ -20,6 +22,10 @@ Exact commands:
 
 ```sh
 CARGO_TARGET_DIR=/tmp/arch-notebook-target cargo build --locked --offline
+CARGO_TARGET_DIR=/tmp/arch-notebook-target cargo test --workspace --locked --offline
+CARGO_TARGET_DIR=/tmp/arch-notebook-target cargo check --workspace --locked --offline
+CARGO_TARGET_DIR=/tmp/arch-notebook-target cargo build --release --workspace --locked --offline
+cargo fmt --all -- --check
 /tmp/arch-notebook-target/debug/arch-notebook --validate-job /tmp/clinton-sql-acceptance/preflight-case.json adbaf7d1-2fed-4dc2-8e14-dec6d1e2a28b --query-only --json
 /tmp/arch-notebook-target/debug/arch-notebook --rerun-run /tmp/clinton-sql-acceptance/preflight-case.json 710d9e87-8945-4a6e-833f-e2cad4b93ca6 --json
 ```
