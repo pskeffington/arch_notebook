@@ -1359,6 +1359,7 @@ fn automation_run_trigger_label(trigger: &str) -> &str {
     }
 }
 
+#[derive(Default)]
 struct SqlValidationPreview {
     configured_database_path: String,
     series: String,
@@ -1386,6 +1387,11 @@ struct SqlValidationPreview {
     maximum_entity_property_changes: Option<usize>,
     maximum_skipped_rows: Option<usize>,
     connections: Vec<ConnectionFact>,
+    selected_connection_keys: HashSet<String>,
+    query_result_token: Uuid,
+    query_result_source_key: String,
+    query_result_database_path: String,
+    seeded_query: bool,
     skipped_endpoints: Vec<SkippedSqlEndpoint>,
 }
 
@@ -2915,6 +2921,7 @@ struct App {
     sql_parameter_text: String,
     sql_seed_parameter_name: String,
     sql_seed_identity_key: String,
+    sql_seed_query_mode: bool,
     sql_cleared_parameter_draft: Option<(String, String)>,
     sql_validation_preview: Option<SqlValidationPreview>,
     sql_skipped_endpoints: Vec<SkippedSqlEndpoint>,
@@ -3058,6 +3065,7 @@ struct SqlUiRequest {
     query_timeout_minutes: u16,
     data_mode: DataMode,
     editing_job: Option<Uuid>,
+    seeded_query: bool,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -3582,6 +3590,7 @@ impl Default for App {
             sql_parameter_text: "snapshot_id=baseline".into(),
             sql_seed_parameter_name: "seed_entity_id".into(),
             sql_seed_identity_key: String::new(),
+            sql_seed_query_mode: false,
             sql_cleared_parameter_draft: None,
             sql_validation_preview: None,
             sql_skipped_endpoints: Vec::new(),
@@ -4072,6 +4081,7 @@ impl App {
             self.status = "CHART TAB NO LONGER EXISTS".into();
             return;
         };
+        self.sql_validation_preview = None;
         self.sync_active_chart_viewport();
         let target = self.case.chart_tabs.remove(position);
         let outgoing_template = self.case.active_chart_template;
@@ -4761,6 +4771,7 @@ impl App {
             sql_parameter_text: String::new(),
             sql_seed_parameter_name: "seed_entity_id".into(),
             sql_seed_identity_key: String::new(),
+            sql_seed_query_mode: false,
             sql_cleared_parameter_draft: None,
             sql_validation_preview: None,
             sql_skipped_endpoints: Vec::new(),
@@ -9092,7 +9103,17 @@ impl App {
                     .automation_maximum_connection_property_changes,
                 maximum_entity_property_changes: self.automation_maximum_entity_property_changes,
                 maximum_skipped_rows: self.automation_maximum_skipped_rows,
-                connections: snapshot.connections.iter().take(8).cloned().collect(),
+                connections: snapshot.connections.iter().take(200).cloned().collect(),
+                selected_connection_keys: snapshot
+                    .connections
+                    .iter()
+                    .take(200)
+                    .map(|connection| connection.key.clone())
+                    .collect(),
+                query_result_token: Uuid::new_v4(),
+                query_result_source_key: snapshot.source_key.clone(),
+                query_result_database_path: snapshot.database_path.clone(),
+                seeded_query: self.sql_seed_query_mode,
                 skipped_endpoints,
             });
         let validation_message = if self.status.starts_with("SQL SNAPSHOT INGESTED") {
@@ -9236,7 +9257,7 @@ impl App {
 
     fn show_sql_validation_preview(
         ui: &mut egui::Ui,
-        preview: Option<&SqlValidationPreview>,
+        preview: Option<&mut SqlValidationPreview>,
         database_path: &str,
         series: &str,
         query: &str,
@@ -9450,16 +9471,15 @@ impl App {
             });
         }
         egui::CollapsingHeader::new(format!(
-            "SQL ROW PREVIEW · {} OF {} CONNECTIONS",
+            "SQL RESULT REVIEW · {} SELECTABLE OF {} CONNECTIONS",
             preview.connections.len(),
             preview.connection_count
         ))
         .id_salt("sql_validation_preview")
         .show(ui, |ui| {
             ui.label(format!(
-                "Captured {} · showing up to {} rows{}",
+                "Captured {} · at most 200 rows are retained for this transient review{}",
                 preview.captured_at,
-                preview.connections.len(),
                 if preview.skipped_rows == 0 {
                     String::new()
                 } else {
@@ -9473,6 +9493,7 @@ impl App {
                 egui::Grid::new("sql_validation_preview_rows")
                     .striped(true)
                     .show(ui, |ui| {
+                        ui.strong("Add");
                         for heading in [
                             "Connection ID",
                             "Source",
@@ -9493,6 +9514,21 @@ impl App {
                         }
                         ui.end_row();
                         for connection in &preview.connections {
+                            if preview.seeded_query {
+                                let mut selected =
+                                    preview.selected_connection_keys.contains(&connection.key);
+                                if ui.checkbox(&mut selected, "").changed() {
+                                    if selected {
+                                        preview
+                                            .selected_connection_keys
+                                            .insert(connection.key.clone());
+                                    } else {
+                                        preview.selected_connection_keys.remove(&connection.key);
+                                    }
+                                }
+                            } else {
+                                ui.label("—");
+                            }
                             ui.label(if connection.connection_id.is_empty() {
                                 "(natural key)"
                             } else {
@@ -9525,6 +9561,38 @@ impl App {
                         }
                     });
             });
+            if preview.seeded_query {
+                let selectable_count = preview.connections.len();
+                let selected_count = preview.selected_connection_keys.len();
+                ui.horizontal(|ui| {
+                    if ui.button("Select all retained rows").clicked() {
+                        preview.selected_connection_keys = preview
+                            .connections
+                            .iter()
+                            .map(|connection| connection.key.clone())
+                            .collect();
+                    }
+                    if ui.button("Clear selection").clicked() {
+                        preview.selected_connection_keys.clear();
+                    }
+                    ui.label(format!(
+                        "{selected_count} selected · {selectable_count} retained"
+                    ));
+                });
+                let add_selected = ui
+                    .add_enabled(
+                        selected_count > 0,
+                        egui::Button::new("Add selected rows to chart"),
+                    )
+                    .clicked();
+                ui.ctx().data_mut(|data| {
+                    data.insert_temp(egui::Id::new("sql_seed_add_selected_clicked"), add_selected)
+                });
+            } else {
+                ui.ctx().data_mut(|data| {
+                    data.insert_temp(egui::Id::new("sql_seed_add_selected_clicked"), false)
+                });
+            }
         });
         if preview.skipped_rows > 0 {
             egui::CollapsingHeader::new(format!(
@@ -9893,11 +9961,151 @@ impl App {
             },
             data_mode: self.data_mode,
             editing_job: self.editing_automation_job,
+            seeded_query: self.sql_seed_query_mode && self.data_mode != DataMode::Automation,
         }
     }
 
     fn start_sql_validation(&mut self) {
         self.start_sql_ui_operation(self.sql_ui_request(), true);
+    }
+
+    fn add_selected_sql_query_results(&mut self) {
+        let Some(preview) = self.sql_validation_preview.as_ref() else {
+            self.status = "SQL RESULT REVIEW EXPIRED · validate the query again".into();
+            return;
+        };
+        let Ok(parameters) = parse_sql_parameters(&self.sql_parameter_text) else {
+            self.status = "SQL RESULT REVIEW EXPIRED · SQL parameters changed".into();
+            return;
+        };
+        if !preview.seeded_query
+            || preview.configured_database_path != self.sql_path.trim()
+            || preview.series != self.sql_series.trim()
+            || preview.query != self.sql_query.trim()
+            || preview.parameters != parameters
+        {
+            self.status = "SQL RESULT REVIEW EXPIRED · validate the current query again".into();
+            self.sql_validation_preview = None;
+            return;
+        }
+        let selected = preview
+            .connections
+            .iter()
+            .filter(|connection| preview.selected_connection_keys.contains(&connection.key))
+            .cloned()
+            .collect::<Vec<_>>();
+        if selected.is_empty() {
+            self.status = "NO SQL RESULT ROWS SELECTED".into();
+            return;
+        }
+        let source_key = preview.query_result_source_key.clone();
+        let database_path = preview.query_result_database_path.clone();
+        let token = preview.query_result_token;
+        let mut entities = self.case.entities.clone();
+        let mut links = self.case.links.clone();
+        let mut entity_index = EntityIndex::new(&entities);
+        let mut inserted = 0usize;
+        let mut captured_representations = HashMap::<Uuid, EntityRepresentation>::new();
+        let mut captured_attributes = HashMap::<(Uuid, String), String>::new();
+        let result = (|| -> Result<(), String> {
+            for fact in &selected {
+                let from = entity_index.find_or_add_entity_with_external_id(
+                    &fact.source,
+                    &fact.source_type,
+                    &database_path,
+                    &fact.source_entity_id,
+                    &mut entities,
+                )?;
+                let to = entity_index.find_or_add_entity_with_external_id(
+                    &fact.target,
+                    &fact.target_type,
+                    &database_path,
+                    &fact.target_entity_id,
+                    &mut entities,
+                )?;
+                for (entity_id, value) in [
+                    (from, fact.source_representation.as_str()),
+                    (to, fact.target_representation.as_str()),
+                ] {
+                    if let Some(representation) = EntityRepresentation::parse(value)
+                        && captured_representations
+                            .insert(entity_id, representation)
+                            .is_some_and(|previous| previous != representation)
+                    {
+                        return Err(format!(
+                            "selected rows contain conflicting visual representations for {}",
+                            entities
+                                .iter()
+                                .find(|entity| entity.id == entity_id)
+                                .map(|entity| entity.name.as_str())
+                                .unwrap_or("<unknown>")
+                        ));
+                    }
+                    if let (Some(entity), Some(representation)) = (
+                        entities.iter_mut().find(|entity| entity.id == entity_id),
+                        EntityRepresentation::parse(value),
+                    ) {
+                        entity.representation = representation;
+                    }
+                }
+                for (entity_id, attributes) in [
+                    (from, &fact.source_attributes),
+                    (to, &fact.target_attributes),
+                ] {
+                    for (name, value) in attributes {
+                        let key = (entity_id, name.to_ascii_lowercase());
+                        if captured_attributes
+                            .insert(key, value.clone())
+                            .is_some_and(|previous| previous != *value)
+                        {
+                            return Err(format!(
+                                "selected rows contain conflicting {name} values for {}",
+                                entities
+                                    .iter()
+                                    .find(|entity| entity.id == entity_id)
+                                    .map(|entity| entity.name.as_str())
+                                    .unwrap_or("<unknown>")
+                            ));
+                        }
+                    }
+                    if let Some(entity) = entities.iter_mut().find(|entity| entity.id == entity_id)
+                    {
+                        apply_sql_entity_attributes(entity, &source_key, attributes);
+                    }
+                }
+                links.push(Link {
+                    from,
+                    to,
+                    connection_id: fact.connection_id.clone(),
+                    label: fact.relationship.clone(),
+                    date: fact.date.clone(),
+                    confidence: fact.confidence,
+                    directed: fact.directed,
+                    notes: String::new(),
+                    source_notes: fact.notes.clone(),
+                    source_reference: fact.source_reference.clone(),
+                    ingest_source: Some(format!("{source_key}#query-review:{token}")),
+                    attributes: fact.attributes.clone(),
+                });
+                inserted += 1;
+            }
+            Ok(())
+        })();
+        match result {
+            Ok(()) => {
+                self.case.entities = entities;
+                self.case.links = links;
+                self.invalidate_network_groups();
+                self.clear_path_result();
+                self.status = format!(
+                    "SQL QUERY RESULTS ADDED · {inserted} SELECTED RELATIONSHIPS · NO SNAPSHOT CREATED"
+                );
+                self.sql_validation_preview = None;
+            }
+            Err(error) => {
+                self.status = format!("SQL QUERY RESULTS NOT ADDED · {error}");
+            }
+        }
     }
 
     fn start_sql_ingestion(&mut self) {
@@ -9946,6 +10154,7 @@ impl App {
                 worker.sql_query_timeout_minutes = request.query_timeout_minutes;
                 worker.data_mode = request.data_mode;
                 worker.editing_automation_job = request.editing_job;
+                worker.sql_seed_query_mode = request.seeded_query;
                 let result = if validate {
                     worker.validate_sql_query();
                     AutomationWorkerResult::Validation {
@@ -21300,7 +21509,7 @@ impl eframe::App for App {
                                 }
                                 Self::show_sql_validation_preview(
                                     ui,
-                                    self.sql_validation_preview.as_ref(),
+                                    self.sql_validation_preview.as_mut(),
                                     &self.sql_path,
                                     &self.sql_series,
                                     &self.sql_query,
@@ -22309,7 +22518,7 @@ impl eframe::App for App {
                                             );
                                             Self::show_sql_validation_preview(
                                                 ui,
-                                                self.sql_validation_preview.as_ref(),
+                                                self.sql_validation_preview.as_mut(),
                                                 &job.database_path,
                                                 &job.series,
                                                 &job.query,
@@ -23642,6 +23851,7 @@ impl eframe::App for App {
                                                     Ok(parameters) => {
                                                         self.sql_parameter_text = parameters;
                                                         self.sql_validation_preview = None;
+                                                        self.sql_seed_query_mode = true;
                                                         self.status = format!(
                                                             "SQL SEED BOUND · use :{} in the one-off query, then validate",
                                                             self.sql_seed_parameter_name.trim()
@@ -23776,7 +23986,7 @@ impl eframe::App for App {
                                 }
                                 Self::show_sql_validation_preview(
                                     ui,
-                                    self.sql_validation_preview.as_ref(),
+                                    self.sql_validation_preview.as_mut(),
                                     &self.sql_path,
                                     &self.sql_series,
                                     &self.sql_query,
@@ -23791,6 +24001,20 @@ impl eframe::App for App {
                                     self.automation_maximum_skipped_rows,
                                     &mut self.sql_validation_preview_regressions_only,
                                 );
+                                let add_selected_sql_results = ui.ctx().data_mut(|data| {
+                                    data.get_temp::<bool>(egui::Id::new(
+                                        "sql_seed_add_selected_clicked",
+                                    ))
+                                    .unwrap_or(false)
+                                });
+                                if add_selected_sql_results {
+                                    ui.ctx().data_mut(|data| {
+                                        data.remove::<bool>(egui::Id::new(
+                                            "sql_seed_add_selected_clicked",
+                                        ));
+                                    });
+                                    self.add_selected_sql_query_results();
+                                }
                                 if let Some(current)=current_snapshot.clone() {
                                     let chart_source_key = current.source_key.clone();
                                     let chart_database_path = current.database_path.clone();
@@ -46092,6 +46316,76 @@ mod tests {
             sql_seed_identity_label("/var/data/accounts.sqlite", "acct-17"),
             "accounts.sqlite · acct-17"
         );
+    }
+
+    #[test]
+    fn seeded_query_review_adds_only_selected_rows_without_creating_a_snapshot() {
+        let mut case: CaseFile =
+            serde_json::from_str(include_str!("../fixtures/chart/correctness.case.json"))
+                .expect("chart fixture parses");
+        let existing = case.entities[0].clone();
+        let original_link_count = case.links.len();
+        let database_path = "/tmp/accounts.sqlite";
+        case.entities[0]
+            .external_ids
+            .push((database_path.into(), "acct-17".into()));
+        let fact = |key: &str, connection_id: &str, source: &str, source_id: &str| ConnectionFact {
+            key: key.into(),
+            connection_id: connection_id.into(),
+            source_entity_id: source_id.into(),
+            target_entity_id: format!("{connection_id}-target"),
+            source: source.into(),
+            source_type: existing.kind.clone(),
+            source_representation: String::new(),
+            target: format!("Target {connection_id}"),
+            target_type: "ORGANIZATION".into(),
+            target_representation: String::new(),
+            relationship: "CONTACTED".into(),
+            date: "2026-11-28".into(),
+            confidence: 2,
+            directed: true,
+            source_reference: String::new(),
+            notes: String::new(),
+            source_attributes: Vec::new(),
+            target_attributes: Vec::new(),
+            attributes: Vec::new(),
+        };
+        let selected = fact("row-1", "row-1", &existing.name, "acct-17");
+        let unselected = fact("row-2", "row-2", "Another source", "acct-18");
+        let mut app = App::automation_context(case, "/tmp/seed-review.case.json");
+        app.sql_path = database_path.into();
+        app.sql_series = "one-off search".into();
+        app.sql_query = "SELECT ... WHERE id = :seed_entity_id".into();
+        app.sql_parameter_text = "seed_entity_id=text:acct-17".into();
+        app.sql_validation_preview = Some(super::SqlValidationPreview {
+            configured_database_path: database_path.into(),
+            series: app.sql_series.clone(),
+            query: app.sql_query.clone(),
+            parameters: vec![("seed_entity_id".into(), "text:acct-17".into())],
+            connections: vec![selected.clone(), unselected],
+            selected_connection_keys: ["row-1".into()].into_iter().collect(),
+            query_result_token: Uuid::new_v4(),
+            query_result_source_key: "accounts-search".into(),
+            query_result_database_path: database_path.into(),
+            seeded_query: true,
+            ..Default::default()
+        });
+
+        app.add_selected_sql_query_results();
+
+        assert!(app.status.contains("1 SELECTED RELATIONSHIPS"));
+        assert_eq!(app.case.snapshots.len(), 0);
+        assert_eq!(app.case.links.len(), original_link_count + 1);
+        let inserted = app.case.links.last().expect("selected row is appended");
+        assert_eq!(inserted.connection_id, "row-1");
+        assert_eq!(inserted.from, existing.id);
+        assert!(
+            inserted
+                .ingest_source
+                .as_deref()
+                .is_some_and(|source| source.starts_with("accounts-search#query-review:"))
+        );
+        assert!(app.sql_validation_preview.is_none());
     }
 
     #[test]
