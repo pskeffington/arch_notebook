@@ -23,7 +23,9 @@
 | Isolated Linux install acceptance | **PASS** | `scripts/test-linux-user-install-acceptance.py` with the release binary, exit 0. |
 | Current-user install | **PASS** | Updated `~/.local/bin/arch-notebook`; digest matches release. Desktop shortcut equals menu entry; SVG/PNG and MIME definition match repository assets. |
 | Clinton primary corpus QA | **PASS** | `scripts/test-clinton-corpus-acceptance.py` with the release binary, exit 0; read-only preflight/replay passed, 6,173 relationship rows, zero skipped rows and zero deltas; source inputs unchanged. |
-| Native UI / IBM interop | **NOT RUN** | No native pointer review and no i2 Analyze connection/schema validation. |
+| Native X11 window launch | **PASS, bounded** | Installed release created an `Arch Notebook · Link Analysis` window at 1440×900, confirmed with `xwininfo`. |
+| Native visual/pointer/keyboard acceptance | **NOT RUN** | Screenshot capture failed and no native input review was completed. The Wayland launch returned `NoCompositor`; the X11 window was closed after the bounded launch check. |
+| IBM interoperability | **NOT RUN** | No i2 Analyze connection or schema/application validation. |
 
 ## Aggregate artifacts
 
