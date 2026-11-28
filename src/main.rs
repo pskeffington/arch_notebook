@@ -3406,6 +3406,7 @@ enum QuickCommand {
     NewChart,
     LoadSavedSqlSearch(Uuid),
     ReviewSqlSnapshot(usize),
+    ReviewAutomationRun(Uuid),
     ReinspectImportDesign(Uuid),
 }
 
@@ -31670,6 +31671,21 @@ impl eframe::App for App {
                         )
                     }),
             );
+            commands.extend(self.case.automation_runs.iter().rev().map(|run| {
+                (
+                    format!(
+                        "Review SQL run · {} · {} · {}",
+                        run.job_name,
+                        run.finished_at,
+                        if run.success { "PASS" } else { "FAIL" }
+                    ),
+                    format!(
+                        "automation SQL scheduled run history {} {} {} {}",
+                        run.job_name, run.series, run.database_path, run.message
+                    ),
+                    QuickCommand::ReviewAutomationRun(run.id),
+                )
+            }));
             let import_busy = self.import_inspection_worker.is_some()
                 || self.anx_import_worker.is_some()
                 || self.xslt_import_worker.is_some();
@@ -31801,6 +31817,20 @@ impl eframe::App for App {
                         }
                         QuickCommand::ReviewSqlSnapshot(index) => {
                             self.open_sql_snapshot_review(index);
+                        }
+                        QuickCommand::ReviewAutomationRun(id) => {
+                            if self.case.automation_runs.iter().any(|run| run.id == id) {
+                                self.page = WorkspacePage::Data;
+                                self.show_timeline = false;
+                                self.data_mode = DataMode::Automation;
+                                self.automation_run_filter = id.to_string();
+                                self.automation_run_trigger_filter = "all".into();
+                                self.automation_failed_runs_only = false;
+                                self.automation_schema_adaptation_only = false;
+                                self.automation_schema_stability_only = false;
+                                self.automation_runs_needing_review = false;
+                                self.automation_runs_with_unreviewed_regressions = false;
+                            }
                         }
                         QuickCommand::ReinspectImportDesign(id) => {
                             self.page = WorkspacePage::Chart;
@@ -53151,6 +53181,64 @@ mod tests {
         assert_eq!(app.case.entities.len(), original_entities);
         assert_eq!(app.case.links.len(), original_links);
         assert!(app.sql_validation_preview.is_none());
+    }
+
+    #[test]
+    fn quick_open_reviews_failed_automation_run_by_exact_run_id() {
+        let mut case: CaseFile =
+            serde_json::from_str(include_str!("../fixtures/chart/correctness.case.json"))
+                .expect("correctness fixture parses");
+        let run_id = Uuid::from_u128(8201);
+        let mut run: super::AutomationRun = serde_json::from_value(serde_json::json!({
+            "id": run_id,
+            "batch_id": Uuid::from_u128(8202),
+            "job_id": Uuid::from_u128(8203),
+            "job_name": "Monthly contacts",
+            "database_path": "/tmp/contacts.sqlite",
+            "series": "monthly contacts",
+            "trigger": "scheduled",
+            "started_at": "2026-11-28T11:59:00Z",
+            "finished_at": "2026-11-28T12:00:00Z",
+            "success": false,
+            "message": "no such column: status"
+        }))
+        .expect("minimal automation run parses with defaults");
+        run.id = run_id;
+        case.automation_runs.push(run);
+        let mut app = App::automation_context(case, "/tmp/quick-open-automation-run.case.json");
+        app.command_palette_open = true;
+        app.automation_run_filter = "old search".into();
+        app.automation_run_trigger_filter = "scheduled".into();
+        app.automation_failed_runs_only = true;
+        app.automation_schema_adaptation_only = true;
+        app.automation_schema_stability_only = true;
+        app.automation_runs_needing_review = true;
+        app.automation_runs_with_unreviewed_regressions = true;
+
+        let context = egui::Context::default();
+        let mut frame = eframe::Frame::_new_kittest();
+        let mut time = 0.0;
+        let _first = render_headless_app_frame(&context, &mut app, &mut frame, time, Vec::new());
+        time += 1.0 / 60.0;
+        let palette = render_headless_app_frame(&context, &mut app, &mut frame, time, Vec::new());
+        let command = "Review SQL run · Monthly contacts · 2026-11-28T12:00:00Z · FAIL";
+        assert!(find_headless_text_point(&palette, command).is_some());
+        let _selected = click_headless_visible_text(
+            &context, &mut app, &mut frame, &mut time, &palette, command,
+        );
+
+        assert!(!app.command_palette_open);
+        assert!(matches!(app.page, super::WorkspacePage::Data));
+        assert!(matches!(app.data_mode, super::DataMode::Automation));
+        assert_eq!(app.automation_run_filter, run_id.to_string());
+        assert_eq!(app.automation_run_trigger_filter, "all");
+        assert!(!app.automation_failed_runs_only);
+        assert!(!app.automation_schema_adaptation_only);
+        assert!(!app.automation_schema_stability_only);
+        assert!(!app.automation_runs_needing_review);
+        assert!(!app.automation_runs_with_unreviewed_regressions);
+        assert_eq!(app.case.automation_runs[0].id, run_id);
+        assert!(app.case.snapshots.is_empty());
     }
 
     #[test]

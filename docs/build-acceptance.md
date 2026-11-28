@@ -1,5 +1,16 @@
 # Local build acceptance record
 
+## Quick Open automation run navigation — 2026-11-28
+
+Quick Open now lists saved SQL automation outcomes by job, finish time, and pass/fail state. Selecting a run opens Automation history filtered to that exact run UUID and clears unrelated filters so the result is visible. This is a navigation action and does not rerun SQL or create a snapshot.
+
+| Gate | Result | Evidence |
+| --- | --- | --- |
+| Headless failed-run navigation regression | PASS | `quick_open_reviews_failed_automation_run_by_exact_run_id` verifies discovery of a failed scheduled run, exact UUID filter, cleared conflicting filters, and no snapshot creation. |
+| Locked workspace check and full Rust suite | PASS | `cargo check --locked --offline`: exit 0; `cargo test --locked --offline`: 108 passed, 0 failed, 3 ignored. |
+| Formatting and diff validation | PASS | `cargo fmt --all -- --check` and `git diff --check`: exit 0. |
+| Native UI and live scheduled execution | NOT TESTED | Headless dispatch does not establish native interaction or host timer operation. |
+
 ## Quick Open SQL capture navigation — 2026-11-28
 
 Quick Open now lists saved SQL captures by series and capture time. Selecting a capture opens SQL Review at that saved snapshot and switches to its destination chart when that chart is present. Navigation does not rerun the SQL query or alter chart records.

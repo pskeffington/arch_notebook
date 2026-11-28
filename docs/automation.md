@@ -189,7 +189,7 @@ Saved designs with a remembered source also appear in **Quick open** as **Reinsp
 
 ## Inspect and replay run history
 
-Read saved automation outcomes without opening the desktop app:
+Read saved automation outcomes without opening the desktop app. In the desktop app, **Quick open** lists saved runs by job, finish time, and outcome; selecting one opens Automation history filtered to that exact run without rerunning its SQL.
 
 ```sh
 cargo run --offline -- --list-runs harbor-light.case.json --json
