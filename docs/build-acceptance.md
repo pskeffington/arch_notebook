@@ -1,5 +1,18 @@
 # Local build acceptance record
 
+## Current-user Linux deployment — 2026-11-28
+
+The optimized candidate from product source `c653f31` is installed under the current user's launcher. The application-menu entry and Desktop shortcut are synchronized; installed binary, deployment SVG/PNG, case MIME definition, and SQL helper match their build/source assets. This is not a public release and native pointer review was not performed.
+
+| Gate | Result | Evidence |
+| --- | --- | --- |
+| Current-user install | PASS | `scripts/install-linux-user.sh /tmp/arch-notebook-linux-x86_64`: exit 0. |
+| Installed binary and app version | PASS | Launcher SHA-256 `46596680af31ba1d92314426e6fd69feb7179a9d8489038cbcca1ee48ac42c1a`; `--version --json` reports version 0.1.0. |
+| Desktop launchers | PASS | Menu and Desktop entries compare byte-for-byte; both pass `desktop-file-validate`. |
+| SVG/PNG graphics | PASS | Both installed icon hashes match repository assets; see [LOCAL-INSTALL-15](evidence/deployment/LOCAL-INSTALL-15-scheduled-run-navigation-linux.md). |
+| MIME and SQL helper | PASS | Installed file hashes match repository sources. |
+| Native interaction / IBM visual parity | NOT TESTED | Install checks do not establish GUI launch or interactive acceptance. |
+
 ## External scheduled SQL run review navigation — 2026-11-28
 
 The desktop checks the active case file's size and modification time once per second. When it detects a changed signature, it reads the file, compares contents with the last synchronized baseline, and detects scheduled SQL run IDs that were not in the open case. It does not replace in-memory data automatically. Explicit reload preserves the unsaved-change confirmation; after a successful reload with a new scheduled run, the notebook opens Automation history filtered to that run UUID. The atomic-save conflict guard prevents stale in-memory data from overwriting the external update.
