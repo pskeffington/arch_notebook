@@ -1,5 +1,7 @@
 # SQL-SEARCH-CATALOG-02 — current-source runtime checks
 
+> Superseded for release installation and Clinton acceptance by [SQL-SEARCH-CATALOG-03](SQL-SEARCH-CATALOG-03-current-source-release-20261128.md), which uses the optimized release binary at the same source commit. This record remains the debug-profile check.
+
 - **Task / owner:** Verify the saved SQL search and Quick Open source against the existing Linux install contract and primary Clinton corpus; primary agent.
 - **Repository / branch:** `arch_notebook` / `codex/ui-00-chart-nested-conditions`.
 - **Source commit:** `a1f1c0d7af4c6304a667516218ab3128373adac5`.

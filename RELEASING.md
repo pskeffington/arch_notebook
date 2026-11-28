@@ -12,7 +12,7 @@ The build workflow creates Linux x86_64 and ARM64 archives, an Arch Linux x86_64
 
 ## Local user install evidence — 2026-11-28
 
-The optimized Rust candidate from product source `5bb4593` is installed for the current Linux user; its binary and synchronized Desktop/menu/icon assets pass local installation checks. This is an installation acceptance result, not authorization to publish a GitHub Release. Native interactive review, live scheduler dispatch, exact-head CI for this candidate, and IBM application/schema validation remain open. See [LOCAL-INSTALL-12](docs/evidence/deployment/LOCAL-INSTALL-12-linux.md) and [current-source SQL/build acceptance](docs/evidence/sql-automation/SQL-AUTO-11-current-source-clinton-20261128.md).
+The optimized Rust candidate from product source `7df1bf6` is installed for the current Linux user; its binary and synchronized Desktop/menu/icon/MIME assets pass local install checks. Current-source Clinton preflight and replay pass for 6,173 rows with zero skipped rows or deltas. This is an installation acceptance result, not authorization to publish a GitHub Release. Native interactive review, live scheduler dispatch, exact-head CI for this candidate, human email-content review, and IBM application/schema validation remain open. See [SQL-SEARCH-CATALOG-03](docs/evidence/sql-automation/SQL-SEARCH-CATALOG-03-current-source-release-20261128.md).
 
 ## Publish a version
 

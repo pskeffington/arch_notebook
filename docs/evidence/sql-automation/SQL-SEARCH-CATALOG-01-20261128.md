@@ -1,5 +1,7 @@
 # SQL-SEARCH-CATALOG-01 — case-local saved SQL searches
 
+> Follow-up: release build, current-user installation, and Clinton QA later passed at source `7df1bf6`; see [SQL-SEARCH-CATALOG-03](SQL-SEARCH-CATALOG-03-current-source-release-20261128.md). The blocked results below are the original attempt and remain historically accurate.
+
 - **Task / owner:** Add reusable named query definitions to SQL Review; implementation and acceptance by the primary agent.
 - **Repository / branch:** `arch_notebook` / `codex/ui-00-chart-nested-conditions`.
 - **Baseline:** `8037cbc2d0a94444aebecb9937710e34e52006de`.
