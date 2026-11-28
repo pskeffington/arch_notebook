@@ -20,4 +20,6 @@
 
 ## Remote build
 
-The `build` workflow was dispatched with `workflow_dispatch` for product source commit `b0931fa83ce77848f045240e0c18b2f6633f8196`, run [46107715406](https://github.com/pskeffington/arch_notebook/actions/runs/46107715406). At the time this evidence was first recorded, the run was queued. The evidence-only commit should also receive an exact-head dispatch.
+The `build` workflow completed successfully for repaired source commit `cbad7eca7ffacd3d3f3a2d785abfdd9423278a95`, run [46108181993](https://github.com/pskeffington/arch_notebook/actions/runs/46108181993). Linux tests/fixture determinism, Linux x86_64, Linux ARM64, macOS Intel, macOS Apple Silicon, and Arch Linux packaging all passed. Release-asset attachment was skipped because this was a manual workflow dispatch, not a published release.
+
+Two earlier manual runs failed at formatting: [46107715406](https://github.com/pskeffington/arch_notebook/actions/runs/46107715406) and [46107908092](https://github.com/pskeffington/arch_notebook/actions/runs/46107908092). Investigation showed that a GitHub API upload had truncated `src/main.rs`, inserting literal ellipses into the remote Rust source. The source was reconstructed from checked local chunks and uploaded only after its Git blob SHA matched local `6f731733243a96c7f6335bb004ad10500f7e1b17`; GitHub reports the same blob SHA and exact size 2,375,707 bytes. The repaired tree SHA `1a18c871b9b2adb4d7023e1833c7d007e1a6daea` matches the local product/evidence tree at verification. No force-push was used.
