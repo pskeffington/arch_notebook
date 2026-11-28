@@ -39,3 +39,5 @@ The direct State OIG ESP-16-03 PDF endpoint returned HTTP 403; it was excluded. 
 Commands and observed outcomes: individual `curl -fLsS --retry 2 --max-time 120 <official-url> -o <local-file>` downloads exited 0 for the 11 included files; `file`/page-count inspection completed; `sha256sum -c SHA256SUMS` exited 0; `/home/sysadmin/.local/bin/arch-notebook --help` exited 0. No build or product tests were run.
 
 **Changed repository path:** this evidence record only. No product code, raw source PDFs, Qwen output, or extracted email text is included.
+
+The later Poppler check confirmed a text layer on many inputs but did not yield reliable page-aligned output: 2,842 delimited segments versus 2,850 pages reported by `pdfinfo`. This was an in-memory availability diagnostic only; no text was saved, sent to TRANS/Qwen, or imported into Arch Notebook. See the [aggregate text-layer inventory](political-email-text-layer-inventory-2026-11-28.md).
