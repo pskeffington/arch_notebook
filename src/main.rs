@@ -26423,6 +26423,8 @@ impl eframe::App for App {
                             let map_width = 148.0 + analysis.map_hops.len().saturating_sub(1) as f32 * 148.0;
                             let max_rows = visible_groups_by_column.iter().map(Vec::len).max().unwrap_or_default();
                             let map_height = proximity_map_height(max_rows);
+                            let mut hovered_map_group = None;
+                            let mut hovered_map_interaction = None;
                             egui::ScrollArea::both()
                                 .id_salt(("proximity_sampled_contact_map", analysis_origin))
                                 .max_height(190.0)
@@ -26450,8 +26452,13 @@ impl eframe::App for App {
                                             );
                                         }
                                     }
-                                    let pointer_click = if response.clicked() {
-                                        ui.input(|input| input.pointer.interact_pos())
+                                    let pointer_position = if response.hovered() || response.clicked() {
+                                        ui.input(|input| {
+                                            input
+                                                .pointer
+                                                .interact_pos()
+                                                .or_else(|| input.pointer.hover_pos())
+                                        })
                                     } else {
                                         None
                                     };
@@ -26539,7 +26546,7 @@ impl eframe::App for App {
                                                 );
                                             }
                                         }
-                                        if let Some(pointer) = pointer_click {
+                                        if let Some(pointer) = pointer_position {
                                             let distance = route
                                                 .windows(2)
                                                 .map(|segment| {
@@ -26559,6 +26566,7 @@ impl eframe::App for App {
                                         }
                                     }
                                     let mut node_clicked = false;
+                                    let mut node_hovered = false;
                                     for group_index in analysis.map_group_indices.iter().copied() {
                                         let group = &analysis.groups[group_index];
                                         let center = positions[&group_index];
@@ -26604,6 +26612,10 @@ impl eframe::App for App {
                                             count_with_noun(group.members.len(), "entity", "entities"),
                                             count_with_noun(group.internal_record_count, "internal record", "internal records"),
                                         ));
+                                        if response.hovered() {
+                                            node_hovered = true;
+                                            hovered_map_group = Some(group_index);
+                                        }
                                         if response.clicked() {
                                             node_clicked = true;
                                             self.selected_proximity_group = Some(group_index);
@@ -26618,7 +26630,96 @@ impl eframe::App for App {
                                         self.selected_proximity_group = Some(interaction.first_group);
                                         self.selected_proximity_interaction = Some((interaction.first_group, interaction.second_group));
                                     }
+                                    if !node_hovered
+                                        && let Some((distance, interaction_index)) = nearest_route
+                                        && distance <= 8.0
+                                    {
+                                        hovered_map_interaction = Some(interaction_index);
+                                        let interaction = &analysis.interactions[interaction_index];
+                                        if self.selected_proximity_interaction
+                                            != Some((interaction.first_group, interaction.second_group))
+                                            && let (Some(first), Some(second)) = (
+                                                positions.get(&interaction.first_group).copied(),
+                                                positions.get(&interaction.second_group).copied(),
+                                            )
+                                        {
+                                            let route = proximity_map_edge_route(
+                                                first,
+                                                second,
+                                                interaction_index,
+                                            );
+                                            let edge_width = (1.0_f32
+                                                + (interaction.relationship_record_count as f32)
+                                                    .log2())
+                                            .clamp(1.0, 4.0);
+                                            let hover_stroke = egui::Stroke::new(
+                                                edge_width + 2.0,
+                                                egui::Color32::from_rgb(84, 194, 205),
+                                            );
+                                            for segment in route.windows(2) {
+                                                painter.line_segment(
+                                                    [segment[0], segment[1]],
+                                                    hover_stroke,
+                                                );
+                                            }
+                                        }
+                                    }
                                 });
+                            let preview = if let Some(group_index) = hovered_map_group
+                                && let Some(group) = analysis.groups.get(group_index)
+                            {
+                                format!(
+                                    "G{} · hop {} · {} · {} internal records",
+                                    group_index + 1,
+                                    group.hop_distance,
+                                    count_with_noun(group.members.len(), "entity", "entities"),
+                                    group.internal_record_count,
+                                )
+                            } else if let Some(interaction_index) = hovered_map_interaction
+                                && let Some(interaction) = analysis.interactions.get(interaction_index)
+                            {
+                                format!(
+                                    "G{} ↔ G{} · {} · {} · →{} ←{} ↔{}",
+                                    interaction.first_group + 1,
+                                    interaction.second_group + 1,
+                                    count_with_noun(
+                                        interaction.relationship_record_count,
+                                        "record",
+                                        "records",
+                                    ),
+                                    count_with_noun(
+                                        interaction.distinct_endpoint_pair_count,
+                                        "endpoint pair",
+                                        "endpoint pairs",
+                                    ),
+                                    interaction.first_to_second_record_count,
+                                    interaction.second_to_first_record_count,
+                                    interaction.undirected_record_count,
+                                )
+                            } else {
+                                "Hover a group or contact line to preview its topology.".to_owned()
+                            };
+                            ui.allocate_ui_with_layout(
+                                egui::vec2(ui.available_width(), 16.0),
+                                egui::Layout::left_to_right(egui::Align::Min),
+                                |ui| {
+                                    ui.add(
+                                        egui::Label::new(
+                                            egui::RichText::new(preview.clone())
+                                                .small()
+                                                .color(if hovered_map_group.is_some()
+                                                    || hovered_map_interaction.is_some()
+                                                {
+                                                    cyan
+                                                } else {
+                                                    muted
+                                                }),
+                                        )
+                                        .truncate(),
+                                    )
+                                    .on_hover_text(preview);
+                                },
+                            );
                             if let Some(group_index) = self.selected_proximity_group
                                 && let Some(group) = analysis.groups.get(group_index)
                             {
@@ -46047,6 +46148,49 @@ mod tests {
                 .expect("at least one sampled contact route is visible for map picking")
         };
         app.selected_proximity_interaction = None;
+        time += 1.0 / 60.0;
+        let hovered_route_view = render_headless_app_frame_at(
+            &context,
+            &mut app,
+            &mut frame,
+            time,
+            vec![egui::Event::PointerMoved(route_click)],
+            map_viewport,
+        );
+        let hovered_interaction = app
+            .network_proximity_analysis
+            .as_ref()
+            .unwrap()
+            .1
+            .interactions
+            .iter()
+            .find(|interaction| (interaction.first_group, interaction.second_group) == click_pair)
+            .expect("the hovered route resolves to its group contact");
+        let hover_preview = format!(
+            "G{} ↔ G{} · {} · {} · →{} ←{} ↔{}",
+            click_pair.0 + 1,
+            click_pair.1 + 1,
+            super::count_with_noun(
+                hovered_interaction.relationship_record_count,
+                "record",
+                "records",
+            ),
+            super::count_with_noun(
+                hovered_interaction.distinct_endpoint_pair_count,
+                "endpoint pair",
+                "endpoint pairs",
+            ),
+            hovered_interaction.first_to_second_record_count,
+            hovered_interaction.second_to_first_record_count,
+            hovered_interaction.undirected_record_count,
+        );
+        assert!(
+            find_headless_text_rect(&hovered_route_view, &hover_preview).is_some(),
+            "hovering a contact line previews its topology: {hover_preview}; visible: {:?}",
+            collect_headless_texts(&hovered_route_view)
+        );
+        assert_eq!(app.selected_proximity_interaction, None);
+
         time += 1.0 / 60.0;
         render_headless_app_frame_at(
             &context,
