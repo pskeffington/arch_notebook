@@ -1001,4 +1001,6 @@ Read-only query-plan inspection normalizes a terminal semicolon and comments wit
 | --- | --- | --- |
 | Formatting, diff, locked check, full Rust suite | PASS | Formatting and diff checks exit 0; offline check exits 0; 90 passed, 0 failed, 3 ignored. |
 | Parameterized commented-query plan and source read-only check | PASS | [SQL-PLAN-01](evidence/sql-automation/SQL-PLAN-01-commented-readonly-query-20261128.md). |
-| Release build and native interaction | NOT RUN | This focused patch has no release build or native UI evidence. |
+| Locked offline release build | PASS | Exit 0; release SHA-256 `52c2a22db4b6c762bb88103137bab7b8419bce8189d7765464c3727d4efd1339`. |
+| Launcher and graphics synchronization | PASS | Current-user installation and isolated acceptance passed; release binary, desktop entry, SVG/PNG icons, MIME entry, and SQL helper match package assets. |
+| Native window and interaction | PARTIAL | X11 window mapped at 1440×900, but the display became unavailable to screenshot/input tools; visual and pointer/keyboard interaction remain unverified. |
