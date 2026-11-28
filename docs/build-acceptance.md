@@ -13,6 +13,7 @@ The desktop now checks the active case file's size and modification time once pe
 | Debug build | PASS | `CARGO_TARGET_DIR=/tmp/arch-notebook-target cargo build --locked --offline`: exit 0. |
 | Optimized release build | PASS | `CARGO_TARGET_DIR=/tmp/arch-notebook-target cargo build --release --locked --offline`: exit 0; binary SHA-256 recorded in the commit handoff. |
 | Formatting and diff validation | PASS | `cargo fmt --all -- --check` and `git diff --check`: exit 0. |
+| Primary Clinton corpus QA | PASS, bounded | Current candidate release passed query-only preflight and replay: 6,173 rows, zero skipped rows and deltas; redacted topology packet covers 2,813 entities with no clipped labels; source inputs unchanged. Aggregate report: [CLINTON-CORPUS-QA-b3f45d3](evidence/sql-automation/CLINTON-CORPUS-QA-b3f45d3-20261128.md). |
 | Live systemd timer / SQL capture | NOT TESTED | This test covers external file replacement and safe UI signaling, not actual host timer dispatch. |
 
 ## Quick Open keyboard navigation and chart destinations — 2026-11-28
