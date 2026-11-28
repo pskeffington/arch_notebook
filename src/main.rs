@@ -1622,6 +1622,7 @@ struct ChartLabel {
 const MAX_CHART_LEGEND_ENTRIES: usize = 24;
 const MAX_CHART_LEGEND_DESCRIPTION_BYTES: usize = 4_096;
 const MAX_CHART_LEGEND_CONDITIONS: usize = 8;
+const MAX_CHART_LEGEND_CONDITION_DEPTH: usize = 4;
 const MAX_CHART_TEMPLATE_CONDITIONAL_RULES: usize = MAX_CHART_LEGEND_ENTRIES * 4;
 const PROXIMITY_MAP_SELECTED_EDGE_COLOR: egui::Color32 = egui::Color32::from_rgb(244, 224, 166);
 const PROXIMITY_MAP_SELECTED_NODE_COLOR: egui::Color32 = egui::Color32::from_rgb(244, 224, 166);
@@ -1850,6 +1851,8 @@ struct ChartLegendEntry {
     #[serde(default)]
     additional_conditions_match_any: bool,
     #[serde(default)]
+    condition_expression: Option<ChartLegendConditionExpression>,
+    #[serde(default)]
     conditional_line_width: Option<f32>,
 }
 
@@ -1861,6 +1864,13 @@ struct ChartLegendConditionRule {
     condition: ChartLegendCondition,
     #[serde(default)]
     value: String,
+}
+
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+enum ChartLegendConditionExpression {
+    Condition(ChartLegendConditionRule),
+    All(Vec<ChartLegendConditionExpression>),
+    Any(Vec<ChartLegendConditionExpression>),
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -2127,6 +2137,7 @@ fn chart_legend_entries(case: &CaseFile) -> (Vec<ChartLegendEntry>, bool) {
                 conditional_value: String::new(),
                 additional_conditions: Vec::new(),
                 additional_conditions_match_any: false,
+                condition_expression: None,
                 conditional_line_width: None,
             });
         }
@@ -2152,6 +2163,7 @@ fn chart_legend_entries(case: &CaseFile) -> (Vec<ChartLegendEntry>, bool) {
                 conditional_value: String::new(),
                 additional_conditions: Vec::new(),
                 additional_conditions_match_any: false,
+                condition_expression: None,
                 conditional_line_width: None,
             });
         }
@@ -2184,6 +2196,7 @@ fn chart_legend_entries(case: &CaseFile) -> (Vec<ChartLegendEntry>, bool) {
                 conditional_value: String::new(),
                 additional_conditions: Vec::new(),
                 additional_conditions_match_any: false,
+                condition_expression: None,
                 conditional_line_width: None,
             });
         }
@@ -2214,6 +2227,7 @@ fn chart_legend_entries(case: &CaseFile) -> (Vec<ChartLegendEntry>, bool) {
                 conditional_value: String::new(),
                 additional_conditions: Vec::new(),
                 additional_conditions_match_any: false,
+                condition_expression: None,
                 conditional_line_width: None,
             });
         }
@@ -2252,37 +2266,42 @@ fn chart_matching_conditional_entry<'a>(
         if !entry.conditional_color || !entry.symbol.is_attribute() {
             continue;
         }
-        let Some(attribute_class) = entry
-            .attribute_class
-            .as_deref()
-            .map(str::trim)
-            .filter(|name| !name.is_empty())
-        else {
-            continue;
-        };
-        let value = attributes
-            .iter()
-            .find(|(name, _)| name.trim().eq_ignore_ascii_case(attribute_class))
-            .map(|(_, value)| value.as_str());
-        let primary_matches = if entry.match_exact_value {
-            value.is_some_and(|value| value.eq_ignore_ascii_case(&entry.conditional_value))
+        let matches = if let Some(expression) = entry.condition_expression.as_ref() {
+            chart_legend_condition_expression_matches(expression, attributes, 0)
         } else {
-            chart_legend_condition_matches(entry.condition, value, &entry.conditional_value)
-        };
-        let additional_match = if entry.additional_conditions.is_empty() {
-            true
-        } else if entry.additional_conditions_match_any {
-            entry
-                .additional_conditions
+            let Some(attribute_class) = entry
+                .attribute_class
+                .as_deref()
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+            else {
+                continue;
+            };
+            let value = attributes
                 .iter()
-                .any(|rule| chart_legend_additional_condition_matches(attributes, rule))
-        } else {
-            entry
-                .additional_conditions
-                .iter()
-                .all(|rule| chart_legend_additional_condition_matches(attributes, rule))
+                .find(|(name, _)| name.trim().eq_ignore_ascii_case(attribute_class))
+                .map(|(_, value)| value.as_str());
+            let primary_matches = if entry.match_exact_value {
+                value.is_some_and(|value| value.eq_ignore_ascii_case(&entry.conditional_value))
+            } else {
+                chart_legend_condition_matches(entry.condition, value, &entry.conditional_value)
+            };
+            let additional_match = if entry.additional_conditions.is_empty() {
+                true
+            } else if entry.additional_conditions_match_any {
+                entry
+                    .additional_conditions
+                    .iter()
+                    .any(|rule| chart_legend_additional_condition_matches(attributes, rule))
+            } else {
+                entry
+                    .additional_conditions
+                    .iter()
+                    .all(|rule| chart_legend_additional_condition_matches(attributes, rule))
+            };
+            primary_matches && additional_match
         };
-        if primary_matches && additional_match {
+        if matches {
             return Some(entry);
         }
     }
@@ -2304,6 +2323,262 @@ fn chart_legend_additional_condition_matches(
         })
         .map(|(_, value)| value.as_str());
     chart_legend_condition_matches(rule.condition, value, &rule.value)
+}
+
+fn chart_legend_condition_expression_matches(
+    expression: &ChartLegendConditionExpression,
+    attributes: &[(String, String)],
+    depth: usize,
+) -> bool {
+    if depth > MAX_CHART_LEGEND_CONDITION_DEPTH {
+        return false;
+    }
+    match expression {
+        ChartLegendConditionExpression::Condition(rule) => {
+            chart_legend_additional_condition_matches(attributes, rule)
+        }
+        ChartLegendConditionExpression::All(children) => {
+            depth < MAX_CHART_LEGEND_CONDITION_DEPTH
+                && !children.is_empty()
+                && children.iter().all(|child| {
+                    chart_legend_condition_expression_matches(child, attributes, depth + 1)
+                })
+        }
+        ChartLegendConditionExpression::Any(children) => {
+            depth < MAX_CHART_LEGEND_CONDITION_DEPTH
+                && !children.is_empty()
+                && children.iter().any(|child| {
+                    chart_legend_condition_expression_matches(child, attributes, depth + 1)
+                })
+        }
+    }
+}
+
+fn chart_legend_condition_expression_leaf_count(
+    expression: &ChartLegendConditionExpression,
+) -> usize {
+    match expression {
+        ChartLegendConditionExpression::Condition(_) => 1,
+        ChartLegendConditionExpression::All(children)
+        | ChartLegendConditionExpression::Any(children) => children
+            .iter()
+            .map(chart_legend_condition_expression_leaf_count)
+            .sum(),
+    }
+}
+
+fn chart_legend_condition_expression_is_valid(
+    expression: &ChartLegendConditionExpression,
+    depth: usize,
+) -> bool {
+    if depth > MAX_CHART_LEGEND_CONDITION_DEPTH {
+        return false;
+    }
+    match expression {
+        ChartLegendConditionExpression::Condition(rule) => {
+            !rule.attribute_class.trim().is_empty()
+                && rule.attribute_class.len() <= MAX_CHART_LEGEND_DESCRIPTION_BYTES
+                && rule.value.len() <= MAX_CHART_LEGEND_DESCRIPTION_BYTES
+        }
+        ChartLegendConditionExpression::All(children)
+        | ChartLegendConditionExpression::Any(children) => {
+            depth < MAX_CHART_LEGEND_CONDITION_DEPTH
+                && !children.is_empty()
+                && children
+                    .iter()
+                    .all(|child| chart_legend_condition_expression_is_valid(child, depth + 1))
+        }
+    }
+}
+
+fn chart_legend_condition_expression_from_entry(
+    entry: &ChartLegendEntry,
+) -> ChartLegendConditionExpression {
+    let primary = ChartLegendConditionExpression::Condition(ChartLegendConditionRule {
+        attribute_class: entry.attribute_class.clone().unwrap_or_default(),
+        condition: if entry.match_exact_value {
+            ChartLegendCondition::Equal
+        } else {
+            entry.condition
+        },
+        value: entry.conditional_value.clone(),
+    });
+    let mut conditions = vec![primary];
+    if !entry.additional_conditions.is_empty() {
+        let additional = entry
+            .additional_conditions
+            .iter()
+            .cloned()
+            .map(ChartLegendConditionExpression::Condition)
+            .collect();
+        conditions.push(if entry.additional_conditions_match_any {
+            ChartLegendConditionExpression::Any(additional)
+        } else {
+            ChartLegendConditionExpression::All(additional)
+        });
+    }
+    ChartLegendConditionExpression::All(conditions)
+}
+
+fn chart_legend_condition_rule_editor(
+    ui: &mut egui::Ui,
+    rule: &mut ChartLegendConditionRule,
+    id: egui::Id,
+    width: f32,
+) {
+    ui.add(
+        egui::TextEdit::singleline(&mut rule.attribute_class)
+            .hint_text("Attribute class")
+            .char_limit(MAX_CHART_LEGEND_DESCRIPTION_BYTES)
+            .desired_width((width * 0.3).clamp(80.0, 130.0)),
+    );
+    egui::ComboBox::from_id_salt(id)
+        .selected_text(rule.condition.label())
+        .show_ui(ui, |ui| {
+            for option in ChartLegendCondition::options() {
+                ui.selectable_value(&mut rule.condition, *option, option.label());
+            }
+        });
+    if chart_legend_condition_needs_value(rule.condition) {
+        ui.add(
+            egui::TextEdit::singleline(&mut rule.value)
+                .hint_text(match rule.condition {
+                    ChartLegendCondition::GreaterThan
+                    | ChartLegendCondition::GreaterThanOrEqual
+                    | ChartLegendCondition::LessThan
+                    | ChartLegendCondition::LessThanOrEqual => "Numeric threshold",
+                    ChartLegendCondition::BeforeDate
+                    | ChartLegendCondition::OnOrBeforeDate
+                    | ChartLegendCondition::AfterDate
+                    | ChartLegendCondition::OnOrAfterDate => "Date · YYYY-MM-DD",
+                    _ => "Matching text",
+                })
+                .char_limit(MAX_CHART_LEGEND_DESCRIPTION_BYTES)
+                .desired_width((width * 0.3).clamp(80.0, 130.0)),
+        );
+    }
+}
+
+fn chart_legend_condition_needs_value(condition: ChartLegendCondition) -> bool {
+    matches!(
+        condition,
+        ChartLegendCondition::Equal
+            | ChartLegendCondition::NotEqual
+            | ChartLegendCondition::GreaterThan
+            | ChartLegendCondition::GreaterThanOrEqual
+            | ChartLegendCondition::LessThan
+            | ChartLegendCondition::LessThanOrEqual
+            | ChartLegendCondition::BeforeDate
+            | ChartLegendCondition::OnOrBeforeDate
+            | ChartLegendCondition::AfterDate
+            | ChartLegendCondition::OnOrAfterDate
+            | ChartLegendCondition::Contains
+            | ChartLegendCondition::DoesNotContain
+            | ChartLegendCondition::StartsWith
+            | ChartLegendCondition::EndsWith
+    )
+}
+
+fn chart_legend_condition_expression_editor(
+    ui: &mut egui::Ui,
+    expression: &mut ChartLegendConditionExpression,
+    id: egui::Id,
+    depth: usize,
+    width: f32,
+) {
+    match expression {
+        ChartLegendConditionExpression::Condition(rule) => {
+            chart_legend_condition_rule_editor(ui, rule, id, width);
+        }
+        ChartLegendConditionExpression::All(_) | ChartLegendConditionExpression::Any(_) => {
+            let is_all = matches!(expression, ChartLegendConditionExpression::All(_));
+            let mut join = is_all;
+            egui::ComboBox::from_id_salt(id.with("join"))
+                .selected_text(if join {
+                    "Match all (AND)"
+                } else {
+                    "Match any (OR)"
+                })
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut join, true, "Match all (AND)");
+                    ui.selectable_value(&mut join, false, "Match any (OR)");
+                });
+            if join != is_all {
+                let moved = match expression {
+                    ChartLegendConditionExpression::All(children)
+                    | ChartLegendConditionExpression::Any(children) => std::mem::take(children),
+                    ChartLegendConditionExpression::Condition(_) => unreachable!(),
+                };
+                *expression = if join {
+                    ChartLegendConditionExpression::All(moved)
+                } else {
+                    ChartLegendConditionExpression::Any(moved)
+                };
+            }
+            let mut remove = Vec::new();
+            let can_add_group = depth + 1 < MAX_CHART_LEGEND_CONDITION_DEPTH;
+            let can_add_condition = chart_legend_condition_expression_leaf_count(expression)
+                < MAX_CHART_LEGEND_CONDITIONS;
+            let attribute_class = match &*expression {
+                ChartLegendConditionExpression::All(children)
+                | ChartLegendConditionExpression::Any(children) => {
+                    children.iter().find_map(|child| match child {
+                        ChartLegendConditionExpression::Condition(rule) => {
+                            Some(rule.attribute_class.clone())
+                        }
+                        _ => None,
+                    })
+                }
+                ChartLegendConditionExpression::Condition(_) => None,
+            }
+            .unwrap_or_default();
+            let (children, _) = match expression {
+                ChartLegendConditionExpression::All(children) => (children, true),
+                ChartLegendConditionExpression::Any(children) => (children, false),
+                ChartLegendConditionExpression::Condition(_) => unreachable!(),
+            };
+            let can_remove_child = children.len() > 1;
+            for (index, child) in children.iter_mut().enumerate() {
+                chart_legend_condition_expression_editor(
+                    ui,
+                    child,
+                    id.with(index),
+                    depth + 1,
+                    width,
+                );
+                if can_remove_child && ui.small_button("×").clicked() {
+                    remove.push(index);
+                }
+            }
+            for index in remove.into_iter().rev() {
+                children.remove(index);
+            }
+            if ui
+                .add_enabled(can_add_condition, egui::Button::new("＋ Condition"))
+                .clicked()
+            {
+                children.push(ChartLegendConditionExpression::Condition(
+                    ChartLegendConditionRule {
+                        attribute_class: attribute_class.clone(),
+                        condition: ChartLegendCondition::AnyValue,
+                        value: String::new(),
+                    },
+                ));
+            }
+            if ui
+                .add_enabled(can_add_group, egui::Button::new("＋ Group"))
+                .clicked()
+            {
+                children.push(ChartLegendConditionExpression::All(vec![
+                    ChartLegendConditionExpression::Condition(ChartLegendConditionRule {
+                        attribute_class,
+                        condition: ChartLegendCondition::AnyValue,
+                        value: String::new(),
+                    }),
+                ]));
+            }
+        }
+    }
 }
 
 fn chart_legend_condition_matches(
@@ -25516,6 +25791,7 @@ impl eframe::App for App {
                                                 conditional_value: String::new(),
                                                 additional_conditions: Vec::new(),
                                                 additional_conditions_match_any: false,
+                condition_expression: None,
                 conditional_line_width: None,
                                             });
                                         }
@@ -25550,13 +25826,13 @@ impl eframe::App for App {
                                                 .desired_width(right - 32.0),
                                         );
                                         if entry.symbol.is_attribute() {
-                                            let attribute_class = entry
-                                                .attribute_class
-                                                .get_or_insert_with(|| entry.description.clone());
+                                            if entry.attribute_class.is_none() {
+                                                entry.attribute_class = Some(entry.description.clone());
+                                            }
                                             ui.horizontal(|ui| {
                                                 ui.label(egui::RichText::new("ATTRIBUTE CLASS").size(9.0).color(muted));
                                                 ui.add(
-                                                    egui::TextEdit::singleline(attribute_class)
+                                                    egui::TextEdit::singleline(entry.attribute_class.as_mut().expect("attribute class initialized"))
                                                         .char_limit(1_024)
                                                         .desired_width(right - 125.0),
                                                 );
@@ -25566,6 +25842,25 @@ impl eframe::App for App {
                                             ui.checkbox(&mut entry.conditional_color, "Color matching items")
                                                 .on_hover_text("Apply this entry's color to matching entities and relationships without changing their saved data.");
                                             if entry.conditional_color {
+                                                let mut use_grouped_conditions = entry.condition_expression.is_some();
+                                                ui.checkbox(&mut use_grouped_conditions, "Use grouped AND/OR conditions")
+                                                    .on_hover_text("Create bounded nested condition groups. This expression is saved with the chart legend.");
+                                                if use_grouped_conditions && entry.condition_expression.is_none() {
+                                                    let expression = chart_legend_condition_expression_from_entry(entry);
+                                                    entry.condition_expression = Some(expression);
+                                                } else if !use_grouped_conditions {
+                                                    entry.condition_expression = None;
+                                                }
+                                                if let Some(expression) = entry.condition_expression.as_mut() {
+                                                    chart_legend_condition_expression_editor(
+                                                        ui,
+                                                        expression,
+                                                        egui::Id::new(("chart_legend_expression", label_id, index)),
+                                                        0,
+                                                        right - 32.0,
+                                                    );
+                                                    ui.label(egui::RichText::new("Maximum: 4 group levels and 8 conditions. Older app versions ignore this saved expression and use the legacy rule fields.").small().color(muted));
+                                                } else {
                                                 let mut condition = if entry.match_exact_value {
                                                     ChartLegendCondition::Equal
                                                 } else {
@@ -25630,11 +25925,11 @@ impl eframe::App for App {
                                                     ui.label(egui::RichText::new("ADDITIONAL CONDITIONS").small().strong());
                                                         if ui.add_enabled(
                                                             entry.additional_conditions.len() + 1 < MAX_CHART_LEGEND_CONDITIONS
-                                                                && !attribute_class.trim().is_empty(),
+                                                                && entry.attribute_class.as_deref().is_some_and(|name| !name.trim().is_empty()),
                                                             egui::Button::new("＋ Condition"),
                                                         ).on_hover_text("Add an AND condition for another attribute class.").clicked() {
                                                             entry.additional_conditions.push(ChartLegendConditionRule {
-                                                            attribute_class: attribute_class.clone(),
+                                                            attribute_class: entry.attribute_class.clone().unwrap_or_default(),
                                                             condition: ChartLegendCondition::AnyValue,
                                                             value: String::new(),
                                                         });
@@ -25722,6 +26017,7 @@ impl eframe::App for App {
                                                 }
                                                 for condition_index in removed_conditions.into_iter().rev() {
                                                     entry.additional_conditions.remove(condition_index);
+                                                }
                                                 }
                                                 let mut use_conditional_line_width =
                                                     entry.conditional_line_width.is_some();
@@ -33668,6 +33964,14 @@ fn interchange_import_payload(
                             rule.attribute_class.len() > MAX_CHART_LEGEND_DESCRIPTION_BYTES
                                 || rule.value.len() > MAX_CHART_LEGEND_DESCRIPTION_BYTES
                         })
+                        || entry
+                            .condition_expression
+                            .as_ref()
+                            .is_some_and(|expression| {
+                                chart_legend_condition_expression_leaf_count(expression)
+                                    > MAX_CHART_LEGEND_CONDITIONS
+                                    || !chart_legend_condition_expression_is_valid(expression, 0)
+                            })
                         || (entry.show_on_chart
                             && entry
                                 .attribute_class
@@ -50183,6 +50487,7 @@ mod tests {
                 value: "5".into(),
             }],
             additional_conditions_match_any: false,
+            condition_expression: None,
             conditional_line_width: Some(3.5),
         };
         case.labels.push(super::ChartLabel {
@@ -50307,6 +50612,160 @@ mod tests {
     }
 
     #[test]
+    fn grouped_chart_legend_conditions_match_mixed_boolean_expression() {
+        use super::{
+            ChartLegendCondition as C, ChartLegendConditionExpression as E,
+            ChartLegendConditionRule as R,
+        };
+        let expression = E::All(vec![
+            E::Condition(R {
+                attribute_class: "Status".into(),
+                condition: C::Equal,
+                value: "ACTIVE".into(),
+            }),
+            E::Any(vec![
+                E::Condition(R {
+                    attribute_class: "Priority".into(),
+                    condition: C::GreaterThan,
+                    value: "5".into(),
+                }),
+                E::All(vec![
+                    E::Condition(R {
+                        attribute_class: "Region".into(),
+                        condition: C::Equal,
+                        value: "NORTH".into(),
+                    }),
+                    E::Condition(R {
+                        attribute_class: "Score".into(),
+                        condition: C::GreaterThanOrEqual,
+                        value: "80".into(),
+                    }),
+                ]),
+            ]),
+        ]);
+        let attrs = vec![
+            ("Status".into(), "ACTIVE".into()),
+            ("Priority".into(), "2".into()),
+            ("Region".into(), "NORTH".into()),
+            ("Score".into(), "80".into()),
+        ];
+        assert!(super::chart_legend_condition_expression_matches(
+            &expression,
+            &attrs,
+            0
+        ));
+        let inactive = vec![("Status".into(), "INACTIVE".into())];
+        assert!(!super::chart_legend_condition_expression_matches(
+            &expression,
+            &inactive,
+            0
+        ));
+        let invalid_priority = vec![
+            ("Status".into(), "ACTIVE".into()),
+            ("Priority".into(), "2".into()),
+            ("Region".into(), "NORTH".into()),
+            ("Score".into(), "79".into()),
+        ];
+        assert!(!super::chart_legend_condition_expression_matches(
+            &expression,
+            &invalid_priority,
+            0
+        ));
+        assert!(super::chart_legend_condition_expression_is_valid(
+            &expression,
+            0
+        ));
+        let encoded = serde_json::to_string(&expression).unwrap();
+        let decoded: E = serde_json::from_str(&encoded).unwrap();
+        assert!(decoded == expression);
+    }
+
+    #[test]
+    fn grouped_chart_legend_conditions_enforce_depth_and_leaf_limits() {
+        use super::{
+            ChartLegendCondition as C, ChartLegendConditionExpression as E,
+            ChartLegendConditionRule as R,
+        };
+        let leaf = || {
+            E::Condition(R {
+                attribute_class: "Status".into(),
+                condition: C::IsSet,
+                value: String::new(),
+            })
+        };
+        let too_deep = E::All(vec![E::All(vec![E::All(vec![E::All(vec![E::All(
+            vec![leaf()],
+        )])])])]);
+        assert!(!super::chart_legend_condition_expression_is_valid(
+            &too_deep, 0
+        ));
+        assert!(!super::chart_legend_condition_expression_matches(
+            &too_deep,
+            &[("Status".into(), "active".into())],
+            0
+        ));
+        let too_many = E::All(
+            (0..=super::MAX_CHART_LEGEND_CONDITIONS)
+                .map(|_| leaf())
+                .collect(),
+        );
+        assert!(super::chart_legend_condition_expression_is_valid(
+            &too_many, 0
+        ));
+        assert_eq!(
+            super::chart_legend_condition_expression_leaf_count(&too_many),
+            super::MAX_CHART_LEGEND_CONDITIONS + 1
+        );
+        assert!(
+            super::chart_legend_condition_expression_leaf_count(&too_many)
+                > super::MAX_CHART_LEGEND_CONDITIONS
+        );
+        let empty = E::Any(Vec::new());
+        assert!(!super::chart_legend_condition_expression_is_valid(
+            &empty, 0
+        ));
+        assert!(!super::chart_legend_condition_expression_matches(
+            &empty,
+            &[],
+            0
+        ));
+    }
+
+    #[test]
+    fn grouped_chart_legend_conditions_preserve_legacy_saved_cases() {
+        let legacy: super::ChartLegendEntry = serde_json::from_value(serde_json::json!({
+            "description": "Active records",
+            "symbol": "attribute_circle",
+            "color": [10, 20, 30],
+            "attribute_class": "Status",
+            "conditional_color": true,
+            "condition": "equal",
+            "conditional_value": "ACTIVE",
+            "additional_conditions": [],
+            "additional_conditions_match_any": false
+        }))
+        .expect("older saved legend entries without grouped expressions deserialize");
+        assert!(legacy.condition_expression.is_none());
+        let attributes = vec![("Status".to_string(), "ACTIVE".to_string())];
+        let labels = vec![super::ChartLabel {
+            id: Uuid::from_u128(88),
+            text: "Legacy chart legend".into(),
+            x: 0.5,
+            y: 0.5,
+            font_size: 12.0,
+            color: [240, 240, 240],
+            is_legend: true,
+            legend_entries: vec![legacy],
+            legend_entries_truncated: false,
+            template_rules_for: None,
+        }];
+        assert!(super::chart_matching_conditional_entry(&attributes, &labels).is_some());
+        let encoded = serde_json::to_value(&labels[0].legend_entries[0]).unwrap();
+        assert!(encoded.get("condition_expression").is_some());
+        assert!(encoded["condition_expression"].is_null());
+    }
+
+    #[test]
     fn chart_template_conditional_rule_limit_is_visible_and_bounded() {
         let mut case = super::demo_case();
         case.active_chart_title = "Bounded rules".into();
@@ -50325,6 +50784,7 @@ mod tests {
                 conditional_value: "active".into(),
                 additional_conditions: Vec::new(),
                 additional_conditions_match_any: false,
+                condition_expression: None,
                 conditional_line_width: None,
             })
             .collect::<Vec<_>>();

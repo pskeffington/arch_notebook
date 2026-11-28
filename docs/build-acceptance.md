@@ -815,3 +815,9 @@ Full commands, limitations, and SHA-256 digests for all four aggregate reports a
 | Other project files | NOT TOUCHED | No Room 237, Airspy, or other project artifacts were moved. |
 
 See [TMP-ARCHIVE-01 evidence](evidence/TMP-ARCHIVE-01-linux.md) and the archive share's `README.txt` manifest. The remaining `/tmp` usage includes the active canonical Rust build target and unrelated files.
+
+## Nested chart-legend conditions and political email QA source research — 2026-11-28
+
+The chart legend now supports bounded nested/mixed AND/OR conditions (four group levels, eight leaves), with an optional case field and legacy flat rules retained. Focused tests pass (3/3); full offline suite passes (78 passed, 0 failed, 3 ignored); locked offline check and debug build pass; formatting and diff checks pass. The optimized release build is **BLOCKED**: two invocations lost their Cargo process without returning an exit code, so the existing prior-day binary cannot serve as evidence. Native editor interaction, IBM compatibility and exact-head CI remain untested/pending. A ten-source political-email public-record manifest has been added; no source material has been downloaded or imported. See [nested-condition evidence](evidence/vector-ui/CHART-LEGEND-NESTED-CONDITIONS-01-20261128.md) and [QA source manifest](political-email-qa-sources.md).
+
+Remote-base revalidation on `codex/ui-00-chart-nested-conditions`, derived from remote head `d4257d48`, passed the full test suite (78 passed, 0 failed, 3 ignored), locked offline check, debug build, formatting, and diff validation. The isolated optimized release attempt again lost the Cargo process before returning an exit status; release build remains BLOCKED. The earlier corrupted blob remains in the old branch history, so this candidate preserves the clean restored-source lineage and publishes on a new feature branch.
