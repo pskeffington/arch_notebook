@@ -20,6 +20,7 @@ The launcher uses the explicitly selected `Vulkan0` device with all model layers
 | Desktop entry validity | PASS | `desktop-file-validate packaging/arch/arch-notebook-qwen-gpu-demo.desktop` exited 0. |
 | Launcher syntax | PASS | `bash -n` exited 0 for both shell scripts; Python AST parsing and SVG XML parsing passed. |
 | Per-user deployment | PASS | Installer exited 0. Installed icon and launcher hashes match repository assets; application-menu and Desktop entries are identical and validated. |
+| Synthetic launcher acceptance | PASS | `python3 scripts/test-qwen-gpu-demo-launcher.py` exercised explicit device/layer flags, private output permissions, ten-page structure and quote validation, missing-device fail-closed behavior, missing-offload rejection, and untraceable-quote rejection. It uses synthetic pages and a fake runner; it does not invoke Qwen or a GPU. |
 | GPU-only guard on this host | PASS, guard behavior | Running the installed launcher printed `Available devices: (none)` and exited 1 with `no CPU fallback was started`; inference did not start. |
 | Qwen GPU inference | BLOCKED | The current environment exposes no llama.cpp GPU device. No output is accepted as Qwen analysis evidence. |
 
@@ -51,6 +52,8 @@ On this host, the final command is expected to exit 1 until `Vulkan0` is exposed
 - `tools/install-clinton-qwen-gpu-demo-launcher.sh`
 - `tools/run-clinton-qwen-gpu-demo.sh`
 - `tools/validate-clinton-qwen-gpu-output.py`
+- `scripts/test-qwen-gpu-demo-launcher.py`
+- `.github/workflows/build.yml`
 - `docs/build-acceptance.md`
 - this evidence record
 

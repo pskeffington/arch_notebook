@@ -44,8 +44,16 @@ if ! grep -Eq 'offloaded [1-9][0-9]*/[1-9][0-9]* layers to GPU' "$log"; then
   rm -f "$output"
   fail "backend log did not confirm nonzero GPU layer offload; output discarded"
 fi
-"$(dirname -- "${BASH_SOURCE[0]}")/arch-notebook-validate-clinton-qwen-gpu-output" \
-  --output "$output" --pages-dir "$demo_dir" "${pages[@]}" || {
+runner_dir="$(dirname -- "${BASH_SOURCE[0]}")"
+if [[ -x "$runner_dir/arch-notebook-validate-clinton-qwen-gpu-output" ]]; then
+  validator=("$runner_dir/arch-notebook-validate-clinton-qwen-gpu-output")
+elif [[ -r "$runner_dir/validate-clinton-qwen-gpu-output.py" ]]; then
+  validator=(python3 "$runner_dir/validate-clinton-qwen-gpu-output.py")
+else
+  rm -f "$output"
+  fail "the private result validator is not installed"
+fi
+"${validator[@]}" --output "$output" --pages-dir "$demo_dir" "${pages[@]}" || {
     rm -f "$output"
     fail "structured output or quote validation failed; output discarded"
   }
