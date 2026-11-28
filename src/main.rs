@@ -2970,6 +2970,7 @@ struct App {
     sql_query: String,
     sql_parameter_text: String,
     sql_saved_search_id: Option<Uuid>,
+    sql_loaded_saved_search_id: Option<Uuid>,
     sql_saved_search_name: String,
     sql_saved_search_package_import_path: String,
     sql_saved_search_package_export_path: String,
@@ -3657,6 +3658,7 @@ impl Default for App {
             sql_query: "SELECT connection_id, source, source_type, target, target_type, relationship, event_date AS date, confidence, directed, source_reference, notes FROM connection_observations WHERE snapshot_id = :snapshot_id ORDER BY connection_id;".into(),
             sql_parameter_text: "snapshot_id=baseline".into(),
             sql_saved_search_id: None,
+            sql_loaded_saved_search_id: None,
             sql_saved_search_name: String::new(),
             sql_saved_search_package_import_path: String::new(),
             sql_saved_search_package_export_path: String::new(),
@@ -4024,6 +4026,7 @@ impl App {
         self.sql_saved_search_name = search.name.clone();
         self.case.saved_sql_searches.push(search);
         self.sql_saved_search_id = Some(id);
+        self.sql_loaded_saved_search_id = Some(id);
         self.status = "SQL SEARCH SAVED IN CASE · SAVE CASE TO KEEP IT".into();
     }
 
@@ -4038,6 +4041,7 @@ impl App {
             .position(|search| search.id == id)
         else {
             self.sql_saved_search_id = None;
+            self.sql_loaded_saved_search_id = None;
             self.status = "SQL SEARCH NOT UPDATED · SELECT A SAVED QUERY".into();
             return;
         };
@@ -4057,6 +4061,7 @@ impl App {
         }
         self.sql_saved_search_name = search.name.clone();
         self.case.saved_sql_searches[index] = search;
+        self.sql_loaded_saved_search_id = Some(id);
         self.status = "SQL SEARCH UPDATED IN CASE · SAVE CASE TO KEEP IT".into();
     }
 
@@ -4074,6 +4079,7 @@ impl App {
             self.status = "SQL SEARCH NOT LOADED · SELECT A SAVED QUERY".into();
             return;
         };
+        let search_id = search.id;
         self.sql_saved_search_name = search.name.clone();
         self.sql_path = search.database_path;
         self.sql_series = search.series;
@@ -4088,6 +4094,7 @@ impl App {
         self.sql_cleared_parameter_draft = None;
         self.sql_validation_preview = None;
         self.sql_skipped_endpoints.clear();
+        self.sql_loaded_saved_search_id = Some(search_id);
         self.status = "SQL SEARCH LOADED · REBIND CHART SEEDS IF NEEDED, THEN VALIDATE".into();
     }
 
@@ -4096,20 +4103,30 @@ impl App {
             self.status = "SQL AUTOMATION DRAFT NOT PREPARED · OPEN SQL REVIEW FIRST".into();
             return;
         }
-        let Some(seed_name) = self
-            .sql_saved_search_id
-            .and_then(|id| {
-                self.case
-                    .saved_sql_searches
-                    .iter()
-                    .find(|search| search.id == id)
-            })
-            .and_then(|search| search.seed_parameter_name.clone())
-            .map(|name| normalize_sql_parameter_name(&name))
-        else {
-            self.status = "SQL AUTOMATION DRAFT NOT PREPARED · SELECT A SEEDED SAVED SEARCH".into();
+        let Some(search_id) = self.sql_saved_search_id else {
+            self.status =
+                "SQL AUTOMATION DRAFT NOT PREPARED · SELECT AND LOAD A SAVED SEARCH".into();
             return;
         };
+        if self.sql_loaded_saved_search_id != Some(search_id) {
+            self.status =
+                "SQL AUTOMATION DRAFT NOT PREPARED · LOAD THE SELECTED SAVED SEARCH FIRST".into();
+            return;
+        }
+        let Some(search) = self
+            .case
+            .saved_sql_searches
+            .iter()
+            .find(|search| search.id == search_id)
+        else {
+            self.status =
+                "SQL AUTOMATION DRAFT NOT PREPARED · SELECT A SAVED SEARCH IN THIS CASE".into();
+            return;
+        };
+        let seed_name = search
+            .seed_parameter_name
+            .as_deref()
+            .map(normalize_sql_parameter_name);
         let parameters = match parse_sql_parameters(&self.sql_parameter_text) {
             Ok(parameters) => parameters,
             Err(error) => {
@@ -4117,10 +4134,19 @@ impl App {
                 return;
             }
         };
-        let parameters = parameters
-            .into_iter()
-            .filter(|(name, _)| normalize_sql_parameter_name(name) != seed_name)
-            .collect::<Vec<_>>();
+        let removed_seed = seed_name.as_ref().is_some_and(|seed_name| {
+            parameters
+                .iter()
+                .any(|(name, _)| normalize_sql_parameter_name(name) == *seed_name)
+        });
+        let parameters = if let Some(seed_name) = seed_name.as_ref() {
+            parameters
+                .into_iter()
+                .filter(|(name, _)| normalize_sql_parameter_name(name) != *seed_name)
+                .collect::<Vec<_>>()
+        } else {
+            parameters
+        };
         self.sql_parameter_text = format_sql_parameters(&parameters);
         self.sql_seed_query_mode = false;
         self.sql_review_dynamic_seed_parameter_name = None;
@@ -4128,9 +4154,19 @@ impl App {
         self.sql_validation_preview = None;
         self.sql_skipped_endpoints.clear();
         self.automation_job_name = format!("{} automation", self.sql_saved_search_name.trim());
-        self.status = format!(
-            "SQL AUTOMATION DRAFT READY · removed chart-bound parameter {seed_name} · SQL predicate was kept and may still filter results; review or edit it, then validate"
-        );
+        self.status = if let Some(seed_name) = seed_name {
+            if removed_seed {
+                format!(
+                    "SQL AUTOMATION DRAFT READY · removed chart-bound parameter {seed_name} · SQL predicate was kept and may still filter results; review or edit it, then validate"
+                )
+            } else {
+                format!(
+                    "SQL AUTOMATION DRAFT READY · chart-bound parameter {seed_name} had no saved value · SQL predicate was kept and may still filter results; review or edit it, then validate"
+                )
+            }
+        } else {
+            "SQL AUTOMATION DRAFT READY · saved SQL parameters were kept · review the query and parameters, then validate".into()
+        };
     }
 
     fn delete_sql_review_search(&mut self) {
@@ -4143,6 +4179,7 @@ impl App {
             .retain(|search| search.id != id);
         if self.case.saved_sql_searches.len() != previous_count {
             self.sql_saved_search_id = None;
+            self.sql_loaded_saved_search_id = None;
             self.sql_saved_search_name.clear();
             self.status = "SQL SEARCH REMOVED FROM CASE · SAVE CASE TO KEEP THE CHANGE".into();
         }
@@ -4246,6 +4283,7 @@ impl App {
                 .any(|search| search.id == id)
         }) {
             self.sql_saved_search_id = None;
+            self.sql_loaded_saved_search_id = None;
             self.sql_saved_search_name.clear();
         }
         let saved_searches: Vec<(Uuid, String, String)> = self
@@ -4321,16 +4359,38 @@ impl App {
             });
             if let Some(search) = self.sql_saved_search_id.and_then(|id| {
                 self.case.saved_sql_searches.iter().find(|search| search.id == id)
-            }) && search.seed_parameter_name.is_some()
-            {
-                ui.label(
-                    egui::RichText::new(
-                        "This search was chart-seeded. Recurring automation cannot retain that selected chart ID; remove the bound value and review the SQL predicate first.",
+            }) {
+                if search.seed_parameter_name.is_some() {
+                    ui.label(
+                        egui::RichText::new(
+                            "This search was chart-seeded. Recurring automation cannot retain that selected chart ID; remove the bound value and review the SQL predicate first.",
+                        )
+                        .small()
+                        .color(egui::Color32::from_rgb(236, 174, 83)),
+                    );
+                } else {
+                    ui.label(
+                        egui::RichText::new(
+                            "Prepare the loaded saved query as an automation draft; SQL parameters are retained and the query must be validated before saving a job.",
+                        )
+                        .small()
+                        .color(egui::Color32::GRAY),
+                    );
+                }
+                let loaded_selected_search = self.sql_loaded_saved_search_id == Some(search.id);
+                let button_label = if search.seed_parameter_name.is_some() {
+                    "Prepare unseeded automation draft"
+                } else {
+                    "Prepare automation draft"
+                };
+                if ui
+                    .add_enabled(
+                        loaded_selected_search,
+                        egui::Button::new(button_label),
                     )
-                    .small()
-                    .color(egui::Color32::from_rgb(236, 174, 83)),
-                );
-                if ui.button("Prepare unseeded automation draft").clicked() {
+                    .on_disabled_hover_text("Load the selected saved search before preparing its automation draft.")
+                    .clicked()
+                {
                     action = Some("prepare_automation");
                 }
             }
@@ -5319,6 +5379,7 @@ impl App {
             sql_query: String::new(),
             sql_parameter_text: String::new(),
             sql_saved_search_id: None,
+            sql_loaded_saved_search_id: None,
             sql_saved_search_name: String::new(),
             sql_saved_search_package_import_path: String::new(),
             sql_saved_search_package_export_path: String::new(),
@@ -5727,6 +5788,10 @@ impl App {
                 self.chart_zoom = clamp_chart_zoom(c.active_chart_zoom);
                 self.chart_pan = chart_pan_from_saved(c.active_chart_pan);
                 self.case = c;
+                self.sql_saved_search_id = None;
+                self.sql_loaded_saved_search_id = None;
+                self.sql_saved_search_name.clear();
+                self.sql_review_dynamic_seed_parameter_name = None;
                 self.reset_chart_creation_drafts();
                 self.reset_case_transient_analysis();
                 self.network_groups = None;
@@ -14348,6 +14413,7 @@ impl App {
             saved_sql_searches: Vec::new(),
         };
         self.sql_saved_search_id = None;
+        self.sql_loaded_saved_search_id = None;
         self.sql_saved_search_name.clear();
         self.sql_review_dynamic_seed_parameter_name = None;
         self.reset_chart_creation_drafts();
@@ -48147,6 +48213,7 @@ mod tests {
         app.page = super::WorkspacePage::Data;
         app.data_mode = super::DataMode::SqlRegressions;
         app.sql_saved_search_id = Some(search.id);
+        app.sql_loaded_saved_search_id = Some(search.id);
         app.sql_saved_search_name = search.name.clone();
         app.sql_path = search.database_path.clone();
         app.sql_series = search.series.clone();
@@ -48186,6 +48253,58 @@ mod tests {
         app.prepare_saved_sql_search_for_automation();
         assert_eq!(app.sql_parameter_text, "active=bool:true");
         assert!(app.case.automation_jobs.is_empty());
+    }
+
+    #[test]
+    fn saved_sql_search_automation_draft_requires_loaded_selection_and_keeps_unseeded_parameters() {
+        let mut case: CaseFile =
+            serde_json::from_str(include_str!("../fixtures/chart/correctness.case.json"))
+                .expect("correctness fixture parses");
+        let search = super::SavedSqlSearch {
+            id: Uuid::from_u128(9902),
+            name: "Monthly contacts".into(),
+            database_path: "/tmp/monthly.sqlite".into(),
+            series: "monthly contacts".into(),
+            query: "SELECT source, target FROM contacts WHERE active = :active".into(),
+            parameters: vec![("active".into(), "bool:true".into())],
+            seed_parameter_name: None,
+        };
+        case.saved_sql_searches.push(search.clone());
+        let mut app = App::automation_context(case, "/tmp/monthly-search.case.json");
+        app.page = super::WorkspacePage::Data;
+        app.data_mode = super::DataMode::SqlRegressions;
+        app.sql_saved_search_id = Some(search.id);
+        app.sql_query = "SELECT source, target FROM unrelated_draft".into();
+        app.sql_parameter_text = "wrong=value".into();
+
+        app.prepare_saved_sql_search_for_automation();
+
+        assert!(app.status.contains("LOAD THE SELECTED SAVED SEARCH FIRST"));
+        assert_eq!(app.sql_query, "SELECT source, target FROM unrelated_draft");
+        assert_eq!(app.sql_parameter_text, "wrong=value");
+        assert!(app.case.automation_jobs.is_empty());
+
+        app.load_sql_review_search();
+        assert_eq!(app.sql_loaded_saved_search_id, Some(search.id));
+        app.sql_query.push_str(" ORDER BY source, target");
+        app.sql_validation_preview = Some(super::SqlValidationPreview {
+            configured_database_path: app.sql_path.clone(),
+            series: app.sql_series.clone(),
+            query: app.sql_query.clone(),
+            parameters: vec![("active".into(), "bool:true".into())],
+            validation_passed: true,
+            ..Default::default()
+        });
+
+        app.prepare_saved_sql_search_for_automation();
+
+        assert_eq!(app.sql_parameter_text, "active=bool:true");
+        assert!(app.sql_query.ends_with("ORDER BY source, target"));
+        assert!(app.sql_validation_preview.is_none());
+        assert_eq!(app.automation_job_name, "Monthly contacts automation");
+        assert!(app.status.contains("saved SQL parameters were kept"));
+        assert!(app.case.automation_jobs.is_empty());
+        assert!(app.case.snapshots.is_empty());
     }
 
     #[test]
@@ -48368,6 +48487,8 @@ mod tests {
             App::automation_context(app.case.clone(), "/tmp/saved-search-package-ui.case.json");
         package_app.page = super::WorkspacePage::Data;
         package_app.data_mode = super::DataMode::SqlRegressions;
+        package_app.sql_saved_search_id = Some(Uuid::from_u128(9001));
+        package_app.load_sql_review_search();
         let package_header_shapes = render_headless_app_frame_at(
             &context,
             &mut package_app,
@@ -48419,6 +48540,7 @@ mod tests {
             "Import package",
             "Export JSON",
             "Export selected",
+            "Prepare automation draft",
         ] {
             assert!(
                 find_headless_text_rect(&package_controls_shapes, label).is_some(),

@@ -1,5 +1,21 @@
 # Local build acceptance record
 
+## Saved SQL search to automation draft guard — 2026-11-28
+
+The SQL Review catalog now distinguishes the selected saved query from the definition loaded into the working editor. Automation draft preparation stays disabled until the selected definition has been loaded; this prevents a selected chart seed from being removed from an unrelated query draft. Both unseeded and chart-seeded saved searches can prepare automation drafts. Unseeded parameters are retained; chart-seeded preparation removes only the bound parameter value. Both clear stale validation state and require revalidation before a disabled job can be saved.
+
+| Gate | Result | Evidence |
+| --- | --- | --- |
+| Focused saved-search handoff regressions | PASS | Two focused Rust tests cover selected/loaded mismatch rejection, preserved unseeded parameters and edited SQL, chart-seed removal, cleared previews, and no job/snapshot creation. The existing headless SQL Review UI regression confirms the unseeded and chart-seeded controls are exposed after loading. |
+| Full Rust suite | PASS | 103 passed, 0 failed, 3 ignored. |
+| Formatting, locked offline workspace check, and diff validation | PASS | All exited 0. |
+| Optimized release build | PASS | `TMPDIR=/home/sysadmin/.cache/arch-notebook-build-tmp CARGO_BUILD_JOBS=1 CARGO_TARGET_DIR=/tmp/arch-notebook-target cargo build --release --workspace --locked --offline`, exit 0; binary SHA-256 `209f105166ee3ef47425aa5349c43118a1d07991f9f741fecf5cf23144b6f0a8`. |
+| Isolated installer and current-user install | PASS | Launcher, Desktop shortcut, icons, SQL helper, MIME definition, and installed executable verified; installed binary matches release SHA-256. See [install JSON](evidence/sql-automation/artifacts/SQL-SEARCH-AUTOMATION-DRAFT-02-install.json), SHA-256 `e2ea53a22ccadb832e58564814af3ced8c06b79c8cee95e106aa9580cefb822f`. |
+| Primary Clinton corpus SQL QA | PASS, bounded | One query-only preflight passed; 6,173 rows replayed with zero skipped rows and zero added/changed/removed deltas; inputs unchanged. See [aggregate-only JSON](evidence/sql-automation/artifacts/CLINTON-CORPUS-QA-search-draft-02.json), SHA-256 `6c56a155c0b3eaaa89abd1bee5a79045234ee53567f35da4aacbbfd545693643`. PDF completeness, Qwen analysis and human content review remain unestablished. |
+| Native UI, live timer dispatch, and IBM interoperability | NOT RUN | Native input and user systemd are unavailable; IBM application/schema validation remains open. |
+
+Reproducible evidence: [SQL-SEARCH-AUTOMATION-DRAFT-02](evidence/sql-automation/SQL-SEARCH-AUTOMATION-DRAFT-02-20261128.md).
+
 ## Saved import design last-source reinspection — 2026-11-28
 
 After a successful desktop import through a saved CSV/TSV design, the case can remember its last source path and reopen that source in the inspection/mapping wizard. Reinspection selects the requested design even when multiple designs share a header signature, and does not import chart records. The path remains case-local and is not included in portable import-design packages.
