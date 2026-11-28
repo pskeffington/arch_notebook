@@ -40,6 +40,9 @@ const SQL_ENTITY_LOOKUP_MAX_COLUMNS: usize = 64;
 const SQL_ENTITY_LOOKUP_MAX_CELL_BYTES: usize = 1024;
 const SQL_ENTITY_LOOKUP_MAX_TOTAL_BYTES: usize = 64 * 1024;
 const SQL_ENTITY_LOOKUP_MAX_SCANNED_ROWS: usize = 1_000_000;
+const SQL_SEED_REVIEW_MAX_EXTRA_COLUMNS: usize = 16;
+const SQL_SEED_REVIEW_MAX_EXTRA_CELL_BYTES: usize = 256;
+const SQL_SEED_REVIEW_MAX_EXTRA_ROW_BYTES: usize = 4096;
 const SQLITE_LOCK_RETRY_ATTEMPTS: usize = 3;
 const SQLITE_LOCK_RETRY_DELAY: Duration = Duration::from_secs(2);
 const MAX_CHART_DIAGNOSTIC_SAMPLES_PER_METRIC: usize = 64;
@@ -1013,6 +1016,8 @@ struct ConnectionFact {
     target_attributes: Vec<(String, String)>,
     #[serde(default)]
     attributes: Vec<(String, String)>,
+    #[serde(skip)]
+    review_fields: Vec<(String, String)>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -7064,6 +7069,46 @@ impl App {
                 &["source_reference", "evidence", "reference", "source_id"],
             )?;
             let notes = col("notes", &["notes", "description"])?;
+            let mapped_columns: HashSet<usize> = [
+                Some(source),
+                Some(target),
+                source_entity_id,
+                target_entity_id,
+                connection_id,
+                source_type,
+                target_type,
+                source_representation,
+                target_representation,
+                relationship,
+                date,
+                confidence,
+                directed,
+                source_reference,
+                notes,
+            ]
+            .into_iter()
+            .flatten()
+            .chain(
+                source_attribute_columns
+                    .iter()
+                    .chain(&target_attribute_columns)
+                    .chain(&connection_attribute_columns)
+                    .map(|(_, index)| *index),
+            )
+            .collect();
+            let review_columns = if self.sql_seed_query_mode {
+                original_column_names
+                    .iter()
+                    .enumerate()
+                    .filter(|(index, name)| {
+                        !mapped_columns.contains(index) && !name.trim().is_empty()
+                    })
+                    .take(SQL_SEED_REVIEW_MAX_EXTRA_COLUMNS)
+                    .map(|(index, name)| (cap_utf8_string(name.clone(), 128), index))
+                    .collect::<Vec<_>>()
+            } else {
+                Vec::new()
+            };
             let mut facts = Vec::new();
             let mut fact_rows = Vec::new();
             let mut explicit_ids = HashMap::<String, usize>::new();
@@ -7200,6 +7245,21 @@ impl App {
                 let mut source_attributes = read_attributes(&source_attribute_columns)?;
                 let mut target_attributes = read_attributes(&target_attribute_columns)?;
                 let connection_attributes = read_attributes(&connection_attribute_columns)?;
+                let mut review_fields = Vec::new();
+                let mut review_bytes_left = SQL_SEED_REVIEW_MAX_EXTRA_ROW_BYTES;
+                for (name, index) in &review_columns {
+                    if review_bytes_left <= name.len() {
+                        break;
+                    }
+                    let max_bytes = SQL_SEED_REVIEW_MAX_EXTRA_CELL_BYTES
+                        .min(review_bytes_left.saturating_sub(name.len()));
+                    let (value, _) = sql_display_value_bounded(row, *index, max_bytes)
+                        .map_err(|error| error.to_string())?;
+                    let value = cap_utf8_string(value, max_bytes);
+                    review_bytes_left =
+                        review_bytes_left.saturating_sub(name.len().saturating_add(value.len()));
+                    review_fields.push((name.clone(), value));
+                }
                 let explicit_id = sql_value(row, connection_id).map_err(|e| e.to_string())?;
                 if !explicit_id.trim().is_empty() {
                     let connection_id = explicit_id.trim().to_owned();
@@ -7298,6 +7358,7 @@ impl App {
                     source_attributes,
                     target_attributes,
                     attributes: connection_attributes,
+                    review_fields,
                 });
             }
             if query_deadline.expired() {
@@ -9531,6 +9592,7 @@ impl App {
                             "Confidence",
                             "Evidence",
                             "Source notes",
+                            "Other query fields",
                         ] {
                             ui.strong(heading);
                         }
@@ -9583,6 +9645,7 @@ impl App {
                             ui.label(connection.confidence.to_string());
                             ui.label(&connection.source_reference);
                             ui.label(&connection.notes);
+                            ui.label(format_sql_attributes(&connection.review_fields));
                             ui.end_row();
                         }
                     });
@@ -10249,7 +10312,7 @@ impl App {
                 worker.sql_query_timeout_minutes = request.query_timeout_minutes;
                 worker.data_mode = request.data_mode;
                 worker.editing_automation_job = request.editing_job;
-                worker.sql_seed_query_mode = request.seeded_query;
+                worker.sql_seed_query_mode = request.seeded_query && validate;
                 worker.sql_seed_page_offset = request.seed_page_offset;
                 let result = if validate {
                     worker.validate_sql_query();
@@ -16877,6 +16940,23 @@ fn sql_display_value_bounded(
         value.push_str("… [truncated]");
     }
     Ok((value, truncated))
+}
+
+fn cap_utf8_string(mut value: String, max_bytes: usize) -> String {
+    if value.len() <= max_bytes {
+        return value;
+    }
+    let marker = "…";
+    let prefix_limit = max_bytes.saturating_sub(marker.len());
+    let mut end = prefix_limit.min(value.len());
+    while end > 0 && !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    value.truncate(end);
+    if max_bytes >= marker.len() {
+        value.push_str(marker);
+    }
+    value
 }
 
 fn normalize_sql_parameter_name(name: &str) -> String {
@@ -46596,6 +46676,7 @@ mod tests {
             source_attributes: Vec::new(),
             target_attributes: Vec::new(),
             attributes: Vec::new(),
+            review_fields: Vec::new(),
         };
         let selected = fact("row-1", "row-1", &existing.name, "acct-17");
         let unselected = fact("row-2", "row-2", "Another source", "acct-18");
@@ -46680,6 +46761,60 @@ mod tests {
         assert!(!super::seed_query_page_has_more_rows(199, 1));
         assert!(super::seed_query_page_has_more_rows(199, 2));
         assert!(super::seed_query_page_has_more_rows(0, 201));
+    }
+
+    #[test]
+    fn seeded_query_review_exposes_bounded_unmapped_fields_without_persisting_them() {
+        let root =
+            std::env::temp_dir().join(format!("arch-notebook-seed-fields-{}", Uuid::new_v4()));
+        std::fs::create_dir(&root).expect("create isolated query-review directory");
+        let database_path = root.join("source.sqlite");
+        let database = rusqlite::Connection::open(&database_path).expect("create source database");
+        database
+            .execute_batch(
+                "CREATE TABLE results(source TEXT, target TEXT, relationship TEXT, investigator_note TEXT);\
+                 INSERT INTO results VALUES ('Seed Entity', 'Candidate', 'CONTACTED', 'joined source detail');",
+            )
+            .expect("insert query-review row");
+        drop(database);
+        let source_bytes_before = std::fs::read(&database_path).expect("read source database");
+        let case: CaseFile =
+            serde_json::from_str(include_str!("../fixtures/chart/correctness.case.json"))
+                .expect("chart fixture parses");
+        let case_path = root.join("review.case.json");
+        let mut app = App::automation_context(case, &case_path.to_string_lossy());
+        app.sql_path = database_path.to_string_lossy().into_owned();
+        app.sql_series = "seeded search".into();
+        app.sql_query = "SELECT source, target, relationship, investigator_note, zeroblob(1000) AS raw_payload FROM results ORDER BY source".into();
+        app.sql_seed_query_mode = true;
+
+        assert!(app.validate_sql_query(), "read-only seeded query validates");
+        let preview = app
+            .sql_validation_preview
+            .as_ref()
+            .expect("transient query preview");
+        let fact = preview.connections.first().expect("one query result");
+        assert_eq!(
+            fact.review_fields[0],
+            ("investigator_note".into(), "joined source detail".into())
+        );
+        assert!(fact.review_fields[1].0 == "raw_payload");
+        assert!(fact.review_fields[1].1.len() <= super::SQL_SEED_REVIEW_MAX_EXTRA_CELL_BYTES);
+        assert!(
+            fact.review_fields
+                .iter()
+                .map(|(name, value)| name.len() + value.len())
+                .sum::<usize>()
+                <= super::SQL_SEED_REVIEW_MAX_EXTRA_ROW_BYTES
+        );
+        let persisted_fact = serde_json::to_value(fact).expect("case record serializes");
+        assert!(persisted_fact.get("review_fields").is_none());
+        assert_eq!(
+            std::fs::read(&database_path).expect("read source database after query"),
+            source_bytes_before,
+            "seeded result review leaves the source database unchanged"
+        );
+        std::fs::remove_dir_all(root).expect("remove isolated query-review directory");
     }
 
     #[test]
@@ -50508,6 +50643,7 @@ mod tests {
             directed: false,
             source_reference: "LOC-81".into(),
             notes: String::new(),
+            review_fields: Vec::new(),
         };
         let make_snapshot = |key: String| ConnectionSnapshot {
             id: super::Uuid::new_v4(),

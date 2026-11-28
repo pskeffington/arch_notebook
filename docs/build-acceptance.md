@@ -981,13 +981,13 @@ Evidence and next gates: [XML-XSLT-IMPORT-02](evidence/anx/XML-XSLT-IMPORT-02-de
 
 ## SQL selected-entity seeded query review — 2026-11-28
 
-SQL Review binds an active-chart SQL identity to a one-off parameter, pages through read-only query results 200 rows at a time, carries selections across pages, and adds explicitly selected relationships without recording a snapshot or automation run. Paging requires deterministic SQL ordering and preserves saved automation configuration.
+SQL Review binds an active-chart SQL identity to a one-off parameter, pages through read-only query results 200 source rows at a time, carries selections across pages, displays bounded transient unmapped query fields, and adds explicitly selected relationships without recording a snapshot or automation run. Paging requires deterministic SQL ordering and preserves saved automation configuration.
 
 | Gate | Result | Evidence |
 | --- | --- | --- |
-| Formatting, diff, and full offline Rust suite | PASS | Formatting and diff checks exit 0; 86 passed, 0 failed, 3 ignored. |
+| Formatting, diff, and full offline Rust suite | PASS | Formatting and diff checks exit 0; 87 passed, 0 failed, 3 ignored. |
 | Locked offline check | PASS | `CARGO_TARGET_DIR=/tmp/arch-notebook-target cargo check --locked --offline` exited 0. |
-| Locked offline release build | PASS | `CARGO_BUILD_JOBS=1 CARGO_TARGET_DIR=/tmp/arch-notebook-target cargo build --release --locked --offline` exited 0; binary SHA-256 `c4882daf55da5113ada5484744370d5752147864de8149c4ad130a4da9f5ecfb`. |
+| Locked offline release build | PASS | `CARGO_BUILD_JOBS=1 CARGO_TARGET_DIR=/tmp/arch-notebook-target cargo build --release --locked --offline` exited 0; binary SHA-256 `dbc6b600c0ef79a3e0876846b2a43fa314bf9c686826c6a02fc3800632c0003f`. |
 | Per-user launcher/icon install acceptance | PASS | Installer and isolated acceptance exited 0; desktop menu and shortcut match, SVG/PNG and MIME assets match, and installed executable matches release. |
 | Native interaction and IBM compatibility | NOT TESTED | Headless state regression does not prove native pointer interaction or i2 Analyze integration. |
 
