@@ -17,7 +17,9 @@ The exported packet describes ten isolated source-document entities and zero rel
 
 ## Qwen candidate checks
 
-Qwen 3.5 9B produced completed responses for ten inputs, but one response (UD-2024-0079) was truncated and failed JSON parsing. Of the remaining nine:
+Qwen 3.5 9B produced completed responses for ten inputs, but one response (UD-2024-0079) was truncated and failed JSON parsing. The ten case IDs and PDF SHA-256 values match the staged-source manifest. The checked-in per-document validation and candidate files preserve the bounded results without committing the full source PDFs or extracted text. The original inference invocation metadata is incomplete: the artifacts record the model tag but not an Ollama request ID, server version, or endpoint transcript. The successful Qwen batch is documented; its exact original Ollama transport cannot be independently reconstructed. A later Ollama rerun failed, as recorded below. See [OLLAMA-DOCS-01](OLLAMA-DOCS-01-political-records-20261128.md) for the artifact hashes and provenance limits.
+
+Of the ten responses:
 
 - Five passed JSON structure, required review flag, internal evidence/entity reference checks, and source quote matching (exact text or normalized whitespace/typography).
 - Four failed source quote matching. These candidates are held out of the presentation data.
@@ -32,6 +34,7 @@ The five eligible candidate records and per-case outcomes are in `political-reco
 - [Redacted Arch Notebook network rendering](political-records-qa/artifacts/notebook-network.svg)
 - [Five quote-traceable Qwen candidates, still review-required](political-records-qa/artifacts/qwen-reviewed-candidates.jsonl)
 - [Qwen validation outcomes for all ten cases](political-records-qa/artifacts/qwen-validation.json)
+- [Qwen/Ollama completed-batch record and rerun status](OLLAMA-DOCS-01-political-records-20261128.md)
 
 ## Acceptance
 

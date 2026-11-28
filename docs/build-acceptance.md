@@ -1126,7 +1126,9 @@ A separate local QA package now contains ten official NARA case-letter PDFs (21 
 | Gate | Result | Evidence |
 | --- | --- | --- |
 | Acquisition, `pdfinfo`, text-layer diagnostic, SHA-256 | PASS | [political email/messaging acquisition QA](evidence/political-email-messaging-case-acquisition-20261128.md) |
-| TRANS transcription, Eagle-Eye evidence, Qwen analysis | BLOCKED / NOT RUN | Accepted general-purpose PDF processing executables are unavailable; local Ollama endpoint is inaccessible. |
+| TRANS transcription and Eagle-Eye page evidence | BLOCKED | The accepted raw-PDF processing executables are unavailable; see [political records ingestion and notebook QA](evidence/political-records-qa-20261128.md). |
+| Existing ten-document Qwen batch | PASS, bounded | 10/10 Qwen 3.5 9B responses completed; 5 quote-traceable candidate outputs were retained, 4 quote mismatches and 1 truncated response were held out. All remain human-review-required. See [OLLAMA-DOCS-01](evidence/OLLAMA-DOCS-01-political-records-20261128.md) and its linked validation/candidate artifacts. |
+| Fresh Ollama inference rerun | BLOCKED | Local endpoint unavailable; `ollama serve` cannot bind `127.0.0.1:11434` in this session (`Operation not permitted`). Original completed artifacts do not retain the endpoint request or server invocation log. |
 | Arch Notebook raw-PDF ingestion | NOT RUN | Current product does not ingest raw PDFs. |
 
 Source PDFs remain local under `/home/sysadmin/TRANSCRIBE-QA/political-email-cases-2026-11-28/recent-record-cases/`; they are not committed or copied to the archive share. The Clinton SQLite QA remains a separate workflow.

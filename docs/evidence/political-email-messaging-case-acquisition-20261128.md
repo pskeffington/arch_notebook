@@ -34,7 +34,7 @@ The USDA case index labels the case UD-2024-0079, but the direct linked PDF URL 
 | SHA-256 integrity | **PASS** | `cd /home/sysadmin/TRANSCRIBE-QA/political-email-cases-2026-11-28/recent-record-cases && sha256sum -c SHA256SUMS`; all 10 files returned `OK`. |
 | TRANS cleanup/transcription | **BLOCKED** | The accepted local TRANS PDF adapter remains `ocr_stub`; no accepted `trans-document-batch` executable is installed. No processing output was fabricated. |
 | Eagle-Eye page evidence | **BLOCKED** | No accepted PDF-to-page worker is installed; the documented pointer worker requires an approved page manifest. |
-| Qwen analysis | **BLOCKED / NOT RUN** | `qwen` is absent. `ollama list` exited 1 because the local `127.0.0.1:11434` endpoint is inaccessible (`operation not permitted`). No model analysis ran. |
+| Qwen analysis at acquisition checkpoint | **NOT RUN at that time** | A subsequent bounded batch processed these ten case letters with Qwen 3.5 9B; see [OLLAMA-DOCS-01](OLLAMA-DOCS-01-political-records-20261128.md). The later fresh rerun was blocked. |
 | Arch Notebook PDF ingestion | **NOT RUN** | This Rust application does not currently expose raw-PDF ingestion. Its Clinton SQL QA remains a separate database workflow. |
 | Human legal/content review and redistribution rights | **NOT RUN** | No factual or legal conclusions were made; source materials remain local. |
 
@@ -42,6 +42,6 @@ The USDA case index labels the case UD-2024-0079, but the direct linked PDF URL 
 
 - Local source package: `/home/sysadmin/TRANSCRIBE-QA/political-email-cases-2026-11-28/recent-record-cases/README.md`, `manifest.json`, `SHA256SUMS`.
 - No corpus PDFs, page images, or full extracted text were committed.
-- Next executable stage: restore an approved general-purpose PDF-to-page and TRANS text/OCR path and an accessible Qwen model; process these source letters into private temporary artifacts, with the USDA identifier discrepancy kept review-required.
+- Remaining ingestion stage: restore an approved general-purpose PDF-to-page and TRANS text/OCR path. Keep the USDA identifier discrepancy review-required. The completed Qwen batch is partial and remains subject to human review; its later rerun is blocked.
 
-**Result:** Acquisition and structural QA **PASS**. Requested TRANS → Qwen → Arch Notebook processing **BLOCKED / NOT RUN**.
+**Result:** Acquisition and structural QA **PASS**. Subsequent Qwen processing has a separate partial-pass record; accepted OCR/page evidence remains blocked, and no raw-PDF import or semantic approval is claimed.
