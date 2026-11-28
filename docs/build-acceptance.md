@@ -901,3 +901,16 @@ The prior acquisition status is superseded: TRANS processing, constrained Qwen i
 ## Most connected contact-map action layout — 2026-11-28
 
 The native 1440×900 chart review showed the ranked `Map contacts · <name>` control clipping against the analysis-pane edge and obscuring long entity labels. The action is now compact, labels reserve space for the action/count, and full entity labels remain available on hover. Full Rust suite (81 passed, 0 failed, 3 ignored), locked offline check/debug/release builds, formatting, isolated launcher/icon/MIME acceptance, current-user installation, and installed-release SQL automation harness pass. Before/after screenshots show the default-width native render; the 240 px minimum-width check is headless and passes. Pointer interaction and the narrow-width native screenshot remain open. See [ANALYSIS-MAP-CONTACTS-01](evidence/vector-ui/ANALYSIS-MAP-CONTACTS-01-20261128.md). This does not establish IBM visual or schema compatibility.
+
+## Linux SQL timer dispatch status — 2026-11-28
+
+The Linux per-case **Check schedule** output now reports systemd's last timer dispatch and next dispatch time when available. The output explicitly distinguishes a timer dispatch from SQL job success; the Automation guide directs analysts to batch history for capture outcomes.
+
+| Gate | Result | Evidence |
+| --- | --- | --- |
+| Shell/Python syntax and diff check | PASS | `bash -n scripts/install-linux-automation.sh`, `python3 -m py_compile scripts/test-linux-sql-scheduler-acceptance.py`, and `git diff --check` exited 0. |
+| Linux schedule and SQL harness | PASS, stub-scoped | Five cadences, calendar parsing, query preflight, generated service invocation, SQL snapshot, CSV export, failure handling, case isolation, and last/next timer-status output passed. The synthetic `systemctl` stub does not establish live timer delivery. |
+| Live user-manager dispatch | BLOCKED | User-systemd bus access is denied in this sandbox; no timer was installed or fired. |
+| IBM compatibility | NOT TESTED | No IBM app or schema was involved. |
+
+Exact command, runner binary hash, and JSON digest: [SQL-SCHED-10](evidence/sql-automation/SQL-SCHED-10-timer-status-linux.md).

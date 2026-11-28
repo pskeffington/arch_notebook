@@ -186,9 +186,19 @@ esac
   if command -v systemctl >/dev/null 2>&1; then
     enabled=0
     active=0
+    manager_available=0
+    if systemctl --user show-environment >/dev/null 2>&1; then manager_available=1; fi
     if systemctl --user is-enabled --quiet "$schedule_name.timer"; then enabled=1; fi
     if systemctl --user is-active --quiet "$schedule_name.timer"; then active=1; fi
-    if (( enabled && active )); then
+    timer_properties="$(systemctl --user show \
+      --property=LastTriggerUSec \
+      --property=NextElapseUSecRealtime \
+      "$schedule_name.timer" 2>/dev/null || true)"
+    last_trigger="$(awk -F= '$1 == "LastTriggerUSec" { print substr($0, index($0, "=") + 1); exit }' <<< "$timer_properties")"
+    next_trigger="$(awk -F= '$1 == "NextElapseUSecRealtime" { print substr($0, index($0, "=") + 1); exit }' <<< "$timer_properties")"
+    if (( ! manager_available )); then
+      state="configured; systemd user manager status unavailable"
+    elif (( enabled && active )); then
       state="active and enabled"
     elif (( active )); then
       state="active but not enabled"
@@ -199,6 +209,22 @@ esac
     fi
   else
     state="configured; systemctl is unavailable"
+  fi
+  if command -v systemctl >/dev/null 2>&1; then
+    if [[ -z "$timer_properties" ]]; then
+      echo "Timer dispatch timing: unavailable"
+    else
+      case "${last_trigger,,}" in
+        ""|n/a|0) echo "Last timer dispatch: not recorded" ;;
+        *) printf 'Last timer dispatch: %s\n' "$last_trigger" ;;
+      esac
+      case "${next_trigger,,}" in
+        ""|n/a|0) echo "Next timer dispatch: not scheduled" ;;
+        *) printf 'Next timer dispatch: %s\n' "$next_trigger" ;;
+      esac
+    fi
+  else
+    echo "Timer dispatch timing: unavailable"
   fi
   if [[ $# -eq 2 ]]; then
     printf 'Arch Notebook SQL schedule for %s: %s; %s.\n' "$case_path" "$cadence" "$state"

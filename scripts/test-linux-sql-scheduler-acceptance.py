@@ -150,6 +150,17 @@ def main() -> int:
         "with open(os.environ['SYSTEMCTL_LOG'], 'a', encoding='utf-8') as out:\n"
         "    out.write(json.dumps(sys.argv[1:]) + '\\n')\n"
         "args = sys.argv[1:]\n"
+        "if len(args) > 1 and args[1] == 'show-environment' and os.environ.get('SYSTEMD_TIMER_STATUS_MODE') == 'unavailable':\n"
+        "    raise SystemExit(1)\n"
+        "if len(args) > 1 and args[1] == 'show':\n"
+        "    mode = os.environ.get('SYSTEMD_TIMER_STATUS_MODE', 'timestamps')\n"
+        "    if mode == 'unavailable': raise SystemExit(1)\n"
+        "    if mode == 'none':\n"
+        "        print('LastTriggerUSec=n/a')\n"
+        "        print('NextElapseUSecRealtime=0')\n"
+        "    else:\n"
+        "        print('LastTriggerUSec=Sat 2026-11-28 02:00:00 EST')\n"
+        "        print('NextElapseUSecRealtime=Sat 2026-11-28 04:00:00 EST')\n"
         "raise SystemExit(0)\n",
         encoding="utf-8",
     )
@@ -265,6 +276,14 @@ def main() -> int:
             raise RuntimeError(f"preflight policy was not recorded for {label}")
 
         status = run(["bash", str(installer), "--status", str(case_path)], env=schedule_env)
+        if not all(
+            value in status.stdout
+            for value in (
+                "Last timer dispatch: Sat 2026-11-28 02:00:00 EST",
+                "Next timer dispatch: Sat 2026-11-28 04:00:00 EST",
+            )
+        ):
+            raise RuntimeError(f"schedule status omitted timer dispatch timing: {status.stdout}")
         if label == "weekly" and not all(
             value in status.stdout for value in ("weekly", "Tuesday", "15:45", "requires usable connections: false")
         ):
@@ -279,6 +298,28 @@ def main() -> int:
                 "service": str(service_path),
             }
         )
+
+    no_dispatch = run(
+        ["bash", str(installer), "--status", installed[0]["case"]],
+        env=env | {"SYSTEMD_TIMER_STATUS_MODE": "none"},
+    )
+    if not all(
+        value in no_dispatch.stdout
+        for value in ("Last timer dispatch: not recorded", "Next timer dispatch: not scheduled")
+    ):
+        raise RuntimeError(f"empty timer timestamps were not reported clearly: {no_dispatch.stdout}")
+    timing_unavailable = run(
+        ["bash", str(installer), "--status", installed[0]["case"]],
+        env=env | {"SYSTEMD_TIMER_STATUS_MODE": "unavailable"},
+    )
+    if not all(
+        value in timing_unavailable.stdout
+        for value in (
+            "systemd user manager status unavailable",
+            "Timer dispatch timing: unavailable",
+        )
+    ):
+        raise RuntimeError(f"unavailable timer timing was not reported clearly: {timing_unavailable.stdout}")
 
     app_calls = [json.loads(line) for line in app_log.read_text(encoding="utf-8").splitlines()]
     expected_app_calls = len(case_specs)
@@ -401,6 +442,11 @@ def main() -> int:
         "case_specific_removal_preserved_other_schedules": True,
         "systemctl_is_temporary_stub": True,
         "systemctl_calls": len(removal_log),
+        "timer_status_variants": [
+            "last and next timestamps",
+            "no dispatch recorded",
+            "systemd user manager unavailable",
+        ],
         "work_dir": str(work),
     }
     (work / "acceptance-report.json").write_text(
