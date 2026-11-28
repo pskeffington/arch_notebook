@@ -27922,6 +27922,15 @@ impl eframe::App for App {
                                 analysis.interactions.len(),
                                 analysis.cross_group_relationship_record_count,
                             )).small().color(muted));
+                            ui.horizontal_wrapped(|ui| {
+                                ui.colored_label(egui::Color32::from_rgb(183, 137, 63), "● Origin · hop 0");
+                                ui.colored_label(egui::Color32::from_rgb(58, 111, 130), "● Other hop groups");
+                                ui.colored_label(egui::Color32::from_rgb(235, 190, 94), "◎ Proxy in group");
+                                ui.colored_label(PROXIMITY_MAP_DIRECTION_COLOR, "→ Link direction");
+                                ui.colored_label(PROXIMITY_MAP_SELECTED_EDGE_COLOR, "○ Selected group or tie");
+                                ui.colored_label(PROXIMITY_MAP_HOVER_EDGE_COLOR, "━ Hovered tie");
+                                ui.label(egui::RichText::new("Thicker link · more records").small().color(muted));
+                            });
                             let visible_groups_by_column = &analysis.map_groups_by_column;
                             let map_width = 148.0 + analysis.map_hops.len().saturating_sub(1) as f32 * 148.0;
                             let max_rows = visible_groups_by_column.iter().map(Vec::len).max().unwrap_or_default();
@@ -48769,6 +48778,20 @@ mod tests {
         assert!(
             find_headless_text_rect(&visible_contact_map, "SAMPLED CONTACT TOPOLOGY").is_some()
         );
+        for legend_label in [
+            "Origin · hop 0",
+            "Other hop groups",
+            "Proxy in group",
+            "Link direction",
+            "Selected group or tie",
+            "Hovered tie",
+            "Thicker link · more records",
+        ] {
+            assert!(
+                find_headless_text_rect(&visible_contact_map, legend_label).is_some(),
+                "contact topology legend is missing {legend_label}"
+            );
+        }
         let map_analysis = &app.network_proximity_analysis.as_ref().unwrap().1;
         let mapped_records: usize = map_analysis
             .map_interaction_indices

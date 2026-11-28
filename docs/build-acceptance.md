@@ -1,5 +1,9 @@
 # Local build acceptance record
 
+## Proximity-map encoding legend — 2026-11-28
+
+The sampled topology map now explains its node colors, proxy ring, direction arrow, and relationship-count line thickness with a compact wrapped legend. Headless production-panel checks pass on the synthetic UI and retained Clinton case (2,813 entities, 6,173 records, 48 sampled groups, 47 sampled contacts). The full Rust suite passes (94 passed, 0 failed, 3 ignored), and the locked offline release was installed with synchronized launcher and icon assets. Native screenshot/pointer review remains blocked because this session cannot access the X11 or Wayland display. Details: [PROXIMITY-MAP-LEGEND-01](evidence/vector-ui/PROXIMITY-MAP-LEGEND-01-20261128.md).
+
 ## Clinton primary corpus QA rerun — 2026-11-28
 
 The installed Rust release passes the primary Clinton SQL batch again: one saved job passed query-only preflight; replay returned 6,173 relationship rows with zero skipped rows and zero added/changed/removed deltas. The default-redacted topology packet contains 2,813 entities and 6,173 relationship records, with all entity centers rendered and no labels outside the SVG viewport. The PDF, case, and SQLite input hashes remained unchanged. The run does not establish PDF extraction completeness, Qwen analysis, or human content review. Full aggregate evidence: [CLINTON-CORPUS-QA-resume](evidence/sql-automation/CLINTON-CORPUS-QA-resume-20261128.md).
