@@ -17064,14 +17064,42 @@ fn bind_sql_seed_parameter(
     if entity_id.contains(['\n', '\r']) {
         return Err("selected SQL entity ID cannot contain a line break".into());
     }
+    set_sql_seed_parameter_value(parameter_text, &parameter_name, format!("text:{entity_id}"))
+}
+
+fn bind_sql_seed_parameter_values(
+    parameter_text: &str,
+    parameter_name: &str,
+    entity_ids: &[String],
+) -> Result<String, String> {
+    let parameter_name = normalize_sql_parameter_name(parameter_name);
+    if !valid_sql_parameter_name(&parameter_name) {
+        return Err("seed parameter name must start with a letter or underscore".into());
+    }
+    if entity_ids.is_empty() || entity_ids.iter().any(|id| id.trim().is_empty()) {
+        return Err("selected SQL entities need non-empty source IDs".into());
+    }
+    let mut unique_ids = entity_ids.to_vec();
+    unique_ids.sort();
+    unique_ids.dedup();
+    let json_ids = serde_json::to_string(&unique_ids)
+        .map_err(|error| format!("cannot encode selected SQL entity IDs: {error}"))?;
+    set_sql_seed_parameter_value(parameter_text, &parameter_name, format!("text:{json_ids}"))
+}
+
+fn set_sql_seed_parameter_value(
+    parameter_text: &str,
+    parameter_name: &str,
+    value: String,
+) -> Result<String, String> {
     let mut parameters = parse_sql_parameters(parameter_text)?;
-    if let Some((_, value)) = parameters
+    if let Some((_, existing_value)) = parameters
         .iter_mut()
         .find(|(name, _)| name == &parameter_name)
     {
-        *value = format!("text:{entity_id}");
+        *existing_value = value;
     } else {
-        parameters.push((parameter_name, format!("text:{entity_id}")));
+        parameters.push((parameter_name.to_owned(), value));
     }
     Ok(format_sql_parameters(&parameters))
 }
@@ -17100,6 +17128,43 @@ fn sql_seed_identities_for_entity(
     });
     identities.dedup();
     identities
+}
+
+fn sql_seed_sources_for_entities(
+    case: &CaseFile,
+    entities: &[&Entity],
+    chart_id: Uuid,
+) -> Vec<(String, Vec<String>)> {
+    let Some(first) = entities.first() else {
+        return Vec::new();
+    };
+    if entities.len() < 2 {
+        return Vec::new();
+    }
+    let first_identities = sql_seed_identities_for_entity(case, first, chart_id);
+    let mut sources = first_identities
+        .iter()
+        .map(|(source, _)| source.clone())
+        .collect::<Vec<_>>();
+    sources.sort();
+    sources.dedup();
+    sources
+        .into_iter()
+        .filter_map(|source| {
+            let ids = entities
+                .iter()
+                .map(|entity| {
+                    let mut matching = sql_seed_identities_for_entity(case, entity, chart_id)
+                        .into_iter()
+                        .filter(|(candidate_source, _)| candidate_source == &source)
+                        .map(|(_, id)| id);
+                    let id = matching.next()?;
+                    matching.next().is_none().then_some(id)
+                })
+                .collect::<Option<Vec<_>>>()?;
+            Some((source, ids))
+        })
+        .collect()
 }
 
 fn sql_seed_identity_label(source: &str, entity_id: &str) -> String {
@@ -24163,6 +24228,91 @@ impl eframe::App for App {
                                 ui.add(egui::TextEdit::multiline(&mut self.sql_query).desired_width(canvas_w-20.0).desired_rows(4).code_editor());
                                 ui.label(egui::RichText::new("Named SQL parameters · name=value per line; bind as text with :name, @name, or $name").small().color(muted));
                                 ui.add(egui::TextEdit::multiline(&mut self.sql_parameter_text).desired_width(canvas_w-20.0).desired_rows(2).code_editor());
+                                let selected_seed_entities = self
+                                    .case
+                                    .entities
+                                    .iter()
+                                    .filter(|entity| self.selected_entities.contains(&entity.id))
+                                    .collect::<Vec<_>>();
+                                if selected_seed_entities.len() > 1 {
+                                    if self.sql_seed_parameter_name == "seed_entity_id" {
+                                        self.sql_seed_parameter_name = "seed_entity_ids".into();
+                                    }
+                                    let seed_sources = sql_seed_sources_for_entities(
+                                        &self.case,
+                                        &selected_seed_entities,
+                                        self.case.active_chart_id,
+                                    );
+                                    if seed_sources.is_empty() {
+                                        ui.label(egui::RichText::new(format!(
+                                            "Multi-entity SQL seed unavailable · all {} selected entities must have exactly one identity from the same SQL source",
+                                            selected_seed_entities.len()
+                                        )).small().color(muted));
+                                    } else {
+                                        if !seed_sources.iter().any(|(source, _)| {
+                                            self.sql_seed_identity_key
+                                                .split_once('\0')
+                                                .is_some_and(|(selected_source, _)| selected_source == source)
+                                        }) {
+                                            self.sql_seed_identity_key = sql_seed_identity_key(
+                                                &seed_sources[0].0,
+                                                "",
+                                            );
+                                        }
+                                        ui.horizontal(|ui| {
+                                            ui.label("Shared SQL source");
+                                            egui::ComboBox::from_id_salt("sql_review_multi_seed_source")
+                                                .selected_text(
+                                                    seed_sources
+                                                        .iter()
+                                                        .find(|(source, _)| self.sql_seed_identity_key.split_once('\0').is_some_and(|(selected_source, _)| selected_source == source))
+                                                        .map(|(source, ids)| format!("{} · {} seeds", Path::new(source).file_name().and_then(|name| name.to_str()).unwrap_or(source), ids.len()))
+                                                        .unwrap_or_else(|| "Choose SQL source".into()),
+                                                )
+                                                .show_ui(ui, |ui| {
+                                                    for (source, ids) in &seed_sources {
+                                                        ui.selectable_value(
+                                                            &mut self.sql_seed_identity_key,
+                                                            sql_seed_identity_key(source, ""),
+                                                            format!("{} · {} seeds", Path::new(source).file_name().and_then(|name| name.to_str()).unwrap_or(source), ids.len()),
+                                                        ).on_hover_text(source);
+                                                    }
+                                                });
+                                            ui.label("Parameter");
+                                            ui.add(egui::TextEdit::singleline(&mut self.sql_seed_parameter_name).desired_width(130.0));
+                                            let selected_ids = seed_sources
+                                                .iter()
+                                                .find(|(source, _)| self.sql_seed_identity_key.split_once('\0').is_some_and(|(selected_source, _)| selected_source == source))
+                                                .map(|(_, ids)| ids.as_slice());
+                                            if ui.add_enabled(selected_ids.is_some(), egui::Button::new("Bind selected entity IDs")).clicked()
+                                                && let Some(ids) = selected_ids
+                                            {
+                                                match bind_sql_seed_parameter_values(
+                                                    &self.sql_parameter_text,
+                                                    &self.sql_seed_parameter_name,
+                                                    ids,
+                                                ) {
+                                                    Ok(parameters) => {
+                                                        self.sql_parameter_text = parameters;
+                                                        self.sql_validation_preview = None;
+                                                        self.sql_seed_query_mode = true;
+                                                        self.sql_seed_page_offset = 0;
+                                                        self.status = format!(
+                                                            "SQL SEED BOUND · use json_each(:{}) in an IN/EXISTS query, then validate",
+                                                            self.sql_seed_parameter_name.trim()
+                                                        );
+                                                    }
+                                                    Err(error) => self.status = format!("SQL SEED NOT BOUND · {error}"),
+                                                }
+                                            }
+                                        });
+                                        ui.label(egui::RichText::new(format!(
+                                            "JSON seed array for {} selected entities · query with json_each(:{}) · local read-only SQL only",
+                                            selected_seed_entities.len(),
+                                            self.sql_seed_parameter_name.trim()
+                                        )).small().color(muted));
+                                    }
+                                } else {
                                 let seed_entity = self.selected.and_then(|entity_id| {
                                     self.case.entities.iter().find(|entity| entity.id == entity_id)
                                 });
@@ -24253,6 +24403,7 @@ impl eframe::App for App {
                                             .small()
                                             .color(muted),
                                     );
+                                }
                                 }
                                 egui::CollapsingHeader::new("Automation capture limits (optional)")
                                     .id_salt("sql_review_automation_limits")
@@ -46673,6 +46824,241 @@ mod tests {
         assert!(super::bind_sql_seed_parameter("bad line", "seed_entity_id", "one").is_err());
         assert!(super::bind_sql_seed_parameter("", "bad-name", "one").is_err());
         assert!(super::bind_sql_seed_parameter("", "seed_entity_id", "two\nlines").is_err());
+    }
+
+    #[test]
+    fn sql_multi_seed_binding_encodes_ids_for_sqlite_json_each() {
+        let parameters = super::bind_sql_seed_parameter_values(
+            "snapshot_id=baseline",
+            "seed_entity_ids",
+            &["acct-2".into(), "acct-1".into(), "acct-2".into()],
+        )
+        .expect("selected SQL IDs bind as a JSON text parameter");
+        let parsed = super::parse_sql_parameters(&parameters).expect("parameter parses");
+        assert_eq!(parsed.len(), 2);
+        let json_ids = parsed
+            .iter()
+            .find(|(name, _)| name == "seed_entity_ids")
+            .and_then(|(_, value)| value.strip_prefix("text:"))
+            .expect("seed parameter is text");
+        assert_eq!(
+            serde_json::from_str::<Vec<String>>(json_ids).expect("seed JSON parses"),
+            vec!["acct-1", "acct-2"]
+        );
+        let database = rusqlite::Connection::open_in_memory().expect("memory database opens");
+        let mut statement = database
+            .prepare("SELECT value FROM json_each(:seed_entity_ids) ORDER BY value")
+            .expect("SQLite JSON1 is available in the bundled build");
+        let rows = statement
+            .query_map(
+                rusqlite::named_params! { ":seed_entity_ids": json_ids },
+                |row| row.get::<_, String>(0),
+            )
+            .expect("JSON seed values query")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("JSON seed values read");
+        assert_eq!(rows, vec!["acct-1", "acct-2"]);
+        assert!(super::bind_sql_seed_parameter_values("", "seed_entity_ids", &[]).is_err());
+        assert!(
+            super::bind_sql_seed_parameter_values(
+                "",
+                "seed_entity_ids",
+                &["acct-1".into(), "".into()]
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn sql_multi_seed_query_validates_and_returns_only_selected_ids_read_only() {
+        let root =
+            std::env::temp_dir().join(format!("arch-notebook-multi-seed-query-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).expect("create multi-seed query directory");
+        let database_path = root.join("source.sqlite");
+        let database =
+            rusqlite::Connection::open(&database_path).expect("create source SQL database");
+        database
+            .execute_batch(
+                "CREATE TABLE candidates(id TEXT PRIMARY KEY, name TEXT);\
+                 INSERT INTO candidates VALUES ('acct-1', 'Candidate One'), ('acct-2', 'Candidate Two'), ('acct-3', 'Not Selected');",
+            )
+            .expect("create multi-seed SQL fixture");
+        drop(database);
+        let source_before = std::fs::read(&database_path).expect("read source before validation");
+        let parameter_text = super::bind_sql_seed_parameter_values(
+            "",
+            "seed_entity_ids",
+            &["acct-2".into(), "acct-1".into()],
+        )
+        .expect("bind selected SQL IDs");
+        let case: CaseFile =
+            serde_json::from_str(include_str!("../fixtures/chart/correctness.case.json"))
+                .expect("chart fixture parses");
+        let mut app =
+            App::automation_context(case, &root.join("review.case.json").to_string_lossy());
+        app.sql_path = database_path.to_string_lossy().into_owned();
+        app.sql_series = "multi-seed review".into();
+        app.sql_query = "SELECT 'Seed entity' AS source, id AS source_entity_id, name AS target, 'PERSON' AS source_type, 'ORGANIZATION' AS target_type, 'RELATED TO' AS relationship FROM candidates WHERE id IN (SELECT value FROM json_each(:seed_entity_ids)) ORDER BY id".into();
+        app.sql_parameter_text = parameter_text;
+        app.sql_seed_query_mode = true;
+
+        assert!(
+            app.validate_sql_query(),
+            "multi-seed query validates read-only"
+        );
+        let preview = app
+            .sql_validation_preview
+            .as_ref()
+            .expect("seeded validation preview exists");
+        assert_eq!(preview.connections.len(), 2);
+        assert_eq!(
+            preview
+                .connections
+                .iter()
+                .map(|fact| fact.target.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Candidate One", "Candidate Two"]
+        );
+        assert_eq!(app.case.snapshots.len(), 0);
+        assert_eq!(
+            std::fs::read(&database_path).expect("read source after validation"),
+            source_before,
+            "multi-seed query validation must not change its source database"
+        );
+        std::fs::remove_dir_all(root).expect("remove multi-seed query directory");
+    }
+
+    #[test]
+    fn sql_multi_seed_sources_require_one_shared_unambiguous_identity_each() {
+        let mut case: CaseFile =
+            serde_json::from_str(include_str!("../fixtures/chart/correctness.case.json"))
+                .expect("chart fixture parses");
+        let active_chart = case.active_chart_id;
+        case.snapshots.push(ConnectionSnapshot {
+            id: Uuid::new_v4(),
+            chart_id: Some(active_chart),
+            series: "accounts".into(),
+            source_key: "accounts-source".into(),
+            database_path: "/tmp/accounts.sqlite".into(),
+            configured_database_path: "/tmp/accounts.sqlite".into(),
+            query: String::new(),
+            parameters: Vec::new(),
+            captured_at: String::new(),
+            sqlite_schema_version: None,
+            sqlite_schema_fingerprint: None,
+            sqlite_schema_objects: None,
+            connections: Vec::new(),
+            skipped_rows: 0,
+        });
+        let first = case
+            .entities
+            .get_mut(0)
+            .expect("first fixture entity exists");
+        first
+            .external_ids
+            .push(("/tmp/accounts.sqlite".into(), "acct-1".into()));
+        let second = case
+            .entities
+            .get_mut(1)
+            .expect("second fixture entity exists");
+        second
+            .external_ids
+            .push(("/tmp/accounts.sqlite".into(), "acct-2".into()));
+        second
+            .external_ids
+            .push(("/tmp/other.sqlite".into(), "other-2".into()));
+        let selected = [&case.entities[0], &case.entities[1]];
+        assert_eq!(
+            super::sql_seed_sources_for_entities(&case, &selected, active_chart),
+            vec![(
+                "/tmp/accounts.sqlite".into(),
+                vec!["acct-1".into(), "acct-2".into()]
+            )]
+        );
+
+        case.entities[0]
+            .external_ids
+            .push(("/tmp/accounts.sqlite".into(), "acct-1-alias".into()));
+        let selected = [&case.entities[0], &case.entities[1]];
+        assert!(super::sql_seed_sources_for_entities(&case, &selected, active_chart).is_empty());
+    }
+
+    #[test]
+    fn sql_review_ui_binds_all_selected_entities_from_the_shared_source() {
+        let mut case: CaseFile =
+            serde_json::from_str(include_str!("../fixtures/chart/correctness.case.json"))
+                .expect("chart fixture parses");
+        let active_chart = case.active_chart_id;
+        case.snapshots.push(ConnectionSnapshot {
+            id: Uuid::new_v4(),
+            chart_id: Some(active_chart),
+            series: "accounts".into(),
+            source_key: "accounts-source".into(),
+            database_path: "/tmp/accounts.sqlite".into(),
+            configured_database_path: "/tmp/accounts.sqlite".into(),
+            query: String::new(),
+            parameters: Vec::new(),
+            captured_at: String::new(),
+            sqlite_schema_version: None,
+            sqlite_schema_fingerprint: None,
+            sqlite_schema_objects: None,
+            connections: Vec::new(),
+            skipped_rows: 0,
+        });
+        case.entities[0]
+            .external_ids
+            .push(("/tmp/accounts.sqlite".into(), "acct-1".into()));
+        case.entities[1]
+            .external_ids
+            .push(("/tmp/accounts.sqlite".into(), "acct-2".into()));
+        let ids = [case.entities[0].id, case.entities[1].id];
+        let mut app = App::automation_context(case, "/tmp/multi-seed.case.json");
+        app.page = super::WorkspacePage::Data;
+        app.data_mode = super::DataMode::SqlRegressions;
+        app.selected = Some(ids[0]);
+        app.selected_entities.extend(ids);
+        app.sql_path = "/tmp/accounts.sqlite".into();
+        app.sql_series = "seed review".into();
+        app.sql_query = "SELECT source, target FROM records".into();
+        let context = egui::Context::default();
+        let mut frame = eframe::Frame::_new_kittest();
+        let mut time = 0.0;
+        let shapes = render_headless_app_frame_at(
+            &context,
+            &mut app,
+            &mut frame,
+            time,
+            Vec::new(),
+            egui::vec2(1600.0, 1800.0),
+        );
+        let texts = collect_headless_texts(&shapes);
+        assert!(
+            texts
+                .iter()
+                .any(|text| text.contains("Bind selected entity IDs"))
+        );
+        assert!(texts.iter().any(|text| text.contains("json_each")));
+        let _after_click = click_headless_visible_text(
+            &context,
+            &mut app,
+            &mut frame,
+            &mut time,
+            &shapes,
+            "Bind selected entity IDs",
+        );
+        let parameters = super::parse_sql_parameters(&app.sql_parameter_text)
+            .expect("multi-seed UI creates valid SQL parameters");
+        let json_ids = parameters
+            .iter()
+            .find(|(name, _)| name == "seed_entity_ids")
+            .and_then(|(_, value)| value.strip_prefix("text:"))
+            .expect("multi-seed parameter is bound");
+        assert_eq!(
+            serde_json::from_str::<Vec<String>>(json_ids).expect("seed JSON parses"),
+            vec!["acct-1", "acct-2"]
+        );
+        assert!(app.sql_seed_query_mode);
+        assert!(app.status.starts_with("SQL SEED BOUND"));
     }
 
     #[test]

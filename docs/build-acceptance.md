@@ -993,6 +993,18 @@ SQL Review binds an active-chart SQL identity to a one-off parameter, pages thro
 
 Details: [SQL-SEED-01](evidence/sql-automation/SQL-SEED-01-one-off-parameter-20261128.md).
 
+## Multi-entity SQL seed review — 2026-11-28
+
+SQL Review can bind a shared SQL identity source from multiple selected entities as a JSON parameter for SQLite `json_each`. It omits sources where any selected entity has no identity or more than one distinct identity. The binding stays in the one-off review draft; the analyst still validates results and selects relationships to add.
+
+| Gate | Result | Evidence |
+| --- | --- | --- |
+| Shared identity source, JSON parameter, SQLite expansion, and SQL Review event | PASS | [SQL-SEED-02](evidence/sql-automation/SQL-SEED-02-multi-entity-json-seed-20261128.md). |
+| Formatting, diff, offline check, full Rust suite | PASS | Formatting and diff checks exited 0; offline check exited 0; 94 passed, 0 failed, 3 ignored. |
+| Locked offline release build | PASS | Exit 0; release SHA-256 `25a804a6a955d00d962330dc0788ba2df528f5cfb0291027122c9e9dd60229e5`. |
+| Current-user launcher and graphics synchronization | PASS | Installed binary matches release; menu and desktop shortcut, SVG/PNG icons, MIME definition, and SQL helper match package assets. Isolated installer acceptance passed. |
+| IBM connector/schema and native pointer interaction | NOT TESTED | This local SQLite seed helper is not an i2 Analyze external-search connector; headless UI tests do not establish native interaction. |
+
 ## Commented SQL query-plan inspection — 2026-11-28
 
 Read-only query-plan inspection normalizes a terminal semicolon and comments with the SQL-aware statement parser used by seeded paging. The SQLite regression binds a typed parameter, checks returned planner steps, and verifies source bytes remain unchanged.
