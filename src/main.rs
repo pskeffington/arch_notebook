@@ -1617,6 +1617,7 @@ const MAX_CHART_LEGEND_CONDITIONS: usize = 8;
 const MAX_CHART_TEMPLATE_CONDITIONAL_RULES: usize = MAX_CHART_LEGEND_ENTRIES * 4;
 const PROXIMITY_MAP_SELECTED_EDGE_COLOR: egui::Color32 = egui::Color32::from_rgb(244, 224, 166);
 const PROXIMITY_MAP_SELECTED_NODE_COLOR: egui::Color32 = egui::Color32::from_rgb(244, 224, 166);
+const PROXIMITY_MAP_DIRECTION_COLOR: egui::Color32 = egui::Color32::from_rgb(84, 194, 205);
 const PROXIMITY_MAP_ROUTE_SEGMENTS: usize = 12;
 
 fn proximity_map_node_radius(member_count: usize) -> f32 {
@@ -1744,6 +1745,39 @@ fn proximity_map_route_tangent(route: &[egui::Pos2], distance: f32) -> egui::Vec
             (delta.length_sq() > f32::EPSILON).then(|| delta.normalized())
         })
         .unwrap_or(egui::Vec2::ZERO)
+}
+
+fn proximity_map_paint_direction_markers(
+    painter: &egui::Painter,
+    route: &[egui::Pos2],
+    forward_count: usize,
+    reverse_count: usize,
+) {
+    let route_length = proximity_map_route_length(route);
+    if route_length <= f32::EPSILON {
+        return;
+    }
+
+    let reciprocal = forward_count > 0 && reverse_count > 0;
+    let lane = if reciprocal { 2.0 } else { 0.0 };
+    let midpoint = route_length * 0.5;
+    let arrow_half_length = (route_length * 0.08).clamp(4.0, 6.0);
+    let arrow_center = proximity_map_route_point_with_offset(route, midpoint, lane);
+    let tangent = proximity_map_route_tangent(route, midpoint);
+    let stroke = egui::Stroke::new(1.2_f32, PROXIMITY_MAP_DIRECTION_COLOR);
+
+    if forward_count > 0 {
+        let start = arrow_center - tangent * arrow_half_length;
+        let end = arrow_center + tangent * arrow_half_length;
+        painter.arrow(start, end - start, stroke);
+    }
+    if reverse_count > 0 {
+        let reverse_center = proximity_map_route_point_with_offset(route, midpoint, -lane);
+        let reverse_tangent = -tangent;
+        let reverse_start = reverse_center - reverse_tangent * arrow_half_length;
+        let reverse_end = reverse_center + reverse_tangent * arrow_half_length;
+        painter.arrow(reverse_start, reverse_end - reverse_start, stroke);
+    }
 }
 
 fn proximity_map_distance_to_segment(
@@ -26495,45 +26529,12 @@ impl eframe::App for App {
                                         for segment in route.windows(2) {
                                             painter.line_segment([segment[0], segment[1]], base_stroke);
                                         }
-                                        let route_length = proximity_map_route_length(&route);
-                                        if route_length > f32::EPSILON {
-                                            let direction_color = egui::Color32::from_rgb(84, 194, 205);
-                                            let reciprocal = interaction.first_to_second_record_count > 0
-                                                && interaction.second_to_first_record_count > 0;
-                                            let lane = if reciprocal { 2.0 } else { 0.0 };
-                                            let midpoint = route_length * 0.5;
-                                            let arrow_half_length = (route_length * 0.08).clamp(4.0, 6.0);
-                                            let arrow_center = proximity_map_route_point_with_offset(
-                                                &route,
-                                                midpoint,
-                                                lane,
-                                            );
-                                            let tangent = proximity_map_route_tangent(&route, midpoint);
-                                            if interaction.first_to_second_record_count > 0 {
-                                                let start = arrow_center - tangent * arrow_half_length;
-                                                let end = arrow_center + tangent * arrow_half_length;
-                                                painter.arrow(
-                                                    start,
-                                                    end - start,
-                                                    egui::Stroke::new(1.2_f32, direction_color),
-                                                );
-                                            }
-                                            if interaction.second_to_first_record_count > 0 {
-                                                let reverse_center = proximity_map_route_point_with_offset(
-                                                    &route,
-                                                    midpoint,
-                                                    -lane,
-                                                );
-                                                let reverse_tangent = -tangent;
-                                                let reverse_start = reverse_center - reverse_tangent * arrow_half_length;
-                                                let reverse_end = reverse_center + reverse_tangent * arrow_half_length;
-                                                painter.arrow(
-                                                    reverse_start,
-                                                    reverse_end - reverse_start,
-                                                    egui::Stroke::new(1.2_f32, direction_color),
-                                                );
-                                            }
-                                        }
+                                        proximity_map_paint_direction_markers(
+                                            &painter,
+                                            &route,
+                                            interaction.first_to_second_record_count,
+                                            interaction.second_to_first_record_count,
+                                        );
                                         if let Some(pointer) = pointer_position {
                                             let distance = route
                                                 .windows(2)
@@ -26591,6 +26592,12 @@ impl eframe::App for App {
                                         for segment in route.windows(2) {
                                             painter.line_segment([segment[0], segment[1]], selected_stroke);
                                         }
+                                        proximity_map_paint_direction_markers(
+                                            &painter,
+                                            &route,
+                                            interaction.first_to_second_record_count,
+                                            interaction.second_to_first_record_count,
+                                        );
                                     }
                                     let mut node_clicked = false;
                                     let mut node_hovered = false;
@@ -46177,6 +46184,27 @@ mod tests {
         assert!(
             base_route_strokes.iter().max() < selected_route_strokes.iter().min(),
             "the selected contact should be painted above crossing base routes"
+        );
+        app.selected_proximity_interaction = Some((1, 2));
+        let selected_reciprocal_map_view = render_headless_app_frame_at(
+            &context,
+            &mut app,
+            &mut frame,
+            time,
+            Vec::new(),
+            map_viewport,
+        );
+        let reciprocal_highlight_strokes = proximity_map_line_stroke_positions(
+            &selected_reciprocal_map_view,
+            super::PROXIMITY_MAP_SELECTED_EDGE_COLOR,
+        );
+        let direction_marker_strokes = proximity_map_line_stroke_positions(
+            &selected_reciprocal_map_view,
+            super::PROXIMITY_MAP_DIRECTION_COLOR,
+        );
+        assert!(
+            direction_marker_strokes.iter().max() > reciprocal_highlight_strokes.iter().max(),
+            "selected reciprocal direction markers should be repainted above the route highlight"
         );
         let hop_zero_center = find_headless_text_anchor_center(&selected_map_view, "HOP 0")
             .expect("sampled map's first hop label is visible");
