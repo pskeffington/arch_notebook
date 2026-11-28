@@ -744,3 +744,32 @@ Use the real review-required Clinton candidate case as the primary local QA batc
 | Exact-head cross-platform CI | PENDING | Feature-branch push does not trigger the configured workflow; no PR or manual run was created. |
 
 See [PROXIMITY-MAP-HOVER-02 evidence](evidence/vector-ui/PROXIMITY-MAP-HOVER-02-linux.md) and refreshed [LOCAL-INSTALL-08 evidence](evidence/deployment/LOCAL-INSTALL-08-linux.md). The change makes no corpus-semantic or IBM-compatibility claim.
+
+## Current-release SQL automation revalidation — 2026-11-27
+
+**Task / owner:** Revalidate SQL automation against the current installed product and retain the Clinton corpus as the primary batch; orchestrator-owned acceptance.
+**Repository / branch:** `/home/sysadmin/github/arch_notebook` / `codex/ui-00-chart-baseline`.
+**Product source / runtime:** `30b8020`; installed release SHA-256 `330bc4fe2446bf8c7bff685ac4e56ddc5ffabc7b82cb59199b2cf537bd0d09b0`.
+
+| Gate | Result | Evidence |
+| --- | --- | --- |
+| Clinton real-corpus SQL replay | PASS | Query-only preflight and saved-run replay passed with 6,173 rows, zero skipped, zero deltas; hashes unchanged and report packet redacted all identifying fields. |
+| SQL automation recovery/interchange | PASS | Schema diagnosis and reviewed repair, failure retention, batch resume, mismatch rejection, CSV/TSV round trips, and read-only source checks passed. |
+| 7,121-row joined-header scale | PASS | 7,121 composite record IDs, 4,121 repeated endpoint pairs, nullable attributes, zero skipped, source unchanged during captures. |
+| Linux scheduler harness | PASS, stubbed | Five cadence expressions parsed; generated service invocation, case isolation, UTC window and per-case removal passed. Live timer delivery is untested. |
+| IBM interoperability / human or Qwen corpus review | NOT TESTED | This local automation revalidation does not establish ANX compatibility, extraction completeness, or semantic content validity. |
+
+Full commands, limitations, and SHA-256 digests for all four aggregate reports are in [SQL-AUTO-08 current-release evidence](evidence/sql-automation/SQL-AUTO-08-current-release-20261127.md). Raw email content is not in Git.
+
+## Temporary artifact archive — 2026-11-27
+
+**Task / owner:** Move inactive Arch Notebook build and acceptance outputs off the nearly full `/tmp`; implementation session.
+**Destination:** `smb://archive.local/Research/EVIDENCE/arch_notebook/tmp-archive-2026-11-27/`.
+
+| Gate | Result | Evidence |
+| --- | --- | --- |
+| SMB copy and checksum comparison | PASS | 3,195,663,365 bytes transferred; `rsync -rc --dry-run --itemize-changes` reported no file differences. |
+| Local cleanup | PASS | Only the archived Arch Notebook directories/reports were removed; `/tmp/arch-notebook-target` was retained. `/tmp` availability increased from 417 MB to 3.0 GB. |
+| Other project files | NOT TOUCHED | No Room 237, Airspy, or other project artifacts were moved. |
+
+See [TMP-ARCHIVE-01 evidence](evidence/TMP-ARCHIVE-01-linux.md) and the archive share's `README.txt` manifest. The remaining `/tmp` usage includes the active canonical Rust build target and unrelated files.
