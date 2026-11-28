@@ -2,7 +2,7 @@
 
 ## Quick Open keyboard navigation and chart destinations — 2026-11-28
 
-Quick Open supports multiword search across labels and keywords, arrow-key selection with a visible active row, Enter activation, a bounded scroll area that reveals the active match, and direct destinations for named chart tabs. These changes complete the direct SQL-capture and automation-run destinations added in the previous two navigation increments.
+Quick Open supports multiword search across labels and keywords, arrow-key selection with a visible active row, Enter activation, a bounded scroll area that reveals the active match, and direct destinations for named chart tabs, saved SQL captures, and automation runs. Selecting a capture or run only changes the review destination and filters; it does not rerun SQL or create a snapshot.
 
 | Gate | Result | Evidence |
 | --- | --- | --- |
