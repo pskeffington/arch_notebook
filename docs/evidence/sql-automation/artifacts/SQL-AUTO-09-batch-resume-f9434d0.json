@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "suite": "arch_notebook_scheduled_sql_interruption_recovery",
+  "result": "PASS",
+  "source_commit": "f9434d09aa3aac4ec6ffca652efdc3110336b9b8",
+  "binary_sha256": "18c01b58b05b8d4b626aa38f497d107080b117cb480535ccfb0030f85899811d",
+  "process_interruption": "SIGKILL after first job checkpoint",
+  "recovered_same_batch": true,
+  "auto_resumed": true,
+  "completed_jobs": 2,
+  "already_completed_job_skipped": true,
+  "saved_runs": 2,
+  "manual_resume_flag_rejected_without_case_change": true,
+  "work_directory": "/tmp/arch-notebook-scheduled-resume-f9434d0-20261128"
+}
