@@ -85,10 +85,26 @@ The hop-group contact map now spaces columns and rows further apart, scales and 
 | Selected route and direction markers above crossing routes | PASS, headless UI and independent code review | Regression requires all 12 selected strokes and at least six reciprocal arrow strokes after the selected highlight; nodes remain above both. |
 | Focused topology UI and full offline suite | PASS | Focused test: 1 passed. Full suite: 73 passed, 0 failed, 3 ignored. |
 | Formatting, diff validation, locked offline check/debug build | PASS | All four checks exited 0. |
-| Locked offline release build | BLOCKED | The runner did not return completion status after starting application-crate compilation; interrupted without a pass claim. |
-| Native visual acceptance / exact-head CI | NOT RUN | No screenshot or workflow result for this candidate. |
+| Locked offline release build on this host | PASS | A retry of `CARGO_BUILD_JOBS=1 CARGO_TARGET_DIR=/tmp/arch-notebook-target cargo build --release --locked --offline` completed; the candidate was installed and verified in [LOCAL-INSTALL-09](evidence/deployment/LOCAL-INSTALL-09-linux.md). |
+| Exact-head cross-platform CI | PASS | Manual run [46095125130](https://github.com/pskeffington/arch_notebook/actions/runs/46095125130) passed all six jobs for `57a714e7fe1c909e1eeb10b66283262c140fbcb3`: Linux tests, Linux x86_64/ARM64, macOS Intel/Apple Silicon, and Arch package. |
+| Native visual acceptance | NOT RUN | No screenshot or native pointer review for this candidate. |
 
 See [PROXIMITY-MAP-LAYER-01](evidence/vector-ui/PROXIMITY-MAP-LAYER-01-linux.md).
+
+## Current-user Linux deployment — 2026-11-27
+
+**Repository / branch / source:** `/home/sysadmin/github/arch_notebook` / `codex/ui-00-chart-baseline` / `57a714e7fe1c909e1eeb10b66283262c140fbcb3`.
+**Installed release binary SHA-256:** `b3456f71520b084234b281a9056cea74b94aa1d9da7527ac3de4a125d79f574a`.
+
+| Gate | Result | Evidence |
+| --- | --- | --- |
+| Locked offline release build and user installer | PASS | Release build and `scripts/install-linux-user.sh` exited 0. |
+| Installed binary and launcher | PASS | Installed binary matches the release SHA; menu and Desktop entries match and validate. |
+| Icon, MIME, and automation assets | PASS | Both installed icons, case MIME XML, and automation installer match repository assets. |
+| Exact-head CI | PASS | [Run 46095125130](https://github.com/pskeffington/arch_notebook/actions/runs/46095125130) passed all six jobs for this source. |
+| Native visual interaction | NOT TESTED | X11 access is unavailable in this session; install synchronization does not establish visual acceptance. |
+
+See [LOCAL-INSTALL-09](evidence/deployment/LOCAL-INSTALL-09-linux.md).
 
 ### Current bounded group topology candidate
 
