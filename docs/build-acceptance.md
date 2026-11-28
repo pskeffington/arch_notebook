@@ -915,3 +915,17 @@ The Linux per-case **Check schedule** output now reports systemd's last timer di
 | IBM compatibility | NOT TESTED | No IBM app or schema was involved. |
 
 Exact command, runner binary hash, and JSON digest: [SQL-SCHED-10](evidence/sql-automation/SQL-SCHED-10-timer-status-linux.md).
+
+## Trusted XML/XSLT adaptation into ANX — 2026-11-28
+
+The command-line importer can now run a trusted XSLT stylesheet over XML and import the transformed document through Arch Notebook's existing strict ANX parser. This supports organization-specific XML mappings while keeping transformation and case persistence explicit in scripts.
+
+| Gate | Result | Evidence |
+| --- | --- | --- |
+| Formatting, diff, offline Rust suite | PASS | Formatting and diff checks exited 0; 81 tests passed, 0 failed, 3 ignored. |
+| Locked offline check and debug/release builds | PASS | All exited 0. Debug binary SHA-256 `c463117b92e774dfd2d7e019db4fd026bee04d473b91aadafa2c479a75a62748`; release binary SHA-256 `f5ff73d6676c565499a39b879dbb245a0e5813acbe217ec1430550ee60a39196`. |
+| XSLT import harness on debug and release | PASS | Both imported 8 entities and 8 relationships; UTF-8/UTF-16 source DTD and stylesheet DTD were rejected without changing the case. |
+| IBM ANX schema/application | NOT TESTED | No vendor schema or IBM application was used. |
+| Operational SQL schedule integration | NOT TESTED | No scheduler was configured to invoke the new CLI. |
+
+Implementation detail, exact commands, file limits, fixture digest, and remaining validation: [XML-XSLT-IMPORT-01](evidence/anx/XML-XSLT-IMPORT-01-linux-20261128.md).

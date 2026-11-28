@@ -37541,15 +37541,87 @@ fn export_graphml_cli(
 }
 
 fn import_graphml_cli(case_path: &str, input_path: &str, json_output: bool) -> Result<(), String> {
-    import_interchange_cli(case_path, input_path, json_output, "GRAPHML")
+    import_interchange_cli(case_path, input_path, json_output, "GRAPHML", None)
 }
 
 fn import_kml_cli(case_path: &str, input_path: &str, json_output: bool) -> Result<(), String> {
-    import_interchange_cli(case_path, input_path, json_output, "KML")
+    import_interchange_cli(case_path, input_path, json_output, "KML", None)
 }
 
 fn import_anx_cli(case_path: &str, input_path: &str, json_output: bool) -> Result<(), String> {
-    import_interchange_cli(case_path, input_path, json_output, "ANX")
+    import_interchange_cli(case_path, input_path, json_output, "ANX", None)
+}
+
+fn import_xml_with_xslt_cli(
+    case_path: &str,
+    input_path: &str,
+    stylesheet_path: &str,
+    json_output: bool,
+) -> Result<(), String> {
+    const MAX_XML_BYTES: u64 = 16 * 1024 * 1024;
+    fn contains_doctype(bytes: &[u8]) -> bool {
+        const TOKEN: &[u8] = b"<!DOCTYPE";
+        bytes
+            .windows(TOKEN.len())
+            .any(|window| window.eq_ignore_ascii_case(TOKEN))
+            || bytes.windows(TOKEN.len() * 2).any(|window| {
+                TOKEN
+                    .iter()
+                    .enumerate()
+                    .all(|(index, byte)| window[index * 2] == *byte && window[index * 2 + 1] == 0)
+                    || TOKEN.iter().enumerate().all(|(index, byte)| {
+                        window[index * 2] == 0 && window[index * 2 + 1] == *byte
+                    })
+            })
+    }
+    fn read_bounded_xml(path: &str, label: &str) -> Result<Vec<u8>, String> {
+        let metadata =
+            fs::metadata(path).map_err(|error| format!("cannot inspect {label}: {error}"))?;
+        if metadata.len() > MAX_XML_BYTES {
+            return Err(format!("{label} exceeds the 16 MiB import limit"));
+        }
+        let bytes = fs::read(path).map_err(|error| format!("cannot read {label}: {error}"))?;
+        if bytes.len() as u64 > MAX_XML_BYTES {
+            return Err(format!("{label} exceeds the 16 MiB import limit"));
+        }
+        if contains_doctype(&bytes) {
+            return Err(format!(
+                "{label} must not contain a document type declaration"
+            ));
+        }
+        Ok(bytes)
+    }
+
+    let _input = read_bounded_xml(input_path, "XML input")?;
+    let _stylesheet = read_bounded_xml(stylesheet_path, "XSLT stylesheet")?;
+    let transformed_path =
+        env::temp_dir().join(format!("arch-notebook-xslt-import-{}.anx", Uuid::new_v4()));
+    let result = (|| {
+        let output = Command::new("xsltproc")
+            .args(["--nonet", "--nowrite", "--novalid"])
+            .arg(stylesheet_path)
+            .arg(input_path)
+            .output()
+            .map_err(|error| format!("cannot start xsltproc: {error}"))?;
+        if !output.status.success() {
+            let detail = String::from_utf8_lossy(&output.stderr);
+            return Err(format!("XSLT transformation failed: {}", detail.trim()));
+        }
+        if output.stdout.len() as u64 > MAX_XML_BYTES {
+            return Err("transformed ANX exceeds the 16 MiB import limit".into());
+        }
+        fs::write(&transformed_path, &output.stdout)
+            .map_err(|error| format!("cannot stage transformed ANX: {error}"))?;
+        import_interchange_cli(
+            case_path,
+            &transformed_path.to_string_lossy(),
+            json_output,
+            "ANX",
+            Some(input_path),
+        )
+    })();
+    let _ = fs::remove_file(&transformed_path);
+    result
 }
 
 fn document_packet_value(packet: &serde_json::Value, key: &str) -> Result<String, String> {
@@ -38488,6 +38560,7 @@ fn import_interchange_cli(
     input_path: &str,
     json_output: bool,
     source_format: &str,
+    reported_input_path: Option<&str>,
 ) -> Result<(), String> {
     let case_file = Path::new(case_path);
     let _case_lock = lock_automation_case(case_file)?;
@@ -38519,7 +38592,7 @@ fn import_interchange_cli(
                 "ok": true,
                 "saved": true,
                 "case": case_path,
-                "input": input_path,
+                "input": reported_input_path.unwrap_or(input_path),
                 "entities": app.case.entities.len(),
                 "relationships": app.case.links.len(),
                 "message": app.status,
@@ -44107,6 +44180,9 @@ fn main() -> eframe::Result<()> {
         );
         println!("  ANX import uses --import-anx <case.json> <input.anx> [--json].");
         println!(
+            "  XML import can use trusted XSLT via --import-xml-xslt <case.json> <input.xml> <stylesheet.xsl> [--json]."
+        );
+        println!(
             "  Attach TRANS candidate provenance with --attach-transcription-candidates <case.json> <manifest.json> [--json]."
         );
         println!("  arch-notebook --open-case <case.json> opens a case in the desktop app.");
@@ -44345,6 +44421,24 @@ fn main() -> eframe::Result<()> {
         }
         if let Err(error) = import_anx_cli(case_path, input_path, json_output) {
             report_cli_error("ANX import failed", error, json_output);
+        }
+        return Ok(());
+    }
+    if args.first().is_some_and(|arg| arg == "--import-xml-xslt") {
+        let json_output = args.iter().any(|arg| arg == "--json");
+        let usage = "usage: arch-notebook --import-xml-xslt <case.json> <input.xml> <stylesheet.xsl> [--json]";
+        let (Some(case_path), Some(input_path), Some(stylesheet_path)) =
+            (args.get(1), args.get(2), args.get(3))
+        else {
+            report_cli_usage_error(usage, json_output);
+        };
+        if args.len() > 5 || args.get(4).is_some_and(|arg| arg != "--json") {
+            report_cli_usage_error(usage, json_output);
+        }
+        if let Err(error) =
+            import_xml_with_xslt_cli(case_path, input_path, stylesheet_path, json_output)
+        {
+            report_cli_error("XML/XSLT import failed", error, json_output);
         }
         return Ok(());
     }
