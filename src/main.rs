@@ -29784,13 +29784,13 @@ impl eframe::App for App {
         }
         if self.command_palette_open {
             let commands = [
+                ("Chart", "canvas network", QuickCommand::Chart),
                 (
                     "Open case",
                     "load existing case file recent saved",
                     QuickCommand::OpenCase,
                 ),
                 ("New case", "create blank case file", QuickCommand::NewCase),
-                ("Chart", "canvas network", QuickCommand::Chart),
                 (
                     "Fit chart",
                     "fit all entities reset zoom frame chart viewport",
@@ -49122,6 +49122,41 @@ mod tests {
             app.pending_case_action,
             Some(super::PendingCaseAction::New)
         ));
+    }
+
+    #[test]
+    fn quick_open_enter_without_a_query_keeps_chart_as_the_default() {
+        let case: CaseFile =
+            serde_json::from_str(include_str!("../fixtures/chart/correctness.case.json"))
+                .expect("correctness fixture is a valid case");
+        let mut app = App::automation_context(case, "/tmp/quick-open-default.case.json");
+        app.page = super::WorkspacePage::Data;
+        app.command_palette_open = true;
+
+        let context = egui::Context::default();
+        let mut frame = eframe::Frame::_new_kittest();
+        let _ = context.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1440.0, 900.0),
+                )),
+                time: Some(0.0),
+                events: vec![egui::Event::Key {
+                    key: egui::Key::Enter,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::default(),
+                }],
+                ..Default::default()
+            },
+            |context| eframe::App::update(&mut app, context, &mut frame),
+        );
+
+        assert!(matches!(app.page, super::WorkspacePage::Chart));
+        assert!(!app.command_palette_open);
+        assert!(app.pending_case_action.is_none());
     }
 
     #[test]
