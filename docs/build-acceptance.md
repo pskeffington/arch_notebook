@@ -880,6 +880,19 @@ The release with the desktop XML/XSLT import workflow is installed in the curren
 
 Exact hashes, commands, and limits: [LOCAL-INSTALL-14](evidence/deployment/LOCAL-INSTALL-14-linux.md).
 
+## Primary Clinton corpus QA on the XML/XSLT desktop release — 2026-11-28
+
+The latest installed Rust release was rechecked against the real Clinton corpus case as the primary SQL regression workload.
+
+| Gate | Result | Evidence |
+| --- | --- | --- |
+| Query-only saved-job validation and saved-run replay | PASS | 1 saved job passed; 6,173 rows; 0 skipped; 0 added/removed/changed deltas. |
+| Default-redacted graph handoff | PASS | 2,813 entities rendered, 6,173 relationships, 643 communities, 291 proxy candidates, zero labels outside the SVG view, and default pseudonymization retained. |
+| Source immutability | PASS | PDF, case, and SQLite hashes were unchanged. |
+| PDF completeness, Qwen, human content review | NOT ESTABLISHED / NOT RUN | SQL replay and graph aggregation are not content-level transcription or analysis acceptance. |
+
+Full command, artifact hashes, and scope: [CLINTON-CORPUS-QA-05](evidence/sql-automation/CLINTON-CORPUS-QA-05-installed-release-20261128.md).
+
 ## Current-user Quick open release installation — 2026-11-28
 
 The optimized release containing searchable Open case and New case actions is installed for the current Linux user. Release build, isolated installer acceptance, installed executable hash, matching desktop launchers, icon assets, MIME definition, and SQL helper all pass. Native display interaction and IBM validation remain open. Exact hashes and commands: [LOCAL-INSTALL-13](evidence/deployment/LOCAL-INSTALL-13-linux.md).
