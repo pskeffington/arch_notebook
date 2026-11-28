@@ -1,5 +1,17 @@
 # Local build acceptance record
 
+## SQL schedule dispatch status summary — 2026-11-28
+
+The Automation schedule result now presents timer state and last/next dispatch times together, while retaining the complete helper output for diagnostics. Missing or unavailable dispatch data is shown explicitly as “not recorded” or “not scheduled”; this status describes timer dispatch only and does not imply a successful SQL capture.
+
+| Gate | Result | Evidence |
+| --- | --- | --- |
+| Schedule status parser regression | PASS | `schedule_status_summary_distinguishes_dispatch_times_and_unavailable_values` covers active timers, systemd manager status unavailable, legacy schedule status, missing dispatch fields, and non-status output. |
+| Locked workspace check and full Rust suite | PASS | `cargo check --locked --offline`: exit 0; `cargo test --locked --offline`: 106 passed, 0 failed, 3 ignored. |
+| Formatting and diff validation | PASS | `cargo fmt --all` and `git diff --check`: exit 0. |
+| Live timer dispatch and SQL capture correlation | NOT TESTED | This change presents existing timer metadata; scheduler harness evidence remains stub-scoped and does not establish live host timer execution. |
+| Native IBM navigation comparison | NOT RUN | No Analyst's Notebook application was available for direct comparison. |
+
 ## Quick Open import busy-state protection — 2026-11-28
 
 Quick Open now disables saved-source reinspect commands while any CSV/TSV, ANX, or XSLT import worker is active. The action method also rejects a busy request before changing the selected source or pending design, preventing a later inspection result from applying the wrong mapping.

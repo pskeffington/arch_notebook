@@ -479,6 +479,35 @@ fn schedule_cadence_from_status(message: &str) -> Option<&'static str> {
     }
 }
 
+fn schedule_dispatch_summary_from_status(message: &str) -> Option<(String, String, String)> {
+    let status_line = message.lines().find(|line| {
+        line.starts_with("Arch Notebook SQL schedule for ")
+            || line.starts_with("Legacy Arch Notebook SQL schedule: ")
+    })?;
+    let state = status_line
+        .split_once(": ")
+        .and_then(|(_, schedule)| {
+            let (cadence, state) = schedule.split_once("; ")?;
+            (!cadence.contains(';')).then_some(state)
+        })
+        .and_then(|state| state.strip_suffix('.'))
+        .unwrap_or("status unavailable")
+        .to_owned();
+    let dispatch_time = |prefix: &str, unavailable: &str| {
+        message
+            .lines()
+            .find_map(|line| line.strip_prefix(prefix))
+            .filter(|value| *value != unavailable)
+            .unwrap_or(unavailable)
+            .to_owned()
+    };
+    Some((
+        state,
+        dispatch_time("Last timer dispatch: ", "not recorded"),
+        dispatch_time("Next timer dispatch: ", "not scheduled"),
+    ))
+}
+
 fn schedule_chart_export_dir_from_status(message: &str) -> Option<String> {
     message.lines().find_map(|line| {
         let value = line.strip_prefix("Chart CSV export directory: ")?;
@@ -23266,6 +23295,16 @@ impl eframe::App for App {
                                                 }
                                             });
                                     } else {
+                                        if let Some((state, last_dispatch, next_dispatch)) =
+                                            schedule_dispatch_summary_from_status(message)
+                                        {
+                                            ui.horizontal_wrapped(|ui| {
+                                                ui.label(egui::RichText::new("TIMER").small().strong().color(color));
+                                                ui.label(egui::RichText::new(state).small().color(color));
+                                                ui.label(egui::RichText::new(format!("Last dispatch · {last_dispatch}")).small().color(muted));
+                                                ui.label(egui::RichText::new(format!("Next dispatch · {next_dispatch}")).small().color(muted));
+                                            });
+                                        }
                                         egui::ScrollArea::vertical()
                                             .max_height(96.0)
                                             .show(ui, |ui| {
@@ -47949,6 +47988,44 @@ mod tests {
         entity_type_layout_positions, export_analysis_packet_cli, grid_layout_dimensions,
         import_filter_matches, sql_seed_identities_for_entity, sql_seed_identity_label,
     };
+
+    #[test]
+    fn schedule_status_summary_distinguishes_dispatch_times_and_unavailable_values() {
+        assert_eq!(
+            super::schedule_dispatch_summary_from_status(
+                "Last timer dispatch: Sat 2026-11-28 02:00:00 EST\nNext timer dispatch: Sat 2026-11-28 04:00:00 EST\nArch Notebook SQL schedule for /tmp/case.json: hourly; active and enabled.\n"
+            ),
+            Some((
+                "active and enabled".into(),
+                "Sat 2026-11-28 02:00:00 EST".into(),
+                "Sat 2026-11-28 04:00:00 EST".into(),
+            ))
+        );
+        assert_eq!(
+            super::schedule_dispatch_summary_from_status(
+                "Timer dispatch timing: unavailable\nLast timer dispatch: not recorded\nNext timer dispatch: not scheduled\nArch Notebook SQL schedule for /tmp/case.json: hourly; configured; systemd user manager status unavailable.\n"
+            ),
+            Some((
+                "configured; systemd user manager status unavailable".into(),
+                "not recorded".into(),
+                "not scheduled".into(),
+            ))
+        );
+        assert_eq!(
+            super::schedule_dispatch_summary_from_status(
+                "Legacy Arch Notebook SQL schedule: daily; configured but not active or enabled.\n"
+            ),
+            Some((
+                "configured but not active or enabled".into(),
+                "not recorded".into(),
+                "not scheduled".into(),
+            ))
+        );
+        assert_eq!(
+            super::schedule_dispatch_summary_from_status("SQL PREFLIGHT PASSED"),
+            None
+        );
+    }
 
     #[test]
     fn sql_seed_binding_updates_only_the_one_off_parameter_value() {
