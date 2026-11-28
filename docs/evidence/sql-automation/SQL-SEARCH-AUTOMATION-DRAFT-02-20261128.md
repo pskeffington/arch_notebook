@@ -3,6 +3,7 @@
 - **Task / owner:** Continue the Rust Analyst's Notebook workflow; implementation session.
 - **Repository / branch:** `arch_notebook` / `codex/ui-00-chart-nested-conditions`.
 - **Baseline:** `eab5da052a2fae8570d44540776c0bcca9513983`.
+- **Candidate source commit:** `95ca74a525219d2b4ec4a5a0d33c9675ca3626ab`.
 - **Scope:** Track which saved SQL definition is loaded into SQL Review separately from the catalog selection; gate automation preparation until the selected search is loaded; allow unseeded searches to prepare drafts while preserving typed parameters.
 - **Release binary SHA-256:** `209f105166ee3ef47425aa5349c43118a1d07991f9f741fecf5cf23144b6f0a8`.
 
