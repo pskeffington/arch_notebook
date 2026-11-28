@@ -24280,12 +24280,14 @@ impl eframe::App for App {
                                                 });
                                             ui.label("Parameter");
                                             ui.add(egui::TextEdit::singleline(&mut self.sql_seed_parameter_name).desired_width(130.0));
-                                            let selected_ids = seed_sources
+                                            let selected_source = seed_sources
                                                 .iter()
                                                 .find(|(source, _)| self.sql_seed_identity_key.split_once('\0').is_some_and(|(selected_source, _)| selected_source == source))
-                                                .map(|(_, ids)| ids.as_slice());
-                                            if ui.add_enabled(selected_ids.is_some(), egui::Button::new("Bind selected entity IDs")).clicked()
-                                                && let Some(ids) = selected_ids
+                                                .map(|(source, ids)| (source.as_str(), ids.as_slice()));
+                                            if ui.add_enabled(selected_source.is_some(), egui::Button::new("Bind selected entity IDs"))
+                                                .on_hover_text("Bind these IDs and set SQLite file to their selected source")
+                                                .clicked()
+                                                && let Some((source, ids)) = selected_source
                                             {
                                                 match bind_sql_seed_parameter_values(
                                                     &self.sql_parameter_text,
@@ -24293,6 +24295,7 @@ impl eframe::App for App {
                                                     ids,
                                                 ) {
                                                     Ok(parameters) => {
+                                                        self.sql_path = source.to_owned();
                                                         self.sql_parameter_text = parameters;
                                                         self.sql_validation_preview = None;
                                                         self.sql_seed_query_mode = true;
@@ -24364,24 +24367,26 @@ impl eframe::App for App {
                                             egui::TextEdit::singleline(&mut self.sql_seed_parameter_name)
                                                 .desired_width(130.0),
                                         );
-                                        let selected_source_id = seed_identities
+                                        let selected_source_identity = seed_identities
                                             .iter()
                                             .find(|(source, id)| sql_seed_identity_key(source, id) == self.sql_seed_identity_key)
-                                            .map(|(_, id)| id.as_str());
+                                            .map(|(source, id)| (source.as_str(), id.as_str()));
                                         if ui
                                             .add_enabled(
-                                                selected_source_id.is_some(),
+                                                selected_source_identity.is_some(),
                                                 egui::Button::new("Bind selected entity ID"),
                                             )
+                                            .on_hover_text("Bind this ID and set SQLite file to its selected source")
                                             .clicked()
                                         {
-                                            if let Some(source_id) = selected_source_id {
+                                            if let Some((source, source_id)) = selected_source_identity {
                                                 match bind_sql_seed_parameter(
                                                     &self.sql_parameter_text,
                                                     &self.sql_seed_parameter_name,
                                                     source_id,
                                                 ) {
                                                     Ok(parameters) => {
+                                                        self.sql_path = source.to_owned();
                                                         self.sql_parameter_text = parameters;
                                                         self.sql_validation_preview = None;
                                                         self.sql_seed_query_mode = true;
@@ -24399,7 +24404,7 @@ impl eframe::App for App {
                                         }
                                     });
                                     ui.label(
-                                        egui::RichText::new("This only edits the current SQL Review parameters. The saved automation job and scheduled parameters stay unchanged.")
+                                        egui::RichText::new("Binding sets the current SQL Review SQLite file and parameter draft. The saved automation job and scheduled parameters stay unchanged.")
                                             .small()
                                             .color(muted),
                                     );
@@ -46984,7 +46989,7 @@ mod tests {
     }
 
     #[test]
-    fn sql_review_ui_binds_all_selected_entities_from_the_shared_source() {
+    fn sql_review_ui_binds_selected_entities_and_matches_their_sql_source_path() {
         let mut case: CaseFile =
             serde_json::from_str(include_str!("../fixtures/chart/correctness.case.json"))
                 .expect("chart fixture parses");
@@ -47017,7 +47022,7 @@ mod tests {
         app.data_mode = super::DataMode::SqlRegressions;
         app.selected = Some(ids[0]);
         app.selected_entities.extend(ids);
-        app.sql_path = "/tmp/accounts.sqlite".into();
+        app.sql_path = "/tmp/different.sqlite".into();
         app.sql_series = "seed review".into();
         app.sql_query = "SELECT source, target FROM records".into();
         let context = egui::Context::default();
@@ -47057,8 +47062,39 @@ mod tests {
             serde_json::from_str::<Vec<String>>(json_ids).expect("seed JSON parses"),
             vec!["acct-1", "acct-2"]
         );
+        assert_eq!(app.sql_path, "/tmp/accounts.sqlite");
         assert!(app.sql_seed_query_mode);
         assert!(app.status.starts_with("SQL SEED BOUND"));
+
+        app.selected_entities.clear();
+        app.selected_entities.insert(ids[0]);
+        app.sql_seed_parameter_name = "seed_entity_id".into();
+        app.sql_path = "/tmp/different.sqlite".into();
+        time += 1.0 / 60.0;
+        let single_shapes = render_headless_app_frame_at(
+            &context,
+            &mut app,
+            &mut frame,
+            time,
+            Vec::new(),
+            egui::vec2(1600.0, 1800.0),
+        );
+        let _single_after_click = click_headless_visible_text(
+            &context,
+            &mut app,
+            &mut frame,
+            &mut time,
+            &single_shapes,
+            "Bind selected entity ID",
+        );
+        assert_eq!(app.sql_path, "/tmp/accounts.sqlite");
+        let parameters = super::parse_sql_parameters(&app.sql_parameter_text)
+            .expect("single-seed UI creates valid SQL parameters");
+        assert!(
+            parameters
+                .iter()
+                .any(|(name, value)| { name == "seed_entity_id" && value == "text:acct-1" })
+        );
     }
 
     #[test]
