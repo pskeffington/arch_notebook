@@ -3,6 +3,7 @@
 - **Task / owner:** Continue Arch Notebook navigation and ingestion usability; implementation session.
 - **Repository / branch:** `arch_notebook` / `codex/ui-00-chart-nested-conditions`.
 - **Baseline:** `bee438928a74f14196cca34ed93241926ded201e`.
+- **Candidate source commit:** `d6149baf960692f9551b31b89f7976181a8e9e25`.
 - **Scope:** Add case-local CSV/TSV import designs with a remembered source file to Quick Open by design name. Dispatch uses the existing background inspector and opens mapping review without importing chart data.
 - **Release binary SHA-256:** `5c92cf1023cd194c5f6ba03ec99d7fae75523624dfee9c79e384f285a30cc6fd`.
 
