@@ -978,3 +978,16 @@ The **Import…** menu now accepts an XML input and trusted stylesheet path. Tra
 | Native UI interaction and IBM schema/application | NOT TESTED | Headless worker and CLI evidence do not prove pointer/keyboard interaction or IBM compatibility. |
 
 Evidence and next gates: [XML-XSLT-IMPORT-02](evidence/anx/XML-XSLT-IMPORT-02-desktop-20261128.md).
+
+## SQL selected-entity one-off query seed — 2026-11-28
+
+SQL Review can bind a selected entity's SQL identity to a one-off named parameter, defaulting to `seed_entity_id`. The picker is limited to SQL sources captured on the active chart and preserves saved automation configuration.
+
+| Gate | Result | Evidence |
+| --- | --- | --- |
+| Formatting, diff, and offline Rust suite | PASS | `cargo fmt --all -- --check`, `git diff --check`, and `CARGO_TARGET_DIR=/tmp/arch-notebook-target cargo test --locked --offline` exited 0; 84 passed, 0 failed, 3 ignored. |
+| Locked offline check | PASS | `CARGO_TARGET_DIR=/tmp/arch-notebook-target cargo check --locked --offline` exited 0. |
+| Release build / launcher install | BLOCKED / NOT RUN | Release-build execution session failed to return a cargo result; no stale binary was installed. |
+| Native interaction and IBM compatibility | NOT TESTED | Helper tests do not prove native interaction or i2 Analyze integration. |
+
+Details: [SQL-SEED-01](evidence/sql-automation/SQL-SEED-01-one-off-parameter-20261128.md).
