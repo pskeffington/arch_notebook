@@ -1,5 +1,19 @@
 # Local build acceptance record
 
+## IBM Series Import handoff for scheduled SQL captures — 2026-11-28
+
+Documented how to send Arch Notebook's refreshed per-job SQL CSVs through IBM i2 Analyst's Notebook's saved import specification and Series Import utility. This is a documented interoperability path; no IBM application import was run.
+
+| Gate | Result | Evidence |
+| --- | --- | --- |
+| Export naming, CSV field contract, scheduled refresh behavior | PASS · source inspection | `src/main.rs`: `sql_chart_csv_path_for_job`, `write_sql_snapshot_chart_csv`; `docs/automation.md` describes atomic replacement and per-job refresh. |
+| IBM import workflow and Series Import flags | PASS · official documentation reviewed | IBM Series Import supports `-b`, `-i`, and `-c`; `.oimp` specs require the extension. `.ximp` and `.oimp` remain distinct. |
+| Operator handoff instructions and limits | PASS | [Automated SQL ingestion](automation.md#handoff-to-ibm-i2-analysts-notebook) includes reusable Windows command pattern, stable export filename, spec guidance, and review caveat. |
+| IBM installation, native import result, and field mapping | NOT TESTED | No IBM Analyst's Notebook or i2 Analyze runtime was available; exporters and documentation do not prove application acceptance. |
+| Diff whitespace check | PASS | `git diff --check` exited 0. |
+
+Detailed source and references: [IBM Series Import handoff evidence](evidence/sql-automation/IBM-SERIES-IMPORT-HANDOFF-01-20261128.md).
+
 ## Current-user Linux deployment — 2026-11-28
 
 The optimized candidate from product source `c653f31` is installed under the current user's launcher. The application-menu entry and Desktop shortcut are synchronized; installed binary, deployment SVG/PNG, case MIME definition, and SQL helper match their build/source assets. This is not a public release and native pointer review was not performed.

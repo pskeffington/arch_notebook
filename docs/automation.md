@@ -105,6 +105,21 @@ cargo run --offline -- --run-enabled-jobs harbor-light.case.json --export-chart-
 ARCH_NOTEBOOK_CHART_EXPORT_DIR="$HOME/Analyst Charts" arch-notebook-install-automation harbor-light.case.json
 ```
 
+#### Handoff to IBM i2 Analyst's Notebook
+
+The scheduled CSV directory is an interoperability boundary: Arch Notebook refreshes one CSV per SQL job after a successful capture, with a stable filename of `<job-name-slug>-<job-uuid>.csv`. Build and save the import specification in IBM Analyst's Notebook against that CSV's header, then point Series Import at the refreshed file. The export contains `record_type`, endpoint names and source IDs, types, representations, relationship, date, confidence, direction, provenance, and any captured entity/relationship attributes; map the columns you need in IBM's import wizard. The Arch Notebook case import-design JSON is not an IBM `.ximp` or `.oimp` specification and cannot replace one.
+
+For classic Analyst's Notebook, create a `.ximp` specification; when connected to i2 Analyze, create a schema-aligned `.oimp` specification against the target schema. IBM documents that these specification types are distinct and cannot be converted into each other. For a Windows scheduled-import script, call the installed `SeriesImport.exe` with the saved specification and the current Arch Notebook CSV. This example creates a new chart (`-c`); omit that option only when the intended destination is the already-open chart. Replace the placeholder UUID with the SQL job's stable ID and use the actual IBM install path and specification name:
+
+```bat
+@echo off
+set "SERIES=C:\Program Files\i2 Analyst's Notebook 10\Utils\SeriesImport.exe"
+set "EXPORT=C:\Analyst Charts\harbor-light-baseline-<job-uuid>.csv"
+"%SERIES%" -b "Harbor Light baseline" -i "%EXPORT%" -c
+```
+
+For i2 Analyze, reference the schema-aligned spec with its `.oimp` extension (for example, `-b "Harbor Light baseline.oimp"`). Keep the spec and batch file where the installed Series Import utility can locate them, as IBM's instructions require. Review the IBM import report after a run; the exporter writing the CSV does not establish that IBM accepted or correctly mapped it. Re-run the IBM wizard if the CSV headers or the destination schema change. The command syntax and spec distinctions follow IBM's [Series Import instructions](https://docs.i2group.com/anb/10.0.2/running_a_series_of_imports.html) and [import-specification documentation](https://docs.i2group.com/anb/10.1.1/import_specifications.html); an IBM application run has not been performed for this handoff.
+
 Replay one saved SQL configuration and export the new capture in the same operation with `--rerun-run <case.json> <run-id> --export-chart-csv <output.csv|tsv>`. This is useful when you need to refresh an analyst handoff without changing the saved job or its parameters. The run history is saved even if the CSV export fails; the command then exits unsuccessfully and reports `chart_csv_export_error` separately from the capture outcome.
 
 Run one named job, including a disabled job, with:
