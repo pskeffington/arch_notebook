@@ -2991,6 +2991,7 @@ struct App {
     pending_chart_delete: Option<Uuid>,
     command_palette_open: bool,
     command_palette_query: String,
+    command_palette_selection: usize,
     data_mode: DataMode,
     merge_candidate: Option<(Uuid, Uuid)>,
     duplicate_candidates: Vec<(Uuid, Uuid)>,
@@ -3407,14 +3408,24 @@ enum QuickCommand {
     LoadSavedSqlSearch(Uuid),
     ReviewSqlSnapshot(usize),
     ReviewAutomationRun(Uuid),
+    OpenChart(Uuid),
     ReinspectImportDesign(Uuid),
 }
 
 fn quick_command_matches(query: &str, label: &str, keywords: &str) -> bool {
-    let filter = query.trim().to_ascii_lowercase();
-    filter.is_empty()
-        || label.to_ascii_lowercase().contains(&filter)
-        || keywords.to_ascii_lowercase().contains(&filter)
+    let terms = query
+        .split_whitespace()
+        .map(str::to_ascii_lowercase)
+        .collect::<Vec<_>>();
+    if terms.is_empty() {
+        return true;
+    }
+    let searchable = format!(
+        "{} {}",
+        label.to_ascii_lowercase(),
+        keywords.to_ascii_lowercase()
+    );
+    terms.iter().all(|term| searchable.contains(term))
 }
 
 #[derive(PartialEq, Clone, Copy)]
@@ -3682,6 +3693,7 @@ impl Default for App {
             pending_chart_delete: None,
             command_palette_open: false,
             command_palette_query: String::new(),
+            command_palette_selection: 0,
             data_mode: DataMode::Relationships,
             merge_candidate: None,
             duplicate_candidates: Vec::new(),
@@ -5403,6 +5415,7 @@ impl App {
             pending_chart_delete: None,
             command_palette_open: false,
             command_palette_query: String::new(),
+            command_palette_selection: 0,
             data_mode: DataMode::Relationships,
             merge_candidate: None,
             duplicate_candidates: Vec::new(),
@@ -20859,6 +20872,7 @@ impl eframe::App for App {
         if quick_open_shortcut {
             self.command_palette_open = true;
             self.command_palette_query.clear();
+            self.command_palette_selection = 0;
             ctx.memory_mut(|memory| {
                 memory.request_focus(egui::Id::new("command_palette_search"));
             });
@@ -21030,6 +21044,7 @@ impl eframe::App for App {
                     {
                         self.command_palette_open = true;
                         self.command_palette_query.clear();
+                        self.command_palette_selection = 0;
                     }
                     if ui
                         .selectable_label(self.chart_label_creation_armed, "＋ Label")
@@ -31645,6 +31660,13 @@ impl eframe::App for App {
             .into_iter()
             .map(|(label, keywords, command)| (label.to_owned(), keywords.to_owned(), command))
             .collect::<Vec<_>>();
+            commands.extend(self.case.chart_tabs.iter().map(|chart| {
+                (
+                    format!("Chart · {}", chart.title),
+                    format!("chart tab workspace {}", chart.title),
+                    QuickCommand::OpenChart(chart.id),
+                )
+            }));
             commands.extend(self.case.saved_sql_searches.iter().map(|search| {
                 (
                     format!("SQL search · {}", search.name),
@@ -31708,6 +31730,9 @@ impl eframe::App for App {
                     quick_command_matches(&self.command_palette_query, label, keywords)
                 })
                 .collect();
+            if self.command_palette_selection >= matches.len() {
+                self.command_palette_selection = matches.len().saturating_sub(1);
+            }
             let mut selected_command = None;
             let mut close_palette = false;
             egui::Window::new("Quick open")
@@ -31725,37 +31750,73 @@ impl eframe::App for App {
                                 .hint_text("Search cases, workspaces, and actions")
                                 .desired_width(350.0),
                         );
+                        if search.changed() {
+                            self.command_palette_selection = 0;
+                        }
                         if self.command_palette_query.is_empty() {
                             search.request_focus();
                         }
                     });
+                    if !matches.is_empty() {
+                        if ui.input(|input| input.key_pressed(egui::Key::ArrowDown)) {
+                            self.command_palette_selection =
+                                (self.command_palette_selection + 1) % matches.len();
+                        } else if ui.input(|input| input.key_pressed(egui::Key::ArrowUp)) {
+                            self.command_palette_selection = if self.command_palette_selection == 0
+                            {
+                                matches.len() - 1
+                            } else {
+                                self.command_palette_selection - 1
+                            };
+                        }
+                    }
                     ui.add_space(6.0);
                     if matches.is_empty() {
                         ui.label("No matching destinations or actions.");
                     } else {
-                        for (index, (label, keywords, command)) in matches.iter().enumerate() {
-                            let command_busy = import_busy
-                                && matches!(command, QuickCommand::ReinspectImportDesign(_));
-                            let hover_text = if command_busy {
-                                "Wait for the current import or inspection to finish.".to_owned()
-                            } else {
-                                format!("Search terms: {keywords}")
-                            };
-                            let response = ui
-                                .add_enabled(!command_busy, egui::Button::new(label.as_str()))
-                                .on_hover_text(hover_text);
-                            if response.clicked() && !command_busy {
-                                selected_command = Some(*command);
-                                close_palette = true;
-                            }
-                            if index == 0
-                                && !command_busy
-                                && ui.input(|input| input.key_pressed(egui::Key::Enter))
-                            {
-                                selected_command = Some(*command);
-                                close_palette = true;
-                            }
-                        }
+                        egui::ScrollArea::vertical()
+                            .id_salt("quick_open_results")
+                            .max_height(460.0)
+                            .show(ui, |ui| {
+                                for (index, (label, keywords, command)) in
+                                    matches.iter().enumerate()
+                                {
+                                    let command_busy = import_busy
+                                        && matches!(
+                                            command,
+                                            QuickCommand::ReinspectImportDesign(_)
+                                        );
+                                    let hover_text = if command_busy {
+                                        "Wait for the current import or inspection to finish."
+                                            .to_owned()
+                                    } else {
+                                        format!("Search terms: {keywords}")
+                                    };
+                                    let response = ui
+                                        .add_enabled_ui(!command_busy, |ui| {
+                                            ui.selectable_label(
+                                                self.command_palette_selection == index,
+                                                label.as_str(),
+                                            )
+                                        })
+                                        .inner
+                                        .on_hover_text(hover_text);
+                                    if self.command_palette_selection == index {
+                                        response.scroll_to_me(Some(egui::Align::Center));
+                                    }
+                                    if response.clicked() && !command_busy {
+                                        selected_command = Some(*command);
+                                        close_palette = true;
+                                    }
+                                    if index == self.command_palette_selection
+                                        && !command_busy
+                                        && ui.input(|input| input.key_pressed(egui::Key::Enter))
+                                    {
+                                        selected_command = Some(*command);
+                                        close_palette = true;
+                                    }
+                                }
+                            });
                     }
                     ui.separator();
                     ui.label("Ctrl/Command+K · type to filter · Enter to open · Esc to close");
@@ -31831,6 +31892,11 @@ impl eframe::App for App {
                                 self.automation_runs_needing_review = false;
                                 self.automation_runs_with_unreviewed_regressions = false;
                             }
+                        }
+                        QuickCommand::OpenChart(id) => {
+                            self.switch_chart(id);
+                            self.page = WorkspacePage::Chart;
+                            self.show_timeline = false;
                         }
                         QuickCommand::ReinspectImportDesign(id) => {
                             self.page = WorkspacePage::Chart;
@@ -52962,6 +53028,16 @@ mod tests {
             "SQL jobs scheduled captures"
         ));
         assert!(super::quick_command_matches(
+            "sql monthly contacts",
+            "Review SQL run · Monthly contacts",
+            "automation scheduled history"
+        ));
+        assert!(!super::quick_command_matches(
+            "sql monthly missing",
+            "Review SQL run · Monthly contacts",
+            "automation scheduled history"
+        ));
+        assert!(super::quick_command_matches(
             "fit",
             "Fit chart",
             "fit all entities reset zoom frame chart viewport"
@@ -53205,8 +53281,24 @@ mod tests {
         .expect("minimal automation run parses with defaults");
         run.id = run_id;
         case.automation_runs.push(run);
+        let second_run_id = Uuid::from_u128(8204);
+        let second_run: super::AutomationRun = serde_json::from_value(serde_json::json!({
+            "id": second_run_id,
+            "job_id": Uuid::from_u128(8205),
+            "job_name": "Monthly contacts archive",
+            "database_path": "/tmp/contacts.sqlite",
+            "series": "monthly contacts",
+            "trigger": "scheduled",
+            "started_at": "2026-11-28T10:59:00Z",
+            "finished_at": "2026-11-28T11:00:00Z",
+            "success": true,
+            "message": "captured"
+        }))
+        .expect("second minimal automation run parses with defaults");
+        case.automation_runs.push(second_run);
         let mut app = App::automation_context(case, "/tmp/quick-open-automation-run.case.json");
         app.command_palette_open = true;
+        app.command_palette_query = "Monthly contacts".into();
         app.automation_run_filter = "old search".into();
         app.automation_run_trigger_filter = "scheduled".into();
         app.automation_failed_runs_only = true;
@@ -53221,10 +53313,38 @@ mod tests {
         let _first = render_headless_app_frame(&context, &mut app, &mut frame, time, Vec::new());
         time += 1.0 / 60.0;
         let palette = render_headless_app_frame(&context, &mut app, &mut frame, time, Vec::new());
-        let command = "Review SQL run · Monthly contacts · 2026-11-28T12:00:00Z · FAIL";
-        assert!(find_headless_text_point(&palette, command).is_some());
-        let _selected = click_headless_visible_text(
-            &context, &mut app, &mut frame, &mut time, &palette, command,
+        let first_command =
+            "Review SQL run · Monthly contacts archive · 2026-11-28T11:00:00Z · PASS";
+        let second_command = "Review SQL run · Monthly contacts · 2026-11-28T12:00:00Z · FAIL";
+        assert!(find_headless_text_point(&palette, first_command).is_some());
+        assert!(find_headless_text_point(&palette, second_command).is_some());
+        time += 1.0 / 60.0;
+        let _moved = render_headless_app_frame(
+            &context,
+            &mut app,
+            &mut frame,
+            time,
+            vec![egui::Event::Key {
+                key: egui::Key::ArrowDown,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::default(),
+            }],
+        );
+        time += 1.0 / 60.0;
+        let _activated = render_headless_app_frame(
+            &context,
+            &mut app,
+            &mut frame,
+            time,
+            vec![egui::Event::Key {
+                key: egui::Key::Enter,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::default(),
+            }],
         );
 
         assert!(!app.command_palette_open);
@@ -53239,6 +53359,47 @@ mod tests {
         assert!(!app.automation_runs_with_unreviewed_regressions);
         assert_eq!(app.case.automation_runs[0].id, run_id);
         assert!(app.case.snapshots.is_empty());
+    }
+
+    #[test]
+    fn quick_open_opens_named_chart_tab_by_title() {
+        let mut case: CaseFile =
+            serde_json::from_str(include_str!("../fixtures/chart/correctness.case.json"))
+                .expect("correctness fixture parses");
+        let target_chart_id = Uuid::from_u128(8301);
+        case.chart_tabs.push(super::ChartDocument {
+            id: target_chart_id,
+            title: "Harbor Light · Counterparties".into(),
+            zoom: super::default_chart_zoom(),
+            pan: [0.0, 0.0],
+            coordinate_bounds: None,
+            entities: case.entities.clone(),
+            links: case.links.clone(),
+            labels: Vec::new(),
+            template_id: None,
+        });
+        let target_title = case.chart_tabs[0].title.clone();
+        let mut app = App::automation_context(case, "/tmp/quick-open-chart-tab.case.json");
+        app.page = super::WorkspacePage::Data;
+        app.command_palette_open = true;
+        app.command_palette_query = "Harbor Light".into();
+
+        let context = egui::Context::default();
+        let mut frame = eframe::Frame::_new_kittest();
+        let mut time = 0.0;
+        let _first = render_headless_app_frame(&context, &mut app, &mut frame, time, Vec::new());
+        time += 1.0 / 60.0;
+        let palette = render_headless_app_frame(&context, &mut app, &mut frame, time, Vec::new());
+        let command = format!("Chart · {target_title}");
+        assert!(find_headless_text_point(&palette, &command).is_some());
+        let _selected = click_headless_visible_text(
+            &context, &mut app, &mut frame, &mut time, &palette, &command,
+        );
+
+        assert_eq!(app.case.active_chart_id, target_chart_id);
+        assert_eq!(app.case.active_chart_title, target_title);
+        assert!(matches!(app.page, super::WorkspacePage::Chart));
+        assert!(!app.show_timeline);
     }
 
     #[test]

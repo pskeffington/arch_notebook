@@ -1,5 +1,18 @@
 # Local build acceptance record
 
+## Quick Open keyboard navigation and chart destinations — 2026-11-28
+
+Quick Open supports multiword search across labels and keywords, arrow-key selection with a visible active row, Enter activation, a bounded scroll area that reveals the active match, and direct destinations for named chart tabs. These changes complete the direct SQL-capture and automation-run destinations added in the previous two navigation increments.
+
+| Gate | Result | Evidence |
+| --- | --- | --- |
+| Multiword search | PASS | `quick_command_search_matches_labels_and_keywords_case_insensitively` verifies all terms must match across label and keywords. |
+| Keyboard run selection | PASS | `quick_open_reviews_failed_automation_run_by_exact_run_id` uses Down and Enter to select the second of two matching runs and confirms exact run filtering. |
+| Named chart destination | PASS | `quick_open_opens_named_chart_tab_by_title` searches from Data workspace and opens the matching chart tab. |
+| Locked workspace check and full Rust suite | PASS | `cargo check --locked --offline`: exit 0; `cargo test --locked --offline`: 109 passed, 0 failed, 3 ignored. |
+| Formatting and diff validation | PASS | `cargo fmt --all -- --check` and `git diff --check`: exit 0. |
+| Native pointer and IBM parity review | NOT RUN | Headless interaction does not establish native feel or Analyst's Notebook parity. |
+
 ## Quick Open automation run navigation — 2026-11-28
 
 Quick Open now lists saved SQL automation outcomes by job, finish time, and pass/fail state. Selecting a run opens Automation history filtered to that exact run UUID and clears unrelated filters so the result is visible. This is a navigation action and does not rerun SQL or create a snapshot.
