@@ -1,5 +1,19 @@
 # Local build acceptance record
 
+## Synchronized installed build at current branch head — 2026-11-28
+
+Rebuilt the current product branch and checked the installed current-user app. Product sources from `src`, `crates`, `assets`, `packaging`, and `scripts` are unchanged from `c653f31`; newer branch commits through `dac7300` contain documentation only. The release artifact and installed executable have the same digest, so the desktop launcher is synchronized with the branch's current product code.
+
+| Gate | Result | Evidence |
+| --- | --- | --- |
+| Locked offline optimized build | PASS | `CARGO_TARGET_DIR=/tmp/arch-notebook-target cargo build --release --locked --offline` exited 0. |
+| Installed binary matches rebuilt release | PASS | Both SHA-256 `46596680af31ba1d92314426e6fd69feb7179a9d8489038cbcca1ee48ac42c1a`; installed `--version --json` reports 0.1.0. |
+| Isolated current-user install and launcher/icon sync | PASS | `scripts/test-linux-user-install-acceptance.py` exited 0; menu/Desktop launchers match and pass `desktop-file-validate`; SVG, PNG, MIME definition, and SQL helper match package sources. |
+| Product-source synchronization check | PASS | `git diff --quiet c653f31 HEAD -- src crates assets packaging scripts` exited 0. |
+| Native IBM parity and live scheduler dispatch | NOT TESTED | This build/install acceptance does not validate IBM behavior or live timer execution. |
+
+Full command output and isolated acceptance report: [SYNCED-HEAD-01](evidence/deployment/SYNCED-HEAD-01-current-branch-linux-20261128.md). The generated JSON report is under `/tmp` and is not a tracked user-data artifact.
+
 ## IBM Series Import handoff for scheduled SQL captures — 2026-11-28
 
 Documented how to send Arch Notebook's refreshed per-job SQL CSVs through IBM i2 Analyst's Notebook's saved import specification and Series Import utility. This is a documented interoperability path; no IBM application import was run.
