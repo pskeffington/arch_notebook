@@ -2912,6 +2912,8 @@ struct App {
     import_design_package_name: String,
     import_design_replace_selected: bool,
     selected_import_spec: Option<Uuid>,
+    remember_import_design_source: bool,
+    pending_import_design_source: Option<Uuid>,
     show_import_wizard: bool,
     export_path: String,
     graphml_export_path: String,
@@ -3137,6 +3139,8 @@ struct ImportSpecification {
     mapping: ImportColumnMapping,
     #[serde(default)]
     header_signature: Vec<String>,
+    #[serde(default)]
+    last_source_path: Option<String>,
 }
 
 #[derive(Default)]
@@ -3586,6 +3590,8 @@ impl Default for App {
             import_design_package_name: String::new(),
             import_design_replace_selected: false,
             selected_import_spec: None,
+            remember_import_design_source: false,
+            pending_import_design_source: None,
             show_import_wizard: false,
             export_path: data_dir.join("chart-export.csv").to_string_lossy().into_owned(),
             graphml_export_path: data_dir
@@ -4878,6 +4884,7 @@ impl App {
         self.import_preview.clear();
         self.import_record_count = 0;
         self.import_inspection_worker = None;
+        self.pending_import_design_source = None;
         self.import_inspection_cancel = None;
         self.import_inspection_progress = None;
         self.anx_import_worker = None;
@@ -5254,6 +5261,8 @@ impl App {
             import_design_package_name: String::new(),
             import_design_replace_selected: false,
             selected_import_spec: None,
+            remember_import_design_source: false,
+            pending_import_design_source: None,
             show_import_wizard: false,
             export_path: String::new(),
             graphml_export_path: String::new(),
@@ -6077,9 +6086,36 @@ impl App {
                 self.status = "IMPORT INSPECTION RUNNING · READING CSV/TSV ROWS".into();
             }
             Err(error) => {
+                self.pending_import_design_source = None;
                 self.status = format!("IMPORT INSPECTION FAILED · could not start worker: {error}");
             }
         }
+    }
+
+    fn reinspect_import_design_last_source(&mut self, id: Uuid) {
+        let Some((name, path)) = self
+            .case
+            .import_specifications
+            .iter()
+            .find(|spec| spec.id == id)
+            .and_then(|spec| {
+                spec.last_source_path
+                    .as_ref()
+                    .map(|path| (spec.name.clone(), path.clone()))
+            })
+        else {
+            self.status =
+                "SAVED IMPORT SOURCE UNAVAILABLE · import a file with this design first".into();
+            return;
+        };
+        if !Path::new(&path).is_file() {
+            self.status = format!("SAVED IMPORT SOURCE NOT FOUND · {path}");
+            return;
+        }
+        self.import_path = path;
+        self.pending_import_design_source = Some(id);
+        self.status = format!("REINSPECTING LAST SOURCE · {name} · NO CHART DATA IMPORTED");
+        self.inspect_delimited_import();
     }
 
     fn apply_delimited_import_inspection(&mut self, inspection: DelimitedImportInspection) {
@@ -6096,7 +6132,15 @@ impl App {
             .filter(|spec| import_design_fits_headers(spec, &headers))
             .cloned()
             .collect();
-        let matching_spec = (matching_specs.len() == 1).then(|| matching_specs[0].clone());
+        let requested_spec = self.pending_import_design_source.take().and_then(|id| {
+            self.case
+                .import_specifications
+                .iter()
+                .find(|spec| spec.id == id)
+                .cloned()
+        });
+        let matching_spec = requested_spec
+            .or_else(|| (matching_specs.len() == 1).then(|| matching_specs[0].clone()));
         let schema_drift = matching_spec
             .as_ref()
             .is_some_and(|spec| spec.header_signature != signature);
@@ -6118,12 +6162,7 @@ impl App {
         self.import_preview = preview;
         self.import_record_count = record_count;
         self.show_import_wizard = true;
-        self.status = if matching_specs.len() > 1 {
-            format!(
-                "IMPORT DESIGN · {} COLUMNS DETECTED · SELECT A SAVED DESIGN",
-                self.import_headers.len()
-            )
-        } else if self.selected_import_spec.is_some() {
+        self.status = if self.selected_import_spec.is_some() {
             format!(
                 "SAVED IMPORT DESIGN APPLIED{} · {} COLUMNS",
                 if schema_drift {
@@ -6131,6 +6170,11 @@ impl App {
                 } else {
                     ""
                 },
+                self.import_headers.len()
+            )
+        } else if matching_specs.len() > 1 {
+            format!(
+                "IMPORT DESIGN · {} COLUMNS DETECTED · SELECT A SAVED DESIGN",
                 self.import_headers.len()
             )
         } else {
@@ -6186,6 +6230,7 @@ impl App {
                 name: name.to_owned(),
                 mapping: self.import_column_mapping.clone(),
                 header_signature,
+                last_source_path: None,
             };
             self.selected_import_spec = Some(spec.id);
             self.case.import_specifications.push(spec);
@@ -7254,6 +7299,16 @@ impl App {
                 if adopt_imported_chart_title && let Some(chart_title) = chart_title {
                     self.case.active_chart_title = chart_title;
                 }
+                if self.remember_import_design_source
+                    && let Some(spec) = self.selected_import_spec.and_then(|id| {
+                        self.case
+                            .import_specifications
+                            .iter_mut()
+                            .find(|spec| spec.id == id)
+                    })
+                {
+                    spec.last_source_path = Some(import_path.clone());
+                }
                 self.invalidate_network_groups();
                 self.clear_path_result();
                 self.duplicate_candidates.clear();
@@ -7268,6 +7323,7 @@ impl App {
                 None => format!("IMPORT FAILED · {error}"),
             },
         };
+        self.remember_import_design_source = false;
     }
 
     fn ingest_sqlite_snapshot(&mut self, fit_new_chart: bool) {
@@ -19992,6 +20048,7 @@ impl eframe::App for App {
                     self.import_inspection_worker = None;
                     self.import_inspection_cancel = None;
                     self.import_inspection_progress = None;
+                    self.pending_import_design_source = None;
                     self.status = if error == "inspection cancelled" {
                         "IMPORT INSPECTION CANCELLED".into()
                     } else {
@@ -20002,6 +20059,7 @@ impl eframe::App for App {
                     self.import_inspection_worker = None;
                     self.import_inspection_cancel = None;
                     self.import_inspection_progress = None;
+                    self.pending_import_design_source = None;
                     self.status =
                         "IMPORT INSPECTION FAILED · background worker stopped unexpectedly".into();
                 }
@@ -21165,6 +21223,37 @@ impl eframe::App for App {
                         ui.label("Transforming XML and validating ANX in background…");
                     }
                     ui.menu_button("Import…", |ui| {
+                        ui.menu_button("Saved import designs · reinspect last file", |ui| {
+                            let designs = self
+                                .case
+                                .import_specifications
+                                .iter()
+                                .filter_map(|spec| {
+                                    spec.last_source_path.as_ref().map(|path| {
+                                        (spec.id, spec.name.clone(), path.clone())
+                                    })
+                                })
+                                .collect::<Vec<_>>();
+                            if designs.is_empty() {
+                                ui.label("Import a file with a saved design first.");
+                            }
+                            for (id, name, path) in designs {
+                                if ui
+                                    .add_enabled(
+                                        !import_busy,
+                                        egui::Button::new(format!("Reinspect · {name}")),
+                                    )
+                                    .on_hover_text(format!(
+                                        "Inspect the last imported file again without importing chart data · {path}"
+                                    ))
+                                    .clicked()
+                                {
+                                    self.reinspect_import_design_last_source(id);
+                                    ui.close_menu();
+                                }
+                            }
+                        });
+                        ui.separator();
                         ui.label("Input file");
                         ui.add_enabled(
                             !import_busy,
@@ -31333,6 +31422,7 @@ impl eframe::App for App {
                 self.export_selected_import_design();
             }
             if import_now {
+                self.remember_import_design_source = self.selected_import_spec.is_some();
                 self.import_delimited();
                 self.show_import_wizard = false;
             }
@@ -44343,11 +44433,18 @@ fn import_design_from_package(
                 .into(),
         );
     }
+    let last_source_path = replace_id.and_then(|id| {
+        case.import_specifications
+            .iter()
+            .find(|spec| spec.id == id)
+            .and_then(|spec| spec.last_source_path.clone())
+    });
     Ok(ImportSpecification {
         id: replace_id.unwrap_or_else(Uuid::new_v4),
         name: definition.name,
         mapping: definition.mapping,
         header_signature,
+        last_source_path,
     })
 }
 
@@ -51432,6 +51529,108 @@ mod tests {
             sparse_view_labels_reappeared,
             "Auto should show labels again when a pan/zoom leaves at most 36 visible routes"
         );
+    }
+
+    #[test]
+    fn saved_import_design_reinspects_last_source_without_importing_and_keeps_path_local() {
+        let root = std::env::temp_dir().join(format!(
+            "arch-notebook-import-design-source-{}",
+            Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).expect("create import design test directory");
+        let source_path = root.join("contacts.csv");
+        std::fs::write(&source_path, "from_name,to_name\nAlpha,Beta\n")
+            .expect("write import source");
+        let case_path = root.join("case.json");
+        let mut case: CaseFile =
+            serde_json::from_str(include_str!("../fixtures/chart/correctness.case.json"))
+                .expect("correctness fixture parses");
+        let design_id = Uuid::from_u128(71101);
+        let mapping = super::ImportColumnMapping {
+            source: "from_name".into(),
+            target: "to_name".into(),
+            ..Default::default()
+        };
+        case.import_specifications.push(super::ImportSpecification {
+            id: design_id,
+            name: "Contacts".into(),
+            mapping: mapping.clone(),
+            header_signature: vec!["from_name".into(), "to_name".into()],
+            last_source_path: None,
+        });
+        let original_entities = case.entities.len();
+        let original_links = case.links.len();
+        let mut app = App::automation_context(case, &case_path.to_string_lossy());
+        app.selected_import_spec = Some(design_id);
+        app.import_path = source_path.to_string_lossy().into_owned();
+        app.import_column_mapping = mapping;
+        app.remember_import_design_source = true;
+        app.import_delimited();
+        assert!(app.status.starts_with("CSV IMPORT ·"));
+        assert_eq!(app.case.entities.len(), original_entities + 2);
+        assert_eq!(app.case.links.len(), original_links + 1);
+        assert_eq!(
+            app.case.import_specifications[0]
+                .last_source_path
+                .as_deref(),
+            Some(source_path.to_string_lossy().as_ref())
+        );
+
+        let imported_entity_count = app.case.entities.len();
+        let imported_link_count = app.case.links.len();
+        app.reinspect_import_design_last_source(design_id);
+        let inspection = app
+            .import_inspection_worker
+            .take()
+            .expect("reinspection starts an asynchronous inspector")
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("source inspection completes")
+            .expect("source remains a valid CSV");
+        app.apply_delimited_import_inspection(inspection);
+        assert!(app.show_import_wizard);
+        assert_eq!(app.selected_import_spec, Some(design_id));
+        assert_eq!(app.import_column_mapping.source, "from_name");
+        assert_eq!(app.import_column_mapping.target, "to_name");
+        assert_eq!(app.case.entities.len(), imported_entity_count);
+        assert_eq!(app.case.links.len(), imported_link_count);
+        assert!(app.status.starts_with("SAVED IMPORT DESIGN APPLIED"));
+
+        let package_path = root.join("contacts.import.json");
+        let spec = app.case.import_specifications[0].clone();
+        super::write_import_design_package(
+            &app.case,
+            &case_path.to_string_lossy(),
+            &spec,
+            &package_path.to_string_lossy(),
+        )
+        .expect("export mapping package");
+        let package_text = std::fs::read_to_string(&package_path).expect("read package JSON");
+        assert!(!package_text.contains(&source_path.to_string_lossy().to_string()));
+        let package = super::read_import_design_package(&package_path.to_string_lossy())
+            .expect("read portable mapping package");
+        let receiving_case: CaseFile =
+            serde_json::from_str(include_str!("../fixtures/chart/correctness.case.json"))
+                .expect("receiving fixture parses");
+        let imported =
+            super::import_design_from_package(package.design.clone(), &receiving_case, None, None)
+                .expect("imported package does not inherit exporting machine path");
+        assert!(imported.last_source_path.is_none());
+        let replaced =
+            super::import_design_from_package(package.design, &app.case, None, Some(design_id))
+                .expect("updating mapping preserves local last source");
+        assert_eq!(
+            replaced.last_source_path.as_deref(),
+            Some(source_path.to_string_lossy().as_ref())
+        );
+
+        let legacy_spec: super::ImportSpecification = serde_json::from_value(serde_json::json!({
+            "id": Uuid::from_u128(71102),
+            "name": "Legacy",
+            "header_signature": []
+        }))
+        .expect("legacy design without remembered source remains readable");
+        assert!(legacy_spec.last_source_path.is_none());
+        std::fs::remove_dir_all(root).expect("remove import design test directory");
     }
 
     #[test]

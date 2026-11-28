@@ -183,6 +183,8 @@ cargo run --offline -- --import-import-design another-case.json financial-connec
 
 Design names must be unique in a case. Use `--name` to adapt a shared design to a local naming scheme. Import does not read source data or change SQLite databases; the saved mapping is applied when a delimited file with the matching header signature is inspected.
 
+After a successful desktop import using a saved design, the case stores the last source path locally. Choose **Import… → Saved import designs · reinspect last file** to reopen that file in the inspection and mapping wizard without importing chart data. The path is case-local metadata and is omitted from portable JSON packages; moving the case or source may make the shortcut unavailable. Older cases without this field continue to load.
+
 ## Inspect and replay run history
 
 Read saved automation outcomes without opening the desktop app:

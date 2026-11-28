@@ -1,5 +1,21 @@
 # Local build acceptance record
 
+## Saved import design last-source reinspection — 2026-11-28
+
+After a successful desktop import through a saved CSV/TSV design, the case can remember its last source path and reopen that source in the inspection/mapping wizard. Reinspection selects the requested design even when multiple designs share a header signature, and does not import chart records. The path remains case-local and is not included in portable import-design packages.
+
+| Gate | Result | Evidence |
+| --- | --- | --- |
+| Focused headless persistence, reinspection, package exclusion, replacement, and legacy-load regression | PASS | `saved_import_design_reinspects_last_source_without_importing_and_keeps_path_local`. |
+| Full Rust suite | PASS | 102 passed, 0 failed, 3 ignored. |
+| Formatting, locked offline workspace check, and diff validation | PASS | All exited 0. |
+| Optimized locked offline release build | PASS | `TMPDIR=/home/sysadmin/.cache/arch-notebook-build-tmp CARGO_BUILD_JOBS=1 CARGO_TARGET_DIR=/tmp/arch-notebook-target cargo build --release --workspace --locked --offline`, exit 0. Binary SHA-256 `6f014b594f85a0c35b9a78f3f822459649e4a05489af431cfcf8f0bf439af081`. |
+| Isolated installer and current-user install | PASS | Acceptance confirms executable, identical menu/desktop launchers, icons, MIME definition, and SQL helper. Installed binary matches the candidate SHA-256. |
+| Primary Clinton corpus QA | PASS, bounded | One query-only preflight passed; replayed 6,173 relationship rows with 0 skipped rows and 0 added/changed/removed deltas; inputs unchanged. Extraction completeness, Qwen analysis, and human content review remain unestablished. |
+| Native UI and IBM import-format interoperability | NOT RUN | Native display/input is unavailable; IBM `.ximp`/`.oimp` compatibility is not implemented. |
+
+Exact runtime commands, binary digest, and aggregate-only report hashes are recorded in [IMPORT-DESIGN-LAST-SOURCE-01](evidence/vector-ui/IMPORT-DESIGN-LAST-SOURCE-01-20261128.md).
+
 ## Portable saved SQL search packages — 2026-11-28
 
 Saved SQL search definitions can now be exported/imported as version-1 JSON packages with `--export-sql-search` and `--import-sql-search`. The package is definition-only; it carries no chart/case data or SQL results, omits bound seed IDs, rebases relative paths, and leaves imported SQL unexecuted. Export protects case files, automation locks, and referenced SQLite sources; imports reject duplicate names and bound chart-seed values.
