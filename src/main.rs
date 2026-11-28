@@ -1107,6 +1107,20 @@ struct AutomationJob {
 }
 
 #[derive(Clone, Serialize, Deserialize)]
+struct SavedSqlSearch {
+    id: Uuid,
+    name: String,
+    database_path: String,
+    series: String,
+    query: String,
+    #[serde(default)]
+    parameters: Vec<(String, String)>,
+    /// When set, this parameter is rebound from the current chart selection after loading.
+    #[serde(default)]
+    seed_parameter_name: Option<String>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
 struct AutomationJobPackage {
     format: String,
     schema_version: u32,
@@ -1577,6 +1591,8 @@ struct CaseFile {
     saved_paths: Vec<SavedPath>,
     #[serde(default)]
     selection_sets: Vec<SavedSelectionSet>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    saved_sql_searches: Vec<SavedSqlSearch>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -2930,7 +2946,10 @@ struct App {
     sql_series: String,
     sql_query: String,
     sql_parameter_text: String,
+    sql_saved_search_id: Option<Uuid>,
+    sql_saved_search_name: String,
     sql_seed_parameter_name: String,
+    sql_review_dynamic_seed_parameter_name: Option<String>,
     sql_seed_identity_key: String,
     sql_seed_query_mode: bool,
     sql_seed_page_offset: usize,
@@ -3604,7 +3623,10 @@ impl Default for App {
             sql_series: "Harbor Light connection review".into(),
             sql_query: "SELECT connection_id, source, source_type, target, target_type, relationship, event_date AS date, confidence, directed, source_reference, notes FROM connection_observations WHERE snapshot_id = :snapshot_id ORDER BY connection_id;".into(),
             sql_parameter_text: "snapshot_id=baseline".into(),
+            sql_saved_search_id: None,
+            sql_saved_search_name: String::new(),
             sql_seed_parameter_name: "seed_entity_id".into(),
+            sql_review_dynamic_seed_parameter_name: None,
             sql_seed_identity_key: String::new(),
             sql_seed_query_mode: false,
             sql_seed_page_offset: 0,
@@ -3918,10 +3940,248 @@ fn demo_case() -> CaseFile {
         graphml_source_catalogs: Vec::new(),
         saved_paths: Vec::new(),
         selection_sets: Vec::new(),
+        saved_sql_searches: Vec::new(),
     }
 }
 
 impl App {
+    fn new_saved_sql_search_draft(&self, id: Uuid) -> Result<SavedSqlSearch, String> {
+        saved_sql_search_from_draft(
+            id,
+            &self.sql_saved_search_name,
+            &self.sql_path,
+            &self.sql_series,
+            &self.sql_query,
+            &self.sql_parameter_text,
+            if self.sql_seed_query_mode {
+                Some(self.sql_seed_parameter_name.as_str())
+            } else {
+                self.sql_review_dynamic_seed_parameter_name.as_deref()
+            },
+        )
+    }
+
+    fn sql_search_name_conflicts(&self, name: &str, except_id: Option<Uuid>) -> bool {
+        self.case.saved_sql_searches.iter().any(|search| {
+            Some(search.id) != except_id && search.name.eq_ignore_ascii_case(name.trim())
+        })
+    }
+
+    fn save_sql_review_search_as_new(&mut self) {
+        let id = Uuid::new_v4();
+        let search = match self.new_saved_sql_search_draft(id) {
+            Ok(search) => search,
+            Err(error) => {
+                self.status = format!("SQL SEARCH NOT SAVED · {error}");
+                return;
+            }
+        };
+        if self.sql_search_name_conflicts(&search.name, None) {
+            self.status = format!(
+                "SQL SEARCH NOT SAVED · a saved query named {} already exists",
+                search.name
+            );
+            return;
+        }
+        self.sql_saved_search_name = search.name.clone();
+        self.case.saved_sql_searches.push(search);
+        self.sql_saved_search_id = Some(id);
+        self.status = "SQL SEARCH SAVED IN CASE · SAVE CASE TO KEEP IT".into();
+    }
+
+    fn update_sql_review_search(&mut self) {
+        let Some(id) = self.sql_saved_search_id else {
+            return;
+        };
+        let Some(index) = self
+            .case
+            .saved_sql_searches
+            .iter()
+            .position(|search| search.id == id)
+        else {
+            self.sql_saved_search_id = None;
+            self.status = "SQL SEARCH NOT UPDATED · SELECT A SAVED QUERY".into();
+            return;
+        };
+        let search = match self.new_saved_sql_search_draft(id) {
+            Ok(search) => search,
+            Err(error) => {
+                self.status = format!("SQL SEARCH NOT UPDATED · {error}");
+                return;
+            }
+        };
+        if self.sql_search_name_conflicts(&search.name, Some(id)) {
+            self.status = format!(
+                "SQL SEARCH NOT UPDATED · a saved query named {} already exists",
+                search.name
+            );
+            return;
+        }
+        self.sql_saved_search_name = search.name.clone();
+        self.case.saved_sql_searches[index] = search;
+        self.status = "SQL SEARCH UPDATED IN CASE · SAVE CASE TO KEEP IT".into();
+    }
+
+    fn load_sql_review_search(&mut self) {
+        let Some(search) = self
+            .sql_saved_search_id
+            .and_then(|id| {
+                self.case
+                    .saved_sql_searches
+                    .iter()
+                    .find(|search| search.id == id)
+            })
+            .cloned()
+        else {
+            self.status = "SQL SEARCH NOT LOADED · SELECT A SAVED QUERY".into();
+            return;
+        };
+        self.sql_saved_search_name = search.name.clone();
+        self.sql_path = search.database_path;
+        self.sql_series = search.series;
+        self.sql_query = search.query;
+        self.sql_parameter_text = format_sql_parameters(&search.parameters);
+        if let Some(seed_parameter_name) = &search.seed_parameter_name {
+            self.sql_seed_parameter_name = seed_parameter_name.clone();
+        }
+        self.sql_review_dynamic_seed_parameter_name = search.seed_parameter_name;
+        self.sql_seed_query_mode = false;
+        self.sql_seed_page_offset = 0;
+        self.sql_cleared_parameter_draft = None;
+        self.sql_validation_preview = None;
+        self.sql_skipped_endpoints.clear();
+        self.status = "SQL SEARCH LOADED · REBIND CHART SEEDS IF NEEDED, THEN VALIDATE".into();
+    }
+
+    fn delete_sql_review_search(&mut self) {
+        let Some(id) = self.sql_saved_search_id else {
+            return;
+        };
+        let previous_count = self.case.saved_sql_searches.len();
+        self.case
+            .saved_sql_searches
+            .retain(|search| search.id != id);
+        if self.case.saved_sql_searches.len() != previous_count {
+            self.sql_saved_search_id = None;
+            self.sql_saved_search_name.clear();
+            self.status = "SQL SEARCH REMOVED FROM CASE · SAVE CASE TO KEEP THE CHANGE".into();
+        }
+    }
+
+    fn show_saved_sql_search_catalog(&mut self, ui: &mut egui::Ui) {
+        if self.sql_saved_search_id.is_some_and(|id| {
+            !self
+                .case
+                .saved_sql_searches
+                .iter()
+                .any(|search| search.id == id)
+        }) {
+            self.sql_saved_search_id = None;
+            self.sql_saved_search_name.clear();
+        }
+        let saved_searches: Vec<(Uuid, String, String)> = self
+            .case
+            .saved_sql_searches
+            .iter()
+            .map(|search| (search.id, search.name.clone(), search.database_path.clone()))
+            .collect();
+        let mut action = None;
+        egui::CollapsingHeader::new(format!(
+            "SAVED SQL SEARCHES · {}",
+            saved_searches.len()
+        ))
+        .id_salt("sql_review_saved_searches")
+        .default_open(false)
+        .show(ui, |ui| {
+            ui.label(
+                egui::RichText::new(
+                    "Case-local query definitions only · loading never runs SQL or creates a snapshot. Chart-seed values are rebound from the current selection.",
+                )
+                .small()
+                .color(egui::Color32::GRAY),
+            );
+            ui.horizontal_wrapped(|ui| {
+                let selected_text = self
+                    .sql_saved_search_id
+                    .and_then(|id| saved_searches.iter().find(|(search_id, _, _)| *search_id == id))
+                    .map(|(_, name, _)| name.as_str())
+                    .unwrap_or("Choose saved query");
+                let selection_changed = egui::ComboBox::from_id_salt("sql_review_saved_search_picker")
+                    .selected_text(selected_text)
+                    .show_ui(ui, |ui| {
+                        let mut selected = self.sql_saved_search_id;
+                        ui.selectable_value(&mut selected, None, "Choose saved query");
+                        for (id, name, _) in &saved_searches {
+                            ui.selectable_value(&mut selected, Some(*id), name);
+                        }
+                        if selected != self.sql_saved_search_id {
+                            self.sql_saved_search_id = selected;
+                            selected
+                        } else {
+                            None
+                        }
+                    })
+                    .inner
+                    .flatten();
+                if let Some(id) = selection_changed {
+                    if let Some((_, name, _)) = saved_searches.iter().find(|(search_id, _, _)| *search_id == id) {
+                        self.sql_saved_search_name = name.clone();
+                    }
+                }
+                let selected_exists = self.sql_saved_search_id.is_some_and(|id| {
+                    saved_searches.iter().any(|(search_id, _, _)| *search_id == id)
+                });
+                if ui
+                    .add_enabled(selected_exists, egui::Button::new("Load"))
+                    .clicked()
+                {
+                    action = Some("load");
+                }
+                if ui
+                    .add_enabled(selected_exists, egui::Button::new("Update selected"))
+                    .clicked()
+                {
+                    action = Some("update");
+                }
+                if ui
+                    .add_enabled(selected_exists, egui::Button::new("Delete"))
+                    .clicked()
+                {
+                    action = Some("delete");
+                }
+            });
+            if let Some(id) = self.sql_saved_search_id
+                && let Some((_, _, database_path)) = saved_searches
+                    .iter()
+                    .find(|(search_id, _, _)| *search_id == id)
+            {
+                ui.label(
+                    egui::RichText::new(format!("Saved SQLite file · {database_path}"))
+                        .small()
+                        .color(egui::Color32::GRAY),
+                );
+            }
+            ui.horizontal_wrapped(|ui| {
+                ui.label("Name");
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.sql_saved_search_name)
+                        .hint_text("Reusable search name")
+                        .desired_width(190.0),
+                );
+                if ui.button("Save as new search").clicked() {
+                    action = Some("save_new");
+                }
+            });
+        });
+        match action {
+            Some("load") => self.load_sql_review_search(),
+            Some("save_new") => self.save_sql_review_search_as_new(),
+            Some("update") => self.update_sql_review_search(),
+            Some("delete") => self.delete_sql_review_search(),
+            _ => {}
+        }
+    }
+
     fn map_entity_contacts(&mut self, origin: Uuid) {
         let analysis = proximity::analyze(
             self.case
@@ -4787,7 +5047,10 @@ impl App {
             sql_series: String::new(),
             sql_query: String::new(),
             sql_parameter_text: String::new(),
+            sql_saved_search_id: None,
+            sql_saved_search_name: String::new(),
             sql_seed_parameter_name: "seed_entity_id".into(),
+            sql_review_dynamic_seed_parameter_name: None,
             sql_seed_identity_key: String::new(),
             sql_seed_query_mode: false,
             sql_seed_page_offset: 0,
@@ -13759,7 +14022,11 @@ impl App {
             graphml_source_catalogs: Vec::new(),
             saved_paths: Vec::new(),
             selection_sets: Vec::new(),
+            saved_sql_searches: Vec::new(),
         };
+        self.sql_saved_search_id = None;
+        self.sql_saved_search_name.clear();
+        self.sql_review_dynamic_seed_parameter_name = None;
         self.reset_chart_creation_drafts();
         self.reset_case_transient_analysis();
         self.network_groups = None;
@@ -24223,6 +24490,7 @@ impl eframe::App for App {
                                 ui.add_space(6.0);
                                 ui.label(egui::RichText::new("INGEST NEW SNAPSHOT").small().strong().color(cyan));
                                 ui.horizontal(|ui|{ui.label("SQLite file");ui.add(egui::TextEdit::singleline(&mut self.sql_path).hint_text("Relative to case file").desired_width(260.0));ui.label("Series");ui.add(egui::TextEdit::singleline(&mut self.sql_series).desired_width(260.0));});
+                                self.show_saved_sql_search_catalog(ui);
                                 ui.label(egui::RichText::new("Read-only SQL query · required columns: source, target").small().color(muted));
                                 Self::show_sql_result_mapping_help(ui, "sql_review_result_mapping");
                                 ui.add(egui::TextEdit::multiline(&mut self.sql_query).desired_width(canvas_w-20.0).desired_rows(4).code_editor());
@@ -24298,6 +24566,9 @@ impl eframe::App for App {
                                                         self.sql_path = source.to_owned();
                                                         self.sql_parameter_text = parameters;
                                                         self.sql_validation_preview = None;
+                                                        self.sql_review_dynamic_seed_parameter_name = Some(
+                                                            self.sql_seed_parameter_name.trim().to_owned(),
+                                                        );
                                                         self.sql_seed_query_mode = true;
                                                         self.sql_seed_page_offset = 0;
                                                         self.status = format!(
@@ -24389,6 +24660,9 @@ impl eframe::App for App {
                                                         self.sql_path = source.to_owned();
                                                         self.sql_parameter_text = parameters;
                                                         self.sql_validation_preview = None;
+                                                        self.sql_review_dynamic_seed_parameter_name = Some(
+                                                            self.sql_seed_parameter_name.trim().to_owned(),
+                                                        );
                                                         self.sql_seed_query_mode = true;
                                                         self.sql_seed_page_offset = 0;
                                                         self.status = format!(
@@ -41342,6 +41616,47 @@ fn sqlite_query_templates(schema: &[serde_json::Value]) -> SqlSchemaTemplates {
         .collect()
 }
 
+fn saved_sql_search_from_draft(
+    id: Uuid,
+    name: &str,
+    database_path: &str,
+    series: &str,
+    query: &str,
+    parameter_text: &str,
+    dynamic_seed_parameter_name: Option<&str>,
+) -> Result<SavedSqlSearch, String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("enter a name for this saved SQL search".into());
+    }
+    if name.chars().count() > 80 {
+        return Err("saved SQL search names are limited to 80 characters".into());
+    }
+    if database_path.trim().is_empty() {
+        return Err("choose a SQLite database before saving this SQL search".into());
+    }
+    if query.trim().is_empty() {
+        return Err("enter a SQL query before saving this SQL search".into());
+    }
+    let mut parameters = parse_sql_parameters(parameter_text)?;
+    let seed_parameter_name = dynamic_seed_parameter_name
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_owned);
+    if let Some(seed_name) = &seed_parameter_name {
+        parameters.retain(|(name, _)| name != seed_name);
+    }
+    Ok(SavedSqlSearch {
+        id,
+        name: name.to_owned(),
+        database_path: database_path.to_owned(),
+        series: series.to_owned(),
+        query: query.to_owned(),
+        parameters,
+        seed_parameter_name,
+    })
+}
+
 fn inspect_sqlite_schema_cli(database_path: &str, json_output: bool) -> Result<(), String> {
     let inventory = read_sqlite_schema(database_path)?;
     let query_templates = sqlite_query_templates(&inventory.objects);
@@ -43920,6 +44235,7 @@ fn create_import_design_package_cli(
             graphml_source_catalogs: Vec::new(),
             saved_paths: Vec::new(),
             selection_sets: Vec::new(),
+            saved_sql_searches: Vec::new(),
         },
         None,
         None,
@@ -46839,6 +47155,205 @@ mod tests {
         assert!(super::bind_sql_seed_parameter("bad line", "seed_entity_id", "one").is_err());
         assert!(super::bind_sql_seed_parameter("", "bad-name", "one").is_err());
         assert!(super::bind_sql_seed_parameter("", "seed_entity_id", "two\nlines").is_err());
+    }
+
+    #[test]
+    fn saved_sql_search_keeps_defaults_but_never_persists_bound_chart_seed_values() {
+        let id = Uuid::from_u128(77);
+        let search = super::saved_sql_search_from_draft(
+            id,
+            "  Counterparty lookup  ",
+            "/tmp/accounts.sqlite",
+            "seed review",
+            "SELECT source, target FROM records WHERE owner_id = :seed_entity_id AND state = :state",
+            "seed_entity_id=text:previous-chart-id\nstate=text:open\nminimum=int:2",
+            Some("seed_entity_id"),
+        )
+        .expect("valid saved SQL search draft");
+        assert_eq!(search.id, id);
+        assert_eq!(search.name, "Counterparty lookup");
+        assert_eq!(search.database_path, "/tmp/accounts.sqlite");
+        assert_eq!(search.series, "seed review");
+        assert_eq!(
+            search.seed_parameter_name.as_deref(),
+            Some("seed_entity_id")
+        );
+        assert_eq!(
+            search.parameters,
+            vec![
+                ("state".into(), "text:open".into()),
+                ("minimum".into(), "int:2".into())
+            ]
+        );
+
+        let legacy_case: CaseFile =
+            serde_json::from_str(include_str!("../fixtures/chart/correctness.case.json"))
+                .expect("legacy case without saved searches remains readable");
+        assert!(legacy_case.saved_sql_searches.is_empty());
+        let mut upgraded_case = legacy_case;
+        upgraded_case.saved_sql_searches.push(search);
+        let encoded = serde_json::to_string(&upgraded_case).expect("case with search serializes");
+        let decoded: CaseFile = serde_json::from_str(&encoded).expect("saved search round trips");
+        assert_eq!(decoded.saved_sql_searches.len(), 1);
+        assert_eq!(decoded.saved_sql_searches[0].name, "Counterparty lookup");
+        assert_eq!(
+            decoded.saved_sql_searches[0].parameters,
+            vec![
+                ("state".into(), "text:open".into()),
+                ("minimum".into(), "int:2".into())
+            ]
+        );
+    }
+
+    #[test]
+    fn sql_review_saved_search_ui_loads_query_without_running_or_capturing_it() {
+        let case: CaseFile =
+            serde_json::from_str(include_str!("../fixtures/chart/correctness.case.json"))
+                .expect("chart fixture parses");
+        let mut app = App::automation_context(case, "/tmp/saved-search-ui.case.json");
+        app.page = super::WorkspacePage::Data;
+        app.data_mode = super::DataMode::SqlRegressions;
+        app.sql_path = "/tmp/accounts.sqlite".into();
+        app.sql_series = "counterparty search".into();
+        app.sql_query = "SELECT source, target FROM records WHERE owner_id = :seed_entity_id AND state = :state".into();
+        app.sql_parameter_text = "seed_entity_id=text:stale-id\nstate=text:open".into();
+        app.sql_seed_parameter_name = "seed_entity_id".into();
+        app.sql_seed_query_mode = true;
+        app.sql_saved_search_name = "Counterparty lookup".into();
+
+        let context = egui::Context::default();
+        let mut frame = eframe::Frame::_new_kittest();
+        let mut time = 0.0;
+        let shapes = render_headless_app_frame_at(
+            &context,
+            &mut app,
+            &mut frame,
+            time,
+            Vec::new(),
+            egui::vec2(1600.0, 1800.0),
+        );
+        assert!(find_headless_text_rect(&shapes, "SAVED SQL SEARCHES · 0").is_some());
+        let _expanded = click_headless_visible_text(
+            &context,
+            &mut app,
+            &mut frame,
+            &mut time,
+            &shapes,
+            "SAVED SQL SEARCHES · 0",
+        );
+        time += 1.0 / 60.0;
+        let save_shapes = render_headless_app_frame_at(
+            &context,
+            &mut app,
+            &mut frame,
+            time,
+            Vec::new(),
+            egui::vec2(1600.0, 1800.0),
+        );
+        let _saved = click_headless_visible_text(
+            &context,
+            &mut app,
+            &mut frame,
+            &mut time,
+            &save_shapes,
+            "Save as new search",
+        );
+        assert_eq!(app.case.saved_sql_searches.len(), 1);
+        assert!(app.case.snapshots.is_empty());
+        let saved = &app.case.saved_sql_searches[0];
+        assert_eq!(saved.seed_parameter_name.as_deref(), Some("seed_entity_id"));
+        assert_eq!(saved.parameters, vec![("state".into(), "text:open".into())]);
+        let saved_id = saved.id;
+
+        app.sql_path = "/tmp/wrong.sqlite".into();
+        app.sql_series = "wrong series".into();
+        app.sql_query = "SELECT 1".into();
+        app.sql_parameter_text = "other=text:value".into();
+        app.sql_seed_query_mode = true;
+        time += 1.0 / 60.0;
+        let load_shapes = render_headless_app_frame_at(
+            &context,
+            &mut app,
+            &mut frame,
+            time,
+            Vec::new(),
+            egui::vec2(1600.0, 1800.0),
+        );
+        assert!(find_headless_text_rect(&load_shapes, "Load").is_some());
+        let _loaded = click_headless_visible_text(
+            &context,
+            &mut app,
+            &mut frame,
+            &mut time,
+            &load_shapes,
+            "Load",
+        );
+        assert_eq!(app.sql_saved_search_id, Some(saved_id));
+        assert_eq!(app.sql_path, "/tmp/accounts.sqlite");
+        assert_eq!(app.sql_series, "counterparty search");
+        assert!(app.sql_query.contains(":seed_entity_id"));
+        assert_eq!(app.sql_parameter_text, "state=text:open");
+        assert!(!app.sql_seed_query_mode);
+        assert_eq!(
+            app.sql_review_dynamic_seed_parameter_name.as_deref(),
+            Some("seed_entity_id")
+        );
+        assert!(app.sql_validation_preview.is_none());
+        assert!(app.case.snapshots.is_empty());
+        assert!(app.status.starts_with("SQL SEARCH LOADED"));
+
+        app.sql_saved_search_name = "Counterparty network".into();
+        app.sql_query.push_str(" ORDER BY source, target");
+        time += 1.0 / 60.0;
+        let update_shapes = render_headless_app_frame_at(
+            &context,
+            &mut app,
+            &mut frame,
+            time,
+            Vec::new(),
+            egui::vec2(1600.0, 1800.0),
+        );
+        let _updated = click_headless_visible_text(
+            &context,
+            &mut app,
+            &mut frame,
+            &mut time,
+            &update_shapes,
+            "Update selected",
+        );
+        assert_eq!(app.case.saved_sql_searches.len(), 1);
+        assert_eq!(app.case.saved_sql_searches[0].name, "Counterparty network");
+        assert!(
+            app.case.saved_sql_searches[0]
+                .query
+                .ends_with("ORDER BY source, target")
+        );
+        assert_eq!(
+            app.case.saved_sql_searches[0]
+                .seed_parameter_name
+                .as_deref(),
+            Some("seed_entity_id")
+        );
+
+        time += 1.0 / 60.0;
+        let delete_shapes = render_headless_app_frame_at(
+            &context,
+            &mut app,
+            &mut frame,
+            time,
+            Vec::new(),
+            egui::vec2(1600.0, 1800.0),
+        );
+        let _deleted = click_headless_visible_text(
+            &context,
+            &mut app,
+            &mut frame,
+            &mut time,
+            &delete_shapes,
+            "Delete",
+        );
+        assert!(app.case.saved_sql_searches.is_empty());
+        assert!(app.status.starts_with("SQL SEARCH REMOVED"));
     }
 
     #[test]
@@ -52342,6 +52857,7 @@ mod tests {
             graphml_source_catalogs: Vec::new(),
             saved_paths: Vec::new(),
             selection_sets: Vec::new(),
+            saved_sql_searches: Vec::new(),
         };
         assert!(super::chart_fit_transform(&case, &[], egui::Rect::NOTHING).is_none());
         for size in [egui::vec2(1000.0, 700.0), egui::vec2(560.0, 420.0)] {

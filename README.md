@@ -15,7 +15,7 @@ Designed for local, repeatable investigations, it stores case files, snapshots, 
 | Chart | Build typed entity/link networks, inspect parallel relationships, search attributes and evidence, and save selection sets. |
 | Timeline | Review dated events and restrict investigations to valid ISO-date intervals. |
 | Connections | Inspect grouped relationships and individual records, including direction, confidence, notes and provenance. |
-| SQL Review | Discover SQLite schemas, preview read-only queries, capture immutable results, and compare historical snapshots. |
+| SQL Review | Discover SQLite schemas, reuse case-saved read-only query definitions, preview seeded results, capture immutable snapshots, and compare history. |
 | Automation | Preflight and execute repeatable captures, review exceptions and enforce configurable capture limits. |
 | Entities | Review source identities, aliases, attributes and potential duplicates before merging. |
 | Sources | Trace imported records to their origin, highlight source-specific networks and navigate to SQL captures or jobs. |

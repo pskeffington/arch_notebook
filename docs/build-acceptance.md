@@ -1,5 +1,22 @@
 # Local build acceptance record
 
+## Case-local saved SQL searches — 2026-11-28
+
+**Repository / branch / baseline:** `arch_notebook` / `codex/ui-00-chart-nested-conditions` / `8037cbc2d0a94444aebecb9937710e34e52006de`.
+
+SQL Review now stores named query definitions in the active case: database path, series, SQL text, and typed parameter defaults. Loading restores only the draft; it does not execute SQL or create a snapshot. Chart seed values are excluded and the parameter name is retained for rebinding. Definitions are local SQLite drafts, not IBM i2 Analyze External Searches or scheduled automation jobs. Existing case files default to an empty catalog on load.
+
+| Gate | Result | Evidence / limit |
+| --- | --- | --- |
+| Saved search serialization, legacy case compatibility, seed omission | PASS | Focused regressions cover defaults, round-trip, legacy fixture, and dynamic seed rebinding. |
+| SQL Review headless save/load/update/delete | PASS | UI regression verifies all catalog operations without creating snapshots or executing SQL. |
+| Rust suite at candidate source | PASS | 96 passed, 0 failed, 3 ignored; locked offline full suite completed before the last documentation-only edits. |
+| Formatting, diff validation, locked offline workspace check | PASS | All exited 0. |
+| Locked offline release build / install / Clinton corpus rerun | BLOCKED | `/tmp` had 789 MiB free at first attempt. After clearing Cargo incremental artifacts (1.4 GiB free), the release build process exited without replacing the existing binary (hash remained `b9049120…f0fa80cd`). No runtime acceptance is claimed for this candidate. |
+| Native display and IBM application interoperability | NOT RUN | Native display access is unavailable; no i2 Analyze connection is implemented. |
+
+Exact source-level commands and acceptance limits: [SQL-SEARCH-CATALOG-01](evidence/sql-automation/SQL-SEARCH-CATALOG-01-20261128.md).
+
 ## Proximity-map encoding legend — 2026-11-28
 
 The sampled topology map now explains its node colors and size, proxy ring, direction arrow, selected/hovered tie styling, and relationship-count line thickness with a compact wrapped legend. Headless production-panel checks pass on the synthetic UI and retained Clinton case (2,813 entities, 6,173 records, 48 sampled groups, 47 sampled contacts). The full Rust suite passes (94 passed, 0 failed, 3 ignored); the locked offline release built and was installed with synchronized launcher and icon assets (SHA-256 `b9049120…f0fa80cd`). Native screenshot/pointer review remains blocked because this session cannot access the X11 or Wayland display. Details: [PROXIMITY-MAP-LEGEND-01](evidence/vector-ui/PROXIMITY-MAP-LEGEND-01-20261128.md).
