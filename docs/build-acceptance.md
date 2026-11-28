@@ -1,5 +1,22 @@
 # Local build acceptance record
 
+## Dense sampled topology map validation — 2026-11-27
+
+**Repository / branch / baseline:** `/home/sysadmin/github/arch_notebook` / `codex/ui-00-chart-baseline` / `2feca0710b564e28be72bc5f129e8223c2c8adf6`.
+
+A deterministic fictional stress case creates 48 distinct hop groups and 576 valid cross-group contact pairs, then renders the production Analysis panel at 1440×1600. The emitted route shapes confirm a 291×193 map clip, which is asserted against the exhaustive culling model. The convex-hull culler retained 156 route candidates and skipped 420 before sampling. The UI emitted exactly 12 route segments per retained contact (1,872 segments), preserving every route whose sampled expanded bounds could touch the viewport. The synthetic fixture complements the retained Clinton corpus, which remains the primary real-corpus QA batch.
+
+| Gate | Result | Evidence |
+| --- | --- | --- |
+| Dense production UI route rendering | PASS, headless | `dense_proximity_map_culls_before_sampling_without_losing_visible_routes`: 48 groups / 576 pairs / measured 291×193 viewport / 156 candidates / 420 culled / 1,872 painted segments. |
+| Culling conservatism | PASS | Exhaustive assertion across all 576 generated routes verifies no sampled route whose expanded bounds intersect the viewport is rejected by control-hull culling. |
+| Clinton corpus UI | PASS, headless | Retained case: 2,813 entities / 6,173 records / 48 sampled groups / 47 sampled pairs; details in [viewport culling evidence](evidence/vector-ui/PROXIMITY-MAP-VIEWPORT-CULL-01-linux.md). |
+| Full suite / check / build / format | PASS | 73 passed, 0 failed, 3 ignored; locked offline check and debug build, formatting and diff checks pass. |
+| Topology source review | PASS | Reviewer confirmed control-hull bounds, crossing retention, arrow/picking margin, and node click priority. |
+| Native visual / CI | NOT RUN / PENDING | Native display review remains unavailable; this non-main branch does not trigger the configured build workflow. |
+
+Exact command and fixture construction: [PROXIMITY-MAP-DENSE-STRESS-01](evidence/vector-ui/PROXIMITY-MAP-DENSE-STRESS-01-linux.md).
+
 ## Sampled topology viewport culling — 2026-11-27
 
 **Repository / branch / baseline:** `/home/sysadmin/github/arch_notebook` / `codex/ui-00-chart-baseline` / `8af57a12649dadd5478d08289caf2cdf6de2060b`.

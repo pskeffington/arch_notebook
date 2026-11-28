@@ -45183,6 +45183,195 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn dense_proximity_map_culls_before_sampling_without_losing_visible_routes() {
+        let mut case: CaseFile =
+            serde_json::from_str(include_str!("../fixtures/chart/correctness.case.json"))
+                .expect("checked-in chart fixture is valid");
+        case.entities.clear();
+        case.links.clear();
+
+        let mut ids = Vec::with_capacity(48);
+        for index in 0..48_u128 {
+            let mut entity = layout_entity(&format!("Group entity {index}"), "PERSON", false);
+            entity.id = Uuid::from_u128(index + 1);
+            ids.push(entity.id);
+            case.entities.push(entity);
+        }
+
+        let mut record_index = 0;
+        let mut add_link = |from: Uuid, to: Uuid| {
+            record_index += 1;
+            case.links.push(super::Link {
+                from,
+                to,
+                connection_id: format!("dense-map-{record_index}"),
+                label: "CONTACTS".into(),
+                date: String::new(),
+                confidence: 2,
+                directed: false,
+                notes: String::new(),
+                source_notes: String::new(),
+                source_reference: String::new(),
+                ingest_source: None,
+                attributes: Vec::new(),
+            });
+        };
+        let origin = ids[0];
+        for first_layer in &ids[1..25] {
+            add_link(origin, *first_layer);
+        }
+        for first_layer in &ids[1..25] {
+            for second_layer in &ids[25..48] {
+                add_link(*first_layer, *second_layer);
+            }
+        }
+        assert_eq!(case.links.len(), 576);
+
+        let analysis = super::proximity::analyze(
+            case.entities
+                .iter()
+                .map(|entity| (entity.id, entity.name.as_str())),
+            case.links
+                .iter()
+                .map(|link| (link.from, link.to, link.directed)),
+            origin,
+        );
+        assert_eq!(analysis.map_group_indices.len(), 48);
+        assert_eq!(analysis.map_interaction_indices.len(), 576);
+
+        let map_origin = egui::pos2(100.0, 100.0);
+        // Match the production panel's measured scroll clip at the 1440-wide
+        // headless viewport used below.
+        let map_viewport = egui::Rect::from_min_size(map_origin, egui::vec2(291.0, 193.0));
+        let mut positions =
+            std::collections::HashMap::with_capacity(analysis.map_group_indices.len());
+        for (column, groups) in analysis.map_groups_by_column.iter().enumerate() {
+            for (row, group_index) in groups.iter().copied().enumerate() {
+                positions.insert(
+                    group_index,
+                    map_origin + super::proximity_map_node_position(column, row).to_vec2(),
+                );
+            }
+        }
+
+        let mut candidate_routes = 0;
+        let mut culled_routes = 0;
+        for interaction_index in &analysis.map_interaction_indices {
+            let interaction = &analysis.interactions[*interaction_index];
+            let first = positions[&interaction.first_group];
+            let second = positions[&interaction.second_group];
+            let may_intersect = super::proximity_map_edge_may_intersect_viewport(
+                first,
+                second,
+                *interaction_index,
+                map_viewport,
+            );
+            let route = super::proximity_map_edge_route(first, second, *interaction_index);
+            let first_point = route[0];
+            let (minimum, maximum) = route.iter().copied().skip(1).fold(
+                (first_point, first_point),
+                |(mut minimum, mut maximum), point| {
+                    minimum.x = minimum.x.min(point.x);
+                    minimum.y = minimum.y.min(point.y);
+                    maximum.x = maximum.x.max(point.x);
+                    maximum.y = maximum.y.max(point.y);
+                    (minimum, maximum)
+                },
+            );
+            let sampled_route_may_intersect = egui::Rect::from_min_max(minimum, maximum)
+                .expand(10.0)
+                .intersects(map_viewport);
+            assert!(
+                !sampled_route_may_intersect || may_intersect,
+                "control-hull culling must retain every sampled route that can reach the viewport"
+            );
+            if may_intersect {
+                candidate_routes += 1;
+            } else {
+                culled_routes += 1;
+            }
+        }
+        assert!(
+            candidate_routes > 0,
+            "visible contacts must remain paintable"
+        );
+        assert!(
+            culled_routes > 0,
+            "dense offscreen contacts should be skipped"
+        );
+        assert_eq!(candidate_routes + culled_routes, 576);
+        assert_eq!(candidate_routes, 156);
+        assert_eq!(culled_routes, 420);
+
+        fn count_map_edge_segments(shape: &egui::epaint::Shape) -> usize {
+            match shape {
+                egui::epaint::Shape::LineSegment { stroke, .. }
+                    if stroke.color == egui::Color32::from_rgb(66, 111, 129) =>
+                {
+                    1
+                }
+                egui::epaint::Shape::Vec(children) => {
+                    children.iter().map(count_map_edge_segments).sum()
+                }
+                _ => 0,
+            }
+        }
+
+        let mut app = App::automation_context(case, "/tmp/headless-dense-topology.case.json");
+        app.selected = Some(origin);
+        app.network_proximity_analysis = Some((origin, std::sync::Arc::new(analysis)));
+        let context = egui::Context::default();
+        let mut frame = eframe::Frame::_new_kittest();
+        let mut time = 0.0;
+        let _visible_heading = scroll_headless_until_text_at(
+            &context,
+            &mut app,
+            &mut frame,
+            &mut time,
+            "SAMPLED CONTACT TOPOLOGY",
+            egui::pos2(1_370.0, 780.0),
+        );
+        time += 1.0 / 60.0;
+        let shapes = render_headless_app_frame_at(
+            &context,
+            &mut app,
+            &mut frame,
+            time,
+            Vec::new(),
+            egui::vec2(1_440.0, 1_600.0),
+        );
+        assert!(find_headless_text_rect(&shapes, "GROUP CONTACT TOPOLOGY").is_some());
+        let painted_route_segments: usize = shapes
+            .iter()
+            .map(|clipped| count_map_edge_segments(&clipped.shape))
+            .sum();
+        let production_route_clip = shapes
+            .iter()
+            .find(|clipped| count_map_edge_segments(&clipped.shape) > 0)
+            .expect("production map paints at least one routed contact")
+            .clip_rect
+            .size();
+        assert!((production_route_clip.x - map_viewport.width()).abs() < 0.1);
+        assert!((production_route_clip.y - map_viewport.height()).abs() < 0.1);
+        assert!(
+            painted_route_segments > 0,
+            "dense map painted no base routes; visible text: {:?}",
+            collect_headless_texts(&shapes)
+        );
+        assert_eq!(
+            painted_route_segments,
+            candidate_routes * super::PROXIMITY_MAP_ROUTE_SEGMENTS,
+            "the production map should paint all twelve segments for each retained route"
+        );
+        assert!(painted_route_segments < 576 * super::PROXIMITY_MAP_ROUTE_SEGMENTS);
+        assert_eq!(painted_route_segments, 1_872);
+        println!(
+            "Dense topology production UI: 48 sampled groups, 576 contact pairs, {candidate_routes} modeled viewport candidates, {culled_routes} modeled hull-culled routes, {painted_route_segments} painted route segments, production route clip {:.1}×{:.1}",
+            production_route_clip.x, production_route_clip.y,
+        );
+    }
+
     fn count_proximity_selection_strokes(
         shapes: &[egui::epaint::ClippedShape],
         circle_strokes: bool,
