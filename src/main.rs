@@ -24100,37 +24100,62 @@ impl eframe::App for App {
                                     continue;
                                 }
                                 visible_relationship_count += 1;
-                                for (segment_index, segment) in points.windows(2).enumerate() {
-                                    match link.confidence.clamp(1, 3) {
-                                        1 if segment_index % 2 == 0 => {
-                                            p.circle_filled(
-                                                segment[0].lerp(segment[1], 0.5),
-                                                conditional_line_width.map_or(1.1, |width| width * 0.32)
+                                if link.confidence.clamp(1, 3) == 3
+                                    && ca.distance_sq(cb) > f32::EPSILON
+                                {
+                                    // The ordinary route is quadratic. Recover its control
+                                    // point from the exact t=0.5 sample so paint uses one
+                                    // native curve shape while hit testing and culling keep
+                                    // using the shared sampled route.
+                                    let midpoint = points[points.len() / 2].to_vec2();
+                                    let control = midpoint * 2.0
+                                        - (ca.to_vec2() + cb.to_vec2()) * 0.5;
+                                    p.add(egui::Shape::QuadraticBezier(
+                                        egui::epaint::QuadraticBezierShape::from_points_stroke(
+                                            [ca, egui::pos2(control.x, control.y), cb],
+                                            false,
+                                            egui::Color32::TRANSPARENT,
+                                            (
+                                                conditional_line_width.unwrap_or(2.0)
                                                     * self.chart_zoom,
                                                 col,
-                                            );
-                                        }
-                                        2 if segment_index % 4 < 2 => {
-                                            p.line_segment(
-                                                [segment[0], segment[1]],
-                                                (
-                                                    conditional_line_width.unwrap_or(1.5)
+                                            ),
+                                        ),
+                                    ));
+                                } else {
+                                    for (segment_index, segment) in points.windows(2).enumerate() {
+                                        match link.confidence.clamp(1, 3) {
+                                            1 if segment_index % 2 == 0 => {
+                                                p.circle_filled(
+                                                    segment[0].lerp(segment[1], 0.5),
+                                                    conditional_line_width
+                                                        .map_or(1.1, |width| width * 0.32)
                                                         * self.chart_zoom,
                                                     col,
-                                                ),
-                                            );
+                                                );
+                                            }
+                                            2 if segment_index % 4 < 2 => {
+                                                p.line_segment(
+                                                    [segment[0], segment[1]],
+                                                    (
+                                                        conditional_line_width.unwrap_or(1.5)
+                                                            * self.chart_zoom,
+                                                        col,
+                                                    ),
+                                                );
+                                            }
+                                            3 => {
+                                                p.line_segment(
+                                                    [segment[0], segment[1]],
+                                                    (
+                                                        conditional_line_width.unwrap_or(2.0)
+                                                            * self.chart_zoom,
+                                                        col,
+                                                    ),
+                                                );
+                                            }
+                                            _ => {}
                                         }
-                                        3 => {
-                                            p.line_segment(
-                                                [segment[0], segment[1]],
-                                                (
-                                                    conditional_line_width.unwrap_or(2.0)
-                                                        * self.chart_zoom,
-                                                    col,
-                                                ),
-                                            );
-                                        }
-                                        _ => {}
                                     }
                                 }
                                 if link.directed {
@@ -29873,7 +29898,7 @@ fn connection_curve_points(
     end: egui::Pos2,
     lane: f32,
     is_self_loop: bool,
-) -> Vec<egui::Pos2> {
+) -> [egui::Pos2; 17] {
     const STEPS: usize = 16;
     if is_self_loop || start.distance_sq(end) <= f32::EPSILON {
         let radius = lane.abs().max(18.0) * 3.0;
@@ -29889,17 +29914,15 @@ fn connection_curve_points(
                 start + egui::vec2(2.0 * radius * lane_side, radius),
             )
         };
-        return (0..=STEPS)
-            .map(|step| {
-                let t = step as f32 / STEPS as f32;
-                let inverse = 1.0 - t;
-                let point = start.to_vec2() * inverse.powi(3)
-                    + first_control.to_vec2() * (3.0 * inverse.powi(2) * t)
-                    + second_control.to_vec2() * (3.0 * inverse * t.powi(2))
-                    + end.to_vec2() * t.powi(3);
-                egui::pos2(point.x, point.y)
-            })
-            .collect();
+        return std::array::from_fn(|step| {
+            let t = step as f32 / STEPS as f32;
+            let inverse = 1.0 - t;
+            let point = start.to_vec2() * inverse.powi(3)
+                + first_control.to_vec2() * (3.0 * inverse.powi(2) * t)
+                + second_control.to_vec2() * (3.0 * inverse * t.powi(2))
+                + end.to_vec2() * t.powi(3);
+            egui::pos2(point.x, point.y)
+        });
     }
     let direction = (end - start).normalized();
     let normal = if direction.length_sq() == 0.0 {
@@ -29908,16 +29931,14 @@ fn connection_curve_points(
         egui::vec2(-direction.y, direction.x)
     };
     let control = start.lerp(end, 0.5) + normal * lane * 2.0;
-    (0..=STEPS)
-        .map(|step| {
-            let t = step as f32 / STEPS as f32;
-            let inverse = 1.0 - t;
-            let point = start.to_vec2() * (inverse * inverse)
-                + control.to_vec2() * (2.0 * inverse * t)
-                + end.to_vec2() * (t * t);
-            egui::pos2(point.x, point.y)
-        })
-        .collect()
+    std::array::from_fn(|step| {
+        let t = step as f32 / STEPS as f32;
+        let inverse = 1.0 - t;
+        let point = start.to_vec2() * (inverse * inverse)
+            + control.to_vec2() * (2.0 * inverse * t)
+            + end.to_vec2() * (t * t);
+        egui::pos2(point.x, point.y)
+    })
 }
 
 /// Conservatively keeps a routed record when its line or nearby chart

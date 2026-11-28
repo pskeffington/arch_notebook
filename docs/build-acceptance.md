@@ -1,5 +1,23 @@
 # Local build acceptance record
 
+## Main chart topology route rendering — 2026-11-27
+
+**Repository / branch / baseline:** `/home/sysadmin/github/arch_notebook` / `codex/ui-00-chart-baseline` / `0763a00dfa893d3b0e86bf27ee15e6844a23cb82`.
+
+Solid confidence-3 chart relationships now paint as a native quadratic Bézier shape instead of 16 individual segment strokes. The control point is recovered from the shared route midpoint, so drawing follows the same quadratic used by route sampling, culling, picking, and arrowheads. Sampled route points now use a fixed 17-point array instead of a heap `Vec`; dotted, dashed, self-loop, and coincident-endpoint routes retain their existing segment rendering.
+
+| Gate | Result | Evidence |
+| --- | --- | --- |
+| Focused route regressions | PASS | `connection_curve_has_finite_endpoints_and_bends_for_parallel_lanes` and `chart_link_route_culling_preserves_crossings_and_nearby_decorations` passed. |
+| Full offline Rust suite | PASS | 71 passed, 0 failed, 3 ignored. |
+| Locked offline check and debug build | PASS | Both exited 0. |
+| Formatting and diff validation | PASS | `cargo fmt --all -- --check` and `git diff --check` passed. |
+| Clinton real-corpus production UI benchmark | PASS, headless | 2,813 entities / 6,173 records loaded; 48 groups / 47 sampled pairs / 1,315 represented records. The paired frame benchmark passed. It does not measure the solid-link Bézier path because the retained corpus ties use confidence 1; no renderer speedup is claimed from these timings. |
+| Topology source review | PASS | Read-only review confirmed the midpoint-derived control point matches the sampled quadratic; native visual and GPU validation were not performed. |
+| Exact-head CI | PENDING | Candidate source has not yet been pushed through CI. |
+
+Exact command output and limits: [PROXIMITY-MAP-ROUTE-PAINT-01](evidence/vector-ui/PROXIMITY-MAP-ROUTE-PAINT-01-linux.md).
+
 ## Topology selection feedback — 2026-11-27
 
 The sampled map now draws the selected group with a clear outer ring and the selected sampled contact pair with a contrasting wider stroke. Full-index selections outside the bounded sample are labeled accurately while exact-contact records remain available. The 70-test suite and retained Clinton topology UI/sampler pass, including omitted group/pair selections. Native pointer/contrast review remains blocked; exact-head CI is pending. See [PROXIMITY-MAP-SELECTION-FEEDBACK-01](evidence/vector-ui/PROXIMITY-MAP-SELECTION-FEEDBACK-01.md).
