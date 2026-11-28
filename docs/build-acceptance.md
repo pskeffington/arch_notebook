@@ -868,6 +868,18 @@ Quick open exposes Open case and New case. Both reuse the existing unsaved-chang
 
 Details: [UI-QUICK-OPEN-CASE-ACTIONS-01](evidence/vector-ui/UI-QUICK-OPEN-CASE-ACTIONS-01-20261128.md).
 
+## Current-user XML/XSLT release installation — 2026-11-28
+
+The release with the desktop XML/XSLT import workflow is installed in the current user's launcher. The executable, menu/Desktop shortcuts, icon graphics, case MIME definition, and SQL automation helper are synchronized with the tested repository assets.
+
+| Gate | Result | Evidence |
+| --- | --- | --- |
+| Isolated installer acceptance | PASS | Binary, menu/Desktop entries, graphics, helper, MIME definition, and version checks passed. |
+| Current-user install and artifact matching | PASS | Installed binary hash matches release; menu and Desktop entries validate and are identical; SVG/PNG and helper/MIME hashes match repository sources. |
+| Native XML/XSLT menu interaction and IBM validation | NOT TESTED | This installation acceptance does not exercise native input or vendor compatibility. |
+
+Exact hashes, commands, and limits: [LOCAL-INSTALL-14](evidence/deployment/LOCAL-INSTALL-14-linux.md).
+
 ## Current-user Quick open release installation — 2026-11-28
 
 The optimized release containing searchable Open case and New case actions is installed for the current Linux user. Release build, isolated installer acceptance, installed executable hash, matching desktop launchers, icon assets, MIME definition, and SQL helper all pass. Native display interaction and IBM validation remain open. Exact hashes and commands: [LOCAL-INSTALL-13](evidence/deployment/LOCAL-INSTALL-13-linux.md).
