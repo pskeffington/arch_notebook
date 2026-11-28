@@ -109,6 +109,8 @@ The nested-legend source is included in the later current-source acceptance: the
 
 **Primary Clinton QA on current installed release (2026-11-28):** saved SQL preflight and replay pass against the retained real corpus (6,173 rows, zero skipped, zero deltas); default-redacted network output covers all 2,813 entities with every label inside the viewport. The PDF, case, and SQLite source hashes stayed unchanged. PDF extraction completeness, Qwen analysis, and human content review remain unestablished. See [CLINTON-CORPUS-QA-05](docs/evidence/sql-automation/CLINTON-CORPUS-QA-05-installed-release-20261128.md).
 
+**Current SQL automation regression (2026-11-28):** installed-release capture/recovery and reviewed schema repair pass; 7,121 joined-header records retain composite identities with zero skipped; the five-cadence Linux scheduler harness passes with stubbed systemd. Live timer dispatch remains untested. See [SQL-AUTO-11](docs/evidence/sql-automation/SQL-AUTO-11-current-installed-release-20261128.md).
+
 **Temporary build/test archive (2026-11-27):** moved 3.2 GB of inactive Arch Notebook build targets and test artifacts to the Research SMB share at `EVIDENCE/arch_notebook/tmp-archive-2026-11-27`. The content-check reported no differences before local copies were removed; the active `/tmp/arch-notebook-target` remains. See [TMP-ARCHIVE-01 evidence](docs/evidence/TMP-ARCHIVE-01-linux.md).
 
 The Quick open case-action release is installed in the current user’s desktop and menu launchers; the optimized build and installer asset checks pass ([LOCAL-INSTALL-13](docs/evidence/deployment/LOCAL-INSTALL-13-linux.md)). Native pointer/keyboard review is still required.

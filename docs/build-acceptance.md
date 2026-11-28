@@ -893,6 +893,17 @@ The latest installed Rust release was rechecked against the real Clinton corpus 
 
 Full command, artifact hashes, and scope: [CLINTON-CORPUS-QA-05](evidence/sql-automation/CLINTON-CORPUS-QA-05-installed-release-20261128.md).
 
+## Current installed release SQL automation / scale / scheduler recheck — 2026-11-28
+
+The current per-user Rust release passed the synthetic SQL automation/recovery, 7,121-row joined-header scale, and Linux schedule/generated-runner acceptance harnesses. All scheduler operations ran against an isolated `systemctl` stub; live dispatch is not established.
+
+| Gate | Result | Evidence |
+| --- | --- | --- |
+| SQL capture, diagnosis, failure retention, repair, and batch recovery | PASS | [SQL-AUTO-11](evidence/sql-automation/SQL-AUTO-11-current-installed-release-20261128.md); [aggregate JSON](evidence/sql-automation/artifacts/SQL-AUTO-11-current-installed-release-20261128.json), SHA-256 `a348b239e8e67481e819724a2da908e4a6944fac0efb2ac8cc51f655c5a02713`. |
+| 7,121-row joined-header workload | PASS | 7,121 records captured, 1,500 endpoint entities, 0 skipped. [Aggregate JSON](evidence/sql-automation/artifacts/SQL-SCALE-02-current-installed-release-20261128.json), SHA-256 `1c6dfde1f7a252238cc1abed3be279eb2897cb59322c838acc762bee9a0d04ea`. |
+| Five-cadence Linux scheduler harness | PASS, stub-scoped | Dynamic window, generated invocation, status variants, and case isolation passed. [Aggregate JSON](evidence/sql-automation/artifacts/SQL-SCHED-11-current-installed-release-20261128.json), SHA-256 `481da061d8e5cb94e8e0ec796b4c97e28d544cc9c6e3be6b95c93a3079d7645c`. |
+| Live systemd dispatch and reboot recovery | NOT TESTED | No live timer delivery was observed. |
+
 ## Current-user Quick open release installation — 2026-11-28
 
 The optimized release containing searchable Open case and New case actions is installed for the current Linux user. Release build, isolated installer acceptance, installed executable hash, matching desktop launchers, icon assets, MIME definition, and SQL helper all pass. Native display interaction and IBM validation remain open. Exact hashes and commands: [LOCAL-INSTALL-13](evidence/deployment/LOCAL-INSTALL-13-linux.md).

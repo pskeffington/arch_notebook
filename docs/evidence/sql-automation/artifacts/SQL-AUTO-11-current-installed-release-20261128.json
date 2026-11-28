@@ -1,0 +1,256 @@
+{
+  "batch_ids": [
+    "910a140c-cab3-442f-a644-95a97444fb30",
+    "c2ac0829-c412-4b12-a85c-ef61ebef8a84"
+  ],
+  "batch_resume": {
+    "batch_id": "9e94f411-de4b-466c-9fc6-e0e0ad0d22fb",
+    "commands": [
+      {
+        "exit_code": 1,
+        "expected_exit_code": 1,
+        "label": "partial_batch_failure",
+        "stderr": "AUTOMATION BATCH ID \u00b7 9e94f411-de4b-466c-9fc6-e0e0ad0d22fb\nautomation failed; run history saved\n"
+      },
+      {
+        "exit_code": 0,
+        "expected_exit_code": 0,
+        "label": "resume_partial_batch",
+        "stderr": "AUTOMATION BATCH ID \u00b7 9e94f411-de4b-466c-9fc6-e0e0ad0d22fb\n"
+      },
+      {
+        "exit_code": 1,
+        "expected_exit_code": 1,
+        "label": "resume_configuration_mismatch",
+        "stderr": "automation failed: selected jobs or effective SQL configuration differ from batch 9e94f411-de4b-466c-9fc6-e0e0ad0d22fb; start a new run\n"
+      }
+    ],
+    "configuration_mismatch_preserved_case": true,
+    "initial_checkpoints": 1,
+    "result": "PASS",
+    "resume_skipped_successful_jobs": 1,
+    "runs_after_resume": 3,
+    "runs_before_resume": 2
+  },
+  "binary": "/home/sysadmin/.local/bin/arch-notebook",
+  "case_sha256_after_schema_preflight": "9c712c639bc6fb9c92864a893fd4c8598790734f5281f8ac95f31427788ccb2f",
+  "case_sha256_before_schema_preflight": "9c712c639bc6fb9c92864a893fd4c8598790734f5281f8ac95f31427788ccb2f",
+  "case_unchanged_during_chart_export": true,
+  "case_unchanged_during_schema_preflight": true,
+  "chart_csv_tsv_roundtrips": [
+    {
+      "case_sha256": "3fca4679a30598ce1fa02b7888940d7aa974762a4a2cb5fc4812b1b820cbf5d3",
+      "created_connections": 4,
+      "design_sha256": "947828b71845ee11258968d9473d0a978910d5de69cc41786af4aec5c890d356",
+      "entities": 5,
+      "export_sha256": "8e3848d830a35b3a47563c935986e4441de4cea10d51c436e0b6832c6e2e8613",
+      "exported_connections": 4,
+      "format": "CSV",
+      "relationships": 4,
+      "skipped": 0
+    },
+    {
+      "case_sha256": "a56ccb346247356eaeeab4c91439c58ff8997dc77753106b363c4bd1af92c7cf",
+      "created_connections": 4,
+      "design_sha256": "2d8ac6674c4e9c473f9c0af728c3ddb4b297bd68549da5e4c2bffc3d6f62bfe7",
+      "entities": 5,
+      "export_sha256": "5ce678ef9341a53ce4515ef0ec642d249b9f5801bbb9e0209d41c65d0dc68dcd",
+      "exported_connections": 4,
+      "format": "TSV",
+      "relationships": 4,
+      "skipped": 0
+    }
+  ],
+  "commands": [
+    {
+      "exit_code": 0,
+      "expected_exit_code": 0,
+      "label": "query_preflight"
+    },
+    {
+      "exit_code": 0,
+      "expected_exit_code": 0,
+      "label": "baseline_batch"
+    },
+    {
+      "exit_code": 0,
+      "expected_exit_code": 0,
+      "label": "current_override_batch"
+    },
+    {
+      "exit_code": 0,
+      "expected_exit_code": 0,
+      "label": "run_history"
+    },
+    {
+      "exit_code": 0,
+      "expected_exit_code": 0,
+      "label": "batch_history"
+    },
+    {
+      "exit_code": 0,
+      "expected_exit_code": 0,
+      "label": "comparison_export"
+    },
+    {
+      "exit_code": 1,
+      "expected_exit_code": 1,
+      "label": "schema_drift_preflight"
+    },
+    {
+      "exit_code": 1,
+      "expected_exit_code": 1,
+      "label": "failed_capture_record"
+    },
+    {
+      "exit_code": 0,
+      "expected_exit_code": 0,
+      "label": "failure_run_history"
+    },
+    {
+      "exit_code": 0,
+      "expected_exit_code": 0,
+      "label": "chart_csv_export"
+    },
+    {
+      "exit_code": 0,
+      "expected_exit_code": 0,
+      "label": "chart_csv_design_create"
+    },
+    {
+      "exit_code": 0,
+      "expected_exit_code": 0,
+      "label": "chart_csv_design_import"
+    },
+    {
+      "exit_code": 0,
+      "expected_exit_code": 0,
+      "label": "chart_csv_data_import"
+    },
+    {
+      "exit_code": 0,
+      "expected_exit_code": 0,
+      "label": "chart_tsv_export"
+    },
+    {
+      "exit_code": 0,
+      "expected_exit_code": 0,
+      "label": "chart_tsv_design_create"
+    },
+    {
+      "exit_code": 0,
+      "expected_exit_code": 0,
+      "label": "chart_tsv_design_import"
+    },
+    {
+      "exit_code": 0,
+      "expected_exit_code": 0,
+      "label": "chart_tsv_data_import"
+    },
+    {
+      "exit_code": 0,
+      "expected_exit_code": 0,
+      "label": "adapted_schema_inspection"
+    },
+    {
+      "exit_code": 1,
+      "expected_exit_code": 1,
+      "label": "schema_adaptation_failure"
+    },
+    {
+      "exit_code": 0,
+      "expected_exit_code": 0,
+      "label": "schema_adaptation_history"
+    },
+    {
+      "exit_code": 0,
+      "expected_exit_code": 0,
+      "label": "analyst_reviewed_query_validation"
+    },
+    {
+      "exit_code": 0,
+      "expected_exit_code": 0,
+      "label": "analyst_reviewed_query_capture"
+    },
+    {
+      "exit_code": 0,
+      "expected_exit_code": 0,
+      "label": "schema_adaptation_history_after_repair"
+    }
+  ],
+  "comparison_rows": 3,
+  "csv_and_tsv_values_match": true,
+  "database_sha256_after_captures": "cbb7a0a273b1b036145f89d652ab28adf24e1c8ac0177a98cf31f206c5b17d9c",
+  "database_sha256_after_failure_capture": "8d0f987b984d5ec24ae63efc9e37a14200f3f3dab66e3060391d216d4a66a460",
+  "database_sha256_after_schema_preflight": "8d0f987b984d5ec24ae63efc9e37a14200f3f3dab66e3060391d216d4a66a460",
+  "database_sha256_before_capture": "cbb7a0a273b1b036145f89d652ab28adf24e1c8ac0177a98cf31f206c5b17d9c",
+  "database_sha256_before_failure_capture": "8d0f987b984d5ec24ae63efc9e37a14200f3f3dab66e3060391d216d4a66a460",
+  "database_sha256_before_schema_preflight": "8d0f987b984d5ec24ae63efc9e37a14200f3f3dab66e3060391d216d4a66a460",
+  "expected_delta_kinds": [
+    "added",
+    "confidence_declined",
+    "removed",
+    "source_notes_changed"
+  ],
+  "failure_capture_run_id": "5c46110a-69ab-4dad-a491-682a1fd190b3",
+  "failure_capture_saved_case": true,
+  "failure_capture_snapshot_id": "4735dfd9-5fe3-4e58-8767-9d20264190ca",
+  "failure_capture_status": "FAIL",
+  "failure_run_history_retained": true,
+  "fixture": "sample_connections.sql",
+  "query_preflight_saved_case": false,
+  "result": "PASS",
+  "run_ids": [
+    "f52b133b-4b17-47f6-a8fb-9250d1c77450",
+    "0e4d98e7-4cff-47ab-9c59-d789d9eb5ed2"
+  ],
+  "saved_job_parameters_after_one_run_override": [
+    [
+      "snapshot_id",
+      "text:baseline"
+    ]
+  ],
+  "schema_adaptation": {
+    "case_sha256_after_failure": "ae1b244b6be7ad467b4fb4c34bc307d2122b0440e50475905db7fe42452cb309",
+    "case_sha256_after_repair": "885b0bbaae8861c4e804d1134ba057fd3c677bafec0d1efca5c2f8504efcfa4e",
+    "case_sha256_before_failure": "876fe27cad8fd85ae59a1c03de9e2e1f3f3a1306b92ff35356c3e306faf7908c",
+    "database_sha256": "33d2833bb6e114b0a6393b0729655ccee2dcdfe6aadf004fd403a4bb9822c51d",
+    "diagnosis": {
+      "baseline_available": true,
+      "baseline_fingerprint": "96752f467d6f42f436e343964cafcd83b2d2d9d2e3e1d263dd40e68193119807",
+      "current_fingerprint": "4a91a032bd45c082071b3f9f01ff3533eb1403394f5ed318479e4f489a628092",
+      "parameters_changed": false,
+      "query_changed": false,
+      "schema_changed": true,
+      "summary": "schema fingerprint changed since the prior snapshot (96752f467d6f \u2192 4a91a032bd45); query and typed parameters match the prior snapshot; this error alone does not establish schema drift"
+    },
+    "failed_run_saved": true,
+    "history_retained_after_repair": true,
+    "inspected_observed_date": true,
+    "reference": "event_date",
+    "reviewed_capture_connections": 4,
+    "reviewed_query_validated_without_case_write": true,
+    "structured_diagnosis_persisted": {
+      "hint": "the source schema may have changed; inspect the SQLite schema, rebuild or edit the query, then validate it before saving",
+      "kind": "missing_column",
+      "reference": "event_date"
+    }
+  },
+  "schema_preflight_changed": true,
+  "schema_preflight_saved_case": false,
+  "schema_preflight_status": "FAIL",
+  "schema_version": 1,
+  "snapshot_counts": [
+    4,
+    4
+  ],
+  "snapshot_ids": [
+    "2d29b311-3ceb-4504-b554-7fd3feb42b6f",
+    "eb8bf5ce-df0f-4173-84cc-00563c1966f4"
+  ],
+  "source_unchanged_during_captures": true,
+  "source_unchanged_during_chart_exchange": true,
+  "source_unchanged_during_failure_capture": true,
+  "source_unchanged_during_schema_preflight": true,
+  "work_dir": "/tmp/arch-notebook-sql-auto-current-install-20261128-evidence"
+}
