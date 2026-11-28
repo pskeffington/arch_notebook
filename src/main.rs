@@ -20439,9 +20439,75 @@ impl eframe::App for App {
                     ui.allocate_ui_with_layout(egui::vec2(canvas_w,avail.y),egui::Layout::top_down(egui::Align::Min),|ui|{
                         ui.set_min_size(egui::vec2(canvas_w,avail.y));
                         if self.page==WorkspacePage::Data {
-                            ui.horizontal(|ui|{ui.label(egui::RichText::new("CASE RECORDS").strong().color(cyan));ui.selectable_value(&mut self.data_mode,DataMode::Entities,"Entities");ui.selectable_value(&mut self.data_mode,DataMode::Relationships,"Connections");ui.selectable_value(&mut self.data_mode,DataMode::Sources,"Sources");ui.selectable_value(&mut self.data_mode,DataMode::SqlRegressions,"SQL regressions");ui.selectable_value(&mut self.data_mode,DataMode::Automation,"Automation");if self.data_mode==DataMode::Entities||self.data_mode==DataMode::Relationships{ui.label(egui::RichText::new("CSV/TSV carries connection identity, provenance, entity properties and colors").small().color(muted));}});
-                            ui.horizontal(|ui|{ui.label("Case file");ui.add(egui::TextEdit::singleline(&mut self.case_path_input).desired_width(260.0));ui.label("Description");ui.add(egui::TextEdit::singleline(&mut self.case.description).desired_width(260.0));});
-                                ui.horizontal(|ui|{ui.label("Import path");ui.add_enabled(self.import_inspection_worker.is_none(),egui::TextEdit::singleline(&mut self.import_path).desired_width(180.0));ui.label("Export path");ui.add(egui::TextEdit::singleline(&mut self.export_path).desired_width(180.0));ui.label("GraphML");ui.add(egui::TextEdit::singleline(&mut self.graphml_export_path).desired_width(180.0));ui.label("KML");ui.add(egui::TextEdit::singleline(&mut self.kml_export_path).desired_width(180.0));ui.label("ANX");ui.add(egui::TextEdit::singleline(&mut self.anx_export_path).desired_width(180.0));});
+                            if self.data_mode == DataMode::Automation {
+                                ui.label(
+                                    egui::RichText::new("SQL AUTOMATION")
+                                        .strong()
+                                        .color(cyan),
+                                );
+                            } else {
+                                ui.horizontal(|ui| {
+                                    ui.label(egui::RichText::new("CASE RECORDS").strong().color(cyan));
+                                    ui.selectable_value(&mut self.data_mode, DataMode::Entities, "Entities");
+                                    ui.selectable_value(&mut self.data_mode, DataMode::Relationships, "Connections");
+                                    ui.selectable_value(&mut self.data_mode, DataMode::Sources, "Sources");
+                                    ui.selectable_value(&mut self.data_mode, DataMode::SqlRegressions, "SQL regressions");
+                                    ui.selectable_value(&mut self.data_mode, DataMode::Automation, "Automation");
+                                    if self.data_mode == DataMode::Entities
+                                        || self.data_mode == DataMode::Relationships
+                                    {
+                                        ui.label(
+                                            egui::RichText::new("CSV/TSV carries connection identity, provenance, entity properties and colors")
+                                                .small()
+                                                .color(muted),
+                                        );
+                                    }
+                                });
+                            }
+                            ui.horizontal(|ui| {
+                                ui.label("Case file");
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut self.case_path_input)
+                                        .desired_width(260.0),
+                                );
+                                if self.data_mode != DataMode::Automation {
+                                    ui.label("Description");
+                                    ui.add(
+                                        egui::TextEdit::singleline(&mut self.case.description)
+                                            .desired_width(260.0),
+                                    );
+                                }
+                            });
+                            if self.data_mode != DataMode::Automation {
+                                ui.horizontal(|ui| {
+                                    ui.label("Import path");
+                                    ui.add_enabled(
+                                        self.import_inspection_worker.is_none(),
+                                        egui::TextEdit::singleline(&mut self.import_path)
+                                            .desired_width(180.0),
+                                    );
+                                    ui.label("Export path");
+                                    ui.add(
+                                        egui::TextEdit::singleline(&mut self.export_path)
+                                            .desired_width(180.0),
+                                    );
+                                    ui.label("GraphML");
+                                    ui.add(
+                                        egui::TextEdit::singleline(&mut self.graphml_export_path)
+                                            .desired_width(180.0),
+                                    );
+                                    ui.label("KML");
+                                    ui.add(
+                                        egui::TextEdit::singleline(&mut self.kml_export_path)
+                                            .desired_width(180.0),
+                                    );
+                                    ui.label("ANX");
+                                    ui.add(
+                                        egui::TextEdit::singleline(&mut self.anx_export_path)
+                                            .desired_width(180.0),
+                                    );
+                                });
+                            }
                             if self.data_mode==DataMode::Automation {
                                 let automation_case_saved =
                                     self.disk_case_json.is_some() && !self.has_unsaved_changes();
@@ -48511,6 +48577,56 @@ mod tests {
             "Automation",
             "sql jobs scheduled captures"
         ));
+    }
+
+    #[test]
+    fn automation_workspace_hides_duplicate_navigation_and_file_exchange_fields() {
+        let mut case: CaseFile =
+            serde_json::from_str(include_str!("../fixtures/chart/correctness.case.json"))
+                .expect("correctness fixture is a valid case");
+        case.description = "Retained case description".into();
+        let mut app = App::automation_context(case, "/tmp/automation-workspace-ui.case.json");
+        app.page = super::WorkspacePage::Data;
+        app.data_mode = super::DataMode::Automation;
+        app.import_path = "sample.csv".into();
+        app.export_path = "chart.csv".into();
+
+        let context = egui::Context::default();
+        let mut frame = eframe::Frame::_new_kittest();
+        let automation_ui =
+            render_headless_app_frame(&context, &mut app, &mut frame, 0.0, Vec::new());
+        for visible in [
+            "AUTOMATION",
+            "Case file",
+            "SQL AUTOMATION",
+            "REPEATABLE SQL INGESTION JOBS",
+        ] {
+            assert!(
+                find_headless_text_point(&automation_ui, visible).is_some(),
+                "expected visible Automation workspace control: {visible}"
+            );
+        }
+        for hidden in ["CASE RECORDS", "Description", "Import path", "Export path"] {
+            assert!(
+                find_headless_text_point(&automation_ui, hidden).is_none(),
+                "irrelevant control should be hidden in Automation: {hidden}"
+            );
+        }
+
+        app.data_mode = super::DataMode::Relationships;
+        let connections_ui =
+            render_headless_app_frame(&context, &mut app, &mut frame, 1.0 / 60.0, Vec::new());
+        for visible in ["CASE RECORDS", "Description", "Import path", "Export path"] {
+            assert!(
+                find_headless_text_point(&connections_ui, visible).is_some(),
+                "Connections workspace should retain its case and interchange control: {visible}"
+            );
+        }
+        assert!(find_headless_text_point(&connections_ui, "Retained case description").is_some());
+        assert!(find_headless_text_point(&connections_ui, "sample.csv").is_some());
+        assert!(find_headless_text_point(&connections_ui, "chart.csv").is_some());
+        assert_eq!(app.import_path, "sample.csv");
+        assert_eq!(app.export_path, "chart.csv");
     }
 
     #[test]
