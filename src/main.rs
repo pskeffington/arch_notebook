@@ -88,6 +88,11 @@ fn record_chart_diagnostic(
     }
 }
 
+fn case_disk_signature(path: &Path) -> Option<(u64, SystemTime)> {
+    let metadata = fs::metadata(path).ok()?;
+    Some((metadata.len(), metadata.modified().ok()?))
+}
+
 fn sqlite_capture_error(error: rusqlite::Error, retryable_lock: &AtomicBool) -> String {
     if matches!(
         &error,
@@ -2987,6 +2992,9 @@ struct App {
     case_path_input: String,
     saved_case_json: Option<String>,
     disk_case_json: Option<String>,
+    case_disk_signature: Option<(u64, SystemTime)>,
+    case_disk_check_at: Instant,
+    external_case_update: bool,
     pending_case_action: Option<PendingCaseAction>,
     pending_chart_delete: Option<Uuid>,
     command_palette_open: bool,
@@ -3573,6 +3581,7 @@ impl Default for App {
         let initial_editor_chart_id = case.active_chart_id;
         let initial_chart_fit_entities =
             fit_initial_chart.then(|| case.entities.iter().map(|entity| entity.id).collect());
+        let case_disk_signature = case_disk_signature(Path::new(&case_path));
         Self {
             case,
             selected: None,
@@ -3689,6 +3698,9 @@ impl Default for App {
             case_path_input: case_path,
             saved_case_json,
             disk_case_json,
+            case_disk_signature,
+            case_disk_check_at: Instant::now(),
+            external_case_update: false,
             pending_case_action: None,
             pending_chart_delete: None,
             command_palette_open: false,
@@ -5304,6 +5316,7 @@ impl App {
         let chart_zoom = clamp_chart_zoom(case.active_chart_zoom);
         let chart_pan = chart_pan_from_saved(case.active_chart_pan);
         let editor_chart_id = case.active_chart_id;
+        let case_disk_signature = case_disk_signature(Path::new(case_path));
         Self {
             case,
             selected: None,
@@ -5411,6 +5424,9 @@ impl App {
             case_path_input: case_path.to_owned(),
             saved_case_json,
             disk_case_json: None,
+            case_disk_signature,
+            case_disk_check_at: Instant::now(),
+            external_case_update: false,
             pending_case_action: None,
             pending_chart_delete: None,
             command_palette_open: false,
@@ -5523,6 +5539,30 @@ impl App {
         case.active_chart_zoom = clamp_chart_zoom(self.chart_zoom);
         case.active_chart_pan = [self.chart_pan.x, self.chart_pan.y];
         serde_json::to_string(&case).ok()
+    }
+
+    fn poll_external_case_update(&mut self) {
+        if self.case_disk_check_at.elapsed() < Duration::from_secs(1) {
+            return;
+        }
+        self.case_disk_check_at = Instant::now();
+        let Some(signature) = case_disk_signature(Path::new(self.case_path.trim())) else {
+            return;
+        };
+        if self.case_disk_signature != Some(signature) {
+            if let Ok(contents) = fs::read_to_string(self.case_path.trim())
+                && self.disk_case_json.as_deref() != Some(contents.as_str())
+            {
+                self.external_case_update = true;
+            }
+            self.case_disk_signature = Some(signature);
+        }
+    }
+
+    fn note_case_disk_synchronized(&mut self) {
+        self.case_disk_signature = case_disk_signature(Path::new(self.case_path.trim()));
+        self.case_disk_check_at = Instant::now();
+        self.external_case_update = false;
     }
 
     fn install_automation_schedule(&mut self) {
@@ -5777,6 +5817,7 @@ impl App {
         match result {
             Ok(disk_case_json) => {
                 self.disk_case_json = Some(disk_case_json);
+                self.note_case_disk_synchronized();
                 self.saved_case_json = self.current_case_json();
                 self.case_path_input = self.case_path.clone();
                 self.status = format!("CASE SAVED · {}", self.case_path);
@@ -5804,6 +5845,7 @@ impl App {
                     self.reset_automation_schedule_controls();
                 }
                 self.disk_case_json = Some(disk_case_json);
+                self.note_case_disk_synchronized();
                 self.saved_case_json = self.current_case_json();
                 self.status = format!("CASE SAVED · {}", self.case_path);
             }
@@ -5848,6 +5890,7 @@ impl App {
                 self.case_path = requested_path.clone();
                 self.case_path_input = requested_path;
                 self.disk_case_json = Some(disk_case_json);
+                self.note_case_disk_synchronized();
                 self.saved_case_json = self.current_case_json();
                 self.sql_snapshot_source = None;
                 self.sql_snapshot_index = None;
@@ -14504,6 +14547,7 @@ impl App {
             .into_owned();
         self.case_path_input = self.case_path.clone();
         self.disk_case_json = fs::read_to_string(&self.case_path).ok();
+        self.note_case_disk_synchronized();
         self.clear_chart_entity_selection();
         self.selected_link = None;
         self.path_start = None;
@@ -20112,6 +20156,7 @@ fn path_record_exclusion_reason(
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
         self.poll_community_layout_worker(ctx);
+        self.poll_external_case_update();
         if ctx.input(|input| input.viewport().close_requested())
             && (self.automation_worker.is_some()
                 || self.automation_schedule_worker.is_some()
@@ -20632,6 +20677,7 @@ impl eframe::App for App {
                             case.chart_coordinate_bounds = None;
                             self.case = case;
                             self.disk_case_json = Some(disk_case_json);
+                            self.note_case_disk_synchronized();
                             self.saved_case_json = self.current_case_json();
                             self.selected_link = selected_link;
                             if chart_fit_entities.is_some() {
@@ -20660,6 +20706,7 @@ impl eframe::App for App {
                             case.chart_coordinate_bounds = None;
                             self.case = case;
                             self.disk_case_json = Some(disk_case_json);
+                            self.note_case_disk_synchronized();
                             self.saved_case_json = self.current_case_json();
                             self.selected_link = selected_link;
                             if chart_fit_entities.is_some() {
@@ -20985,10 +21032,18 @@ impl eframe::App for App {
                                     self.automation_worker.is_none()
                                         && self.automation_schedule_worker.is_none()
                                         && Path::new(&self.case_path).is_file(),
-                                    egui::Button::new("Reload case"),
+                                    egui::Button::new(if self.external_case_update {
+                                        "Reload updated case"
+                                    } else {
+                                        "Reload case"
+                                    }),
                                 )
                                 .on_hover_text(
-                                    "Reload the active case file from disk, including captures written by a scheduled SQL run. Unsaved changes prompt before they are discarded.",
+                                    if self.external_case_update {
+                                        "The case file changed on disk, possibly from a scheduled SQL run. Reload to review the saved results; unsaved changes prompt before they are discarded."
+                                    } else {
+                                        "Reload the active case file from disk, including captures written by a scheduled SQL run. Unsaved changes prompt before they are discarded."
+                                    },
                                 )
                                 .clicked()
                             {
@@ -53063,6 +53118,45 @@ mod tests {
             "Automation",
             "sql jobs scheduled captures"
         ));
+    }
+
+    #[test]
+    fn external_case_update_is_detected_and_offered_without_replacing_memory() {
+        let root = std::env::temp_dir().join(format!(
+            "arch-notebook-external-case-update-{}",
+            Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).expect("create case update fixture directory");
+        let case_path = root.join("scheduled.case.json");
+        let case: CaseFile =
+            serde_json::from_str(include_str!("../fixtures/chart/correctness.case.json"))
+                .expect("correctness fixture parses");
+        let original_title = case.title.clone();
+        let baseline = serde_json::to_string(&case).expect("serialize baseline case");
+        std::fs::write(&case_path, &baseline).expect("write baseline case");
+        let mut app = App::automation_context(case, &case_path.to_string_lossy());
+        app.disk_case_json = Some(baseline.clone());
+
+        let mut externally_updated: CaseFile =
+            serde_json::from_str(include_str!("../fixtures/chart/correctness.case.json"))
+                .expect("updated correctness fixture parses");
+        externally_updated.title = "Scheduled case update".into();
+        let updated = serde_json::to_string(&externally_updated).expect("serialize updated case");
+        std::fs::write(&case_path, updated).expect("replace case with external update");
+        app.case_disk_check_at = std::time::Instant::now() - std::time::Duration::from_secs(2);
+
+        app.poll_external_case_update();
+
+        assert!(app.external_case_update);
+        assert_eq!(app.case.title, original_title);
+        assert_eq!(app.disk_case_json.as_deref(), Some(baseline.as_str()));
+
+        let context = egui::Context::default();
+        let mut frame = eframe::Frame::_new_kittest();
+        let shapes = render_headless_app_frame(&context, &mut app, &mut frame, 0.0, Vec::new());
+        assert!(find_headless_text_point(&shapes, "Reload updated case").is_some());
+        drop(app);
+        std::fs::remove_dir_all(root).expect("remove case update fixture directory");
     }
 
     #[test]

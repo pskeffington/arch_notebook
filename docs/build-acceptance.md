@@ -1,5 +1,20 @@
 # Local build acceptance record
 
+## External scheduled-case update indicator — 2026-11-28
+
+The desktop now checks the active case file's size and modification time once per second. When it detects a changed signature, it reads the file and compares contents with the last synchronized baseline; a real external update changes the action to **Reload updated case**. It does not replace in-memory data automatically. Reload still uses the unsaved-change confirmation, and the atomic-save conflict guard prevents stale in-memory data from overwriting the external update.
+
+| Gate | Result | Evidence |
+| --- | --- | --- |
+| External update detection and UI regression | PASS | `external_case_update_is_detected_and_offered_without_replacing_memory` replaces a case file externally, verifies the app flags it, confirms in-memory case data is unchanged, and checks the explicit reload action appears. |
+| Existing unsaved-reload confirmation | PASS | `quick_case_actions_keep_the_unsaved_change_confirmation` continues to cover the discard-confirmation path. |
+| Full Rust suite | PASS | `CARGO_TARGET_DIR=/tmp/arch-notebook-target cargo test --locked --offline`: 110 passed, 0 failed, 3 ignored. |
+| Locked workspace check | PASS | `CARGO_TARGET_DIR=/tmp/arch-notebook-target cargo check --locked --offline`: exit 0. |
+| Debug build | PASS | `CARGO_TARGET_DIR=/tmp/arch-notebook-target cargo build --locked --offline`: exit 0. |
+| Optimized release build | PASS | `CARGO_TARGET_DIR=/tmp/arch-notebook-target cargo build --release --locked --offline`: exit 0; binary SHA-256 recorded in the commit handoff. |
+| Formatting and diff validation | PASS | `cargo fmt --all -- --check` and `git diff --check`: exit 0. |
+| Live systemd timer / SQL capture | NOT TESTED | This test covers external file replacement and safe UI signaling, not actual host timer dispatch. |
+
 ## Quick Open keyboard navigation and chart destinations — 2026-11-28
 
 Quick Open supports multiword search across labels and keywords, arrow-key selection with a visible active row, Enter activation, a bounded scroll area that reveals the active match, and direct destinations for named chart tabs, saved SQL captures, and automation runs. Selecting a capture or run only changes the review destination and filters; it does not rerun SQL or create a snapshot.
