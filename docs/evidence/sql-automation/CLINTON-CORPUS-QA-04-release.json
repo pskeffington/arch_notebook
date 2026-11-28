@@ -1,0 +1,65 @@
+{
+  "automation": {
+    "latest_saved_run_delta_counts": {
+      "added": 0,
+      "changed_records": 0,
+      "removed": 0
+    },
+    "latest_saved_run_relationship_rows": 6173,
+    "latest_saved_run_replay_exit_code": 0,
+    "latest_saved_run_skipped_rows": 0,
+    "latest_saved_run_status": "PASS",
+    "query_only_jobs_failed": 0,
+    "query_only_jobs_passed": 1,
+    "query_only_preflight_exit_code": 0
+  },
+  "binary_sha256": "f5ad767d85b6c4d4384a199f689cb896b2b414105c5bf8a8a2f1b2264bb39dd1",
+  "case_sha256": "6143c16d3f66964991f80184d6e2a4d165553bf9443ac3cb6bfbeea930fa255b",
+  "database_sha256": "fe9dcdf26f3810a0df3905ddf217cfd45704fd412f1509e1e379d2bb1483e071",
+  "default_redacted_analysis_packet": {
+    "community_member_entities": 2813,
+    "cross_community_contact_rows": 945,
+    "cross_community_proxy_candidates": 291,
+    "detected_communities": 643,
+    "entities": 2813,
+    "labels_outside_svg_viewport": 0,
+    "largest_same_y_row": 4,
+    "names_relationship_labels_ids_evidence_references_included": false,
+    "output_permissions": {
+      "directory": "0o700",
+      "report": "0o600",
+      "svg": "0o600"
+    },
+    "relationship_records": 6173,
+    "rendered_entity_centers": 2813,
+    "saved_entities_with_out_of_range_positions": 2793,
+    "unique_rendered_y_rows": 704
+  },
+  "human_content_review": "NOT RUN by this local acceptance",
+  "pdf_extraction_completeness": "NOT ESTABLISHED by this local acceptance",
+  "pdf_sha256": "00a9b9e879ffb1835cb216b69f2488e776726f6c239acccae5025b860d4805e9",
+  "qwen_analysis": "NOT RUN by this local acceptance",
+  "read_only_inputs_unchanged": true,
+  "result": "PASS",
+  "saved_case": {
+    "entities": 2813,
+    "relationship_records": 6173,
+    "snapshot_relationship_rows": [
+      6173,
+      6173
+    ],
+    "snapshots": 2,
+    "sql_batch_statuses": [
+      "COMPLETE",
+      "COMPLETE"
+    ],
+    "sql_batches": 2,
+    "sql_run_statuses": [
+      "PASS",
+      "PASS"
+    ],
+    "sql_runs": 2
+  },
+  "schema_version": 1,
+  "suite": "arch_notebook_clinton_corpus_primary_qa"
+}
