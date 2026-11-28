@@ -1662,6 +1662,31 @@ fn proximity_map_route_length(route: &[egui::Pos2]) -> f32 {
         .sum()
 }
 
+fn proximity_map_route_intersects_viewport(route: &[egui::Pos2], viewport: egui::Rect) -> bool {
+    let Some(first) = route.first().copied() else {
+        return true;
+    };
+    if !first.x.is_finite() || !first.y.is_finite() {
+        return true;
+    }
+    let mut minimum = first;
+    let mut maximum = first;
+    for point in route.iter().copied().skip(1) {
+        if !point.x.is_finite() || !point.y.is_finite() {
+            return true;
+        }
+        minimum.x = minimum.x.min(point.x);
+        minimum.y = minimum.y.min(point.y);
+        maximum.x = maximum.x.max(point.x);
+        maximum.y = maximum.y.max(point.y);
+    }
+    // Keep route strokes, arrows and the 8-point picking tolerance available
+    // when their centerline sits just beyond the scroll viewport edge.
+    egui::Rect::from_min_max(minimum, maximum)
+        .expand(10.0)
+        .intersects(viewport)
+}
+
 fn proximity_map_route_point_with_offset(
     route: &[egui::Pos2],
     distance: f32,
@@ -26409,29 +26434,34 @@ impl eframe::App for App {
                                             );
                                         }
                                     }
-                                    let visible_interactions: Vec<usize> = analysis
-                                        .map_interaction_indices
-                                        .iter()
-                                        .copied()
-                                        .filter(|index| {
-                                            let interaction = &analysis.interactions[*index];
-                                            positions.contains_key(&interaction.first_group)
-                                                && positions.contains_key(&interaction.second_group)
-                                        })
-                                        .collect();
-                                    let mut visible_routes =
-                                        Vec::with_capacity(visible_interactions.len());
-                                    for interaction_index in &visible_interactions {
+                                    let pointer_click = if response.clicked() {
+                                        ui.input(|input| input.pointer.interact_pos())
+                                    } else {
+                                        None
+                                    };
+                                    let mut nearest_route = None;
+                                    let route_viewport = ui.clip_rect();
+                                    for interaction_index in &analysis.map_interaction_indices {
                                         let interaction = &analysis.interactions[*interaction_index];
+                                        let (Some(first), Some(second)) = (
+                                            positions.get(&interaction.first_group).copied(),
+                                            positions.get(&interaction.second_group).copied(),
+                                        ) else {
+                                            continue;
+                                        };
                                         let is_selected = self.selected_proximity_interaction
                                             == Some((interaction.first_group, interaction.second_group));
-                                        let first = positions[&interaction.first_group];
-                                        let second = positions[&interaction.second_group];
                                         let route = proximity_map_edge_route(
                                             first,
                                             second,
                                             *interaction_index,
                                         );
+                                        if !proximity_map_route_intersects_viewport(
+                                            &route,
+                                            route_viewport,
+                                        ) {
+                                            continue;
+                                        }
                                         let edge_width = (1.0_f32
                                             + (interaction.relationship_record_count as f32).log2())
                                         .clamp(1.0, 4.0);
@@ -26491,7 +26521,24 @@ impl eframe::App for App {
                                                 );
                                             }
                                         }
-                                        visible_routes.push((*interaction_index, route));
+                                        if let Some(pointer) = pointer_click {
+                                            let distance = route
+                                                .windows(2)
+                                                .map(|segment| {
+                                                    proximity_map_distance_to_segment(
+                                                        pointer,
+                                                        segment[0],
+                                                        segment[1],
+                                                    )
+                                                })
+                                                .fold(f32::INFINITY, f32::min);
+                                            if nearest_route.is_none_or(|(nearest, _)| {
+                                                distance < nearest
+                                            }) {
+                                                nearest_route =
+                                                    Some((distance, *interaction_index));
+                                            }
+                                        }
                                     }
                                     let mut node_clicked = false;
                                     for group_index in analysis.map_group_indices.iter().copied() {
@@ -26545,28 +26592,8 @@ impl eframe::App for App {
                                             self.selected_proximity_interaction = None;
                                         }
                                     }
-                                    let nearest = response
-                                        .clicked()
-                                        .then(|| ui.input(|input| input.pointer.interact_pos()))
-                                        .flatten()
-                                        .and_then(|pointer| {
-                                        visible_routes
-                                            .iter()
-                                            .filter_map(|(interaction_index, route)| {
-                                                let distance = route
-                                                    .windows(2)
-                                                    .map(|segment| proximity_map_distance_to_segment(
-                                                        pointer,
-                                                        segment[0],
-                                                        segment[1],
-                                                    ))
-                                                    .fold(f32::INFINITY, f32::min);
-                                                Some((distance, *interaction_index))
-                                            })
-                                            .min_by(|left, right| left.0.total_cmp(&right.0))
-                                        });
                                     if !node_clicked && response.clicked()
-                                        && let Some((distance, interaction_index)) = nearest
+                                        && let Some((distance, interaction_index)) = nearest_route
                                         && distance <= 8.0
                                     {
                                         let interaction = &analysis.interactions[interaction_index];
@@ -45095,6 +45122,30 @@ mod tests {
             0.0,
             "line picking should hit the rendered route itself"
         );
+    }
+
+    #[test]
+    fn proximity_map_route_culling_keeps_crossings_and_pickable_edges() {
+        let viewport = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(100.0, 80.0));
+        assert!(super::proximity_map_route_intersects_viewport(
+            &[egui::pos2(-200.0, 40.0), egui::pos2(200.0, 40.0)],
+            viewport,
+        ));
+        assert!(
+            super::proximity_map_route_intersects_viewport(
+                &[egui::pos2(-8.0, 20.0), egui::pos2(-8.0, 60.0)],
+                viewport,
+            ),
+            "route within the pointer-picking margin should remain interactive"
+        );
+        assert!(!super::proximity_map_route_intersects_viewport(
+            &[egui::pos2(-100.0, -100.0), egui::pos2(-50.0, -50.0)],
+            viewport,
+        ));
+        assert!(super::proximity_map_route_intersects_viewport(
+            &[],
+            viewport
+        ));
     }
 
     fn count_proximity_selection_strokes(

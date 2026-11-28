@@ -1,5 +1,24 @@
 # Local build acceptance record
 
+## Sampled topology viewport culling — 2026-11-27
+
+**Repository / branch / baseline:** `/home/sysadmin/github/arch_notebook` / `codex/ui-00-chart-baseline` / `8af57a12649dadd5478d08289caf2cdf6de2060b`.
+
+The sampled contact map now omits interaction routes whose sampled bounds are outside the scroll area's clip rectangle. Bounds include a 10-point margin for stroke, arrow, and picking reach. Routes crossing the viewport remain available even when both endpoints are outside. Route geometry is no longer stored in a frame-sized vector; on a click, the renderer tracks only the nearest visible route candidate, preserving node-click priority. A headless regression checks crossing, offscreen, empty, and near-edge routes.
+
+| Gate | Result | Evidence |
+| --- | --- | --- |
+| Route culling regression | PASS | `proximity_map_route_culling_keeps_crossings_and_pickable_edges` passed; existing production UI route-picking regression remains in the full suite. |
+| Full offline Rust suite | PASS | 72 passed, 0 failed, 3 ignored. |
+| Locked offline check / debug build / formatting | PASS | All exited 0; `git diff --check` also passed. |
+| Clinton real-corpus production UI | PASS, headless | 2,813 entities / 6,173 links; 48 groups / 47 contact pairs / 1,315 represented records. |
+| Matched topology frame shape count | PASS, observed | With the topology panel, clipped shapes decreased from 88,792 on the immediately preceding product renderer (`89ddc99`) to 88,204; the without-topology control remained 87,855. Frame-time samples were noisy; no latency or GPU speedup is claimed. |
+| Topology source review | PASS | Reviewer confirmed clip use, crossing preservation, nearest-visible-route picking, and node-click priority. Route generation still occurs before culling. |
+| Native visual / GPU review | NOT RUN | Headless evidence only. |
+| Exact-head CI | PENDING | Workflow does not run on this non-main branch push; no PR was opened. |
+
+Commands and full benchmark output: [PROXIMITY-MAP-VIEWPORT-CULL-01](evidence/vector-ui/PROXIMITY-MAP-VIEWPORT-CULL-01-linux.md).
+
 ## Main chart topology route rendering — 2026-11-27
 
 **Repository / branch / baseline:** `/home/sysadmin/github/arch_notebook` / `codex/ui-00-chart-baseline` / `0763a00dfa893d3b0e86bf27ee15e6844a23cb82`.
