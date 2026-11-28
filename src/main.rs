@@ -1121,6 +1121,27 @@ struct SavedSqlSearch {
 }
 
 #[derive(Clone, Serialize, Deserialize)]
+struct SavedSqlSearchPackage {
+    format: String,
+    schema_version: u32,
+    #[serde(default)]
+    database_base_path: Option<String>,
+    search: SavedSqlSearchPackageDefinition,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct SavedSqlSearchPackageDefinition {
+    name: String,
+    database_path: String,
+    series: String,
+    query: String,
+    #[serde(default)]
+    parameters: Vec<(String, String)>,
+    #[serde(default)]
+    seed_parameter_name: Option<String>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
 struct AutomationJobPackage {
     format: String,
     schema_version: u32,
@@ -43734,6 +43755,145 @@ fn read_automation_job_package(input_path: &str) -> Result<AutomationJobPackage,
     Ok(package)
 }
 
+fn saved_sql_search_package(search: &SavedSqlSearch, case_path: &str) -> SavedSqlSearchPackage {
+    let case_parent = Path::new(case_path)
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let database_base_path = Path::new(&search.database_path)
+        .is_relative()
+        .then(|| {
+            if case_parent.is_absolute() {
+                case_parent.to_path_buf()
+            } else {
+                std::env::current_dir()
+                    .unwrap_or_else(|_| PathBuf::from("."))
+                    .join(case_parent)
+            }
+        })
+        .map(|path| path.to_string_lossy().into_owned());
+    SavedSqlSearchPackage {
+        format: "arch-notebook-sql-search".into(),
+        schema_version: 1,
+        database_base_path,
+        search: SavedSqlSearchPackageDefinition {
+            name: search.name.clone(),
+            database_path: search.database_path.clone(),
+            series: search.series.clone(),
+            query: search.query.clone(),
+            parameters: search.parameters.clone(),
+            seed_parameter_name: search.seed_parameter_name.clone(),
+        },
+    }
+}
+
+fn read_saved_sql_search_package(input_path: &str) -> Result<SavedSqlSearchPackage, String> {
+    let package_json = fs::read_to_string(input_path)
+        .map_err(|error| format!("cannot read saved SQL search package: {error}"))?;
+    let package = serde_json::from_str::<SavedSqlSearchPackage>(&package_json)
+        .map_err(|error| format!("cannot parse saved SQL search package: {error}"))?;
+    if package.format != "arch-notebook-sql-search" {
+        return Err("input is not an Arch Notebook saved SQL search package".into());
+    }
+    if package.schema_version != 1 {
+        return Err(format!(
+            "unsupported saved SQL search package schema version: {}",
+            package.schema_version
+        ));
+    }
+    if let Some(seed_name) = package.search.seed_parameter_name.as_deref() {
+        let seed_name = normalize_sql_parameter_name(seed_name);
+        if !valid_sql_parameter_name(&seed_name) {
+            return Err("saved SQL search seed parameter name is invalid".into());
+        }
+        if package
+            .search
+            .parameters
+            .iter()
+            .any(|(name, _)| normalize_sql_parameter_name(name) == seed_name)
+        {
+            return Err("saved SQL search package contains a bound chart seed value".into());
+        }
+    }
+    Ok(package)
+}
+
+fn write_saved_sql_search_package(
+    case: &CaseFile,
+    case_path: &str,
+    search: &SavedSqlSearch,
+    output_path: &str,
+) -> Result<(), String> {
+    if paths_refer_to_same_file(case_path, output_path) {
+        return Err("saved SQL search package cannot replace its case file".into());
+    }
+    let lock_path = automation_lock_path(Path::new(case_path))?;
+    if paths_refer_to_same_file(&lock_path.to_string_lossy(), output_path) {
+        return Err("saved SQL search package cannot replace its case automation lock".into());
+    }
+    let output_replaces_source = case.snapshots.iter().any(|snapshot| {
+        paths_refer_to_same_file(
+            &sqlite_database_identity_path(&snapshot.database_path, case_path).to_string_lossy(),
+            output_path,
+        )
+    }) || case.automation_jobs.iter().any(|job| {
+        paths_refer_to_same_file(
+            &sqlite_database_identity_path(&job.database_path, case_path).to_string_lossy(),
+            output_path,
+        )
+    }) || case.saved_sql_searches.iter().any(|saved| {
+        paths_refer_to_same_file(
+            &sqlite_database_identity_path(&saved.database_path, case_path).to_string_lossy(),
+            output_path,
+        )
+    });
+    if output_replaces_source {
+        return Err("saved SQL search package output cannot replace a saved SQLite source".into());
+    }
+    let contents = serde_json::to_vec_pretty(&saved_sql_search_package(search, case_path))
+        .map_err(|error| error.to_string())?;
+    write_file_atomically(Path::new(output_path), &contents)
+}
+
+fn saved_sql_search_from_package(
+    mut definition: SavedSqlSearchPackageDefinition,
+    database_base_path: Option<&str>,
+    name_override: Option<&str>,
+    database_path_override: Option<&str>,
+    series_override: Option<&str>,
+) -> Result<SavedSqlSearch, String> {
+    if let Some(name) = name_override {
+        definition.name = name.to_owned();
+    }
+    if let Some(database_path) = database_path_override {
+        definition.database_path = database_path.to_owned();
+    } else if Path::new(&definition.database_path).is_relative()
+        && let Some(database_base_path) = database_base_path
+    {
+        definition.database_path = Path::new(database_base_path)
+            .join(&definition.database_path)
+            .to_string_lossy()
+            .into_owned();
+    }
+    if let Some(series) = series_override {
+        definition.series = series.to_owned();
+    }
+    let parameters = format_sql_parameters(&definition.parameters);
+    let search = saved_sql_search_from_draft(
+        Uuid::new_v4(),
+        &definition.name,
+        &definition.database_path,
+        &definition.series,
+        &definition.query,
+        &parameters,
+        definition.seed_parameter_name.as_deref(),
+    )?;
+    if search.parameters != definition.parameters {
+        return Err("saved SQL search package parameters are not in canonical typed form".into());
+    }
+    Ok(search)
+}
+
 fn job_from_automation_package(
     mut definition: AutomationJobPackageDefinition,
     database_base_path: Option<&str>,
@@ -44703,6 +44863,113 @@ fn export_automation_job_cli(
     Ok(())
 }
 
+fn export_saved_sql_search_cli(
+    case_path: &str,
+    selector: &str,
+    output_path: &str,
+    json_output: bool,
+) -> Result<(), String> {
+    let case_file = Path::new(case_path);
+    let _case_lock = lock_automation_case(case_file)?;
+    let content =
+        fs::read_to_string(case_file).map_err(|error| format!("cannot read case: {error}"))?;
+    let case = serde_json::from_str::<CaseFile>(&content)
+        .map_err(|error| format!("cannot parse case: {error}"))?;
+    let matches: Vec<_> = case
+        .saved_sql_searches
+        .iter()
+        .filter(|search| {
+            search.name.eq_ignore_ascii_case(selector)
+                || search.id.to_string().eq_ignore_ascii_case(selector)
+        })
+        .collect();
+    if matches.len() > 1 {
+        return Err(format!(
+            "saved SQL search selector is ambiguous: {selector}"
+        ));
+    }
+    let search = matches
+        .first()
+        .ok_or_else(|| format!("saved SQL search not found: {selector}"))?;
+    write_saved_sql_search_package(&case, case_path, search, output_path)?;
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "schema_version": 1,
+                "ok": true,
+                "case": case_path,
+                "output": output_path,
+                "search_id": search.id,
+                "search": search.name,
+            }))
+            .map_err(|error| error.to_string())?
+        );
+    } else {
+        println!("SQL SEARCH EXPORTED · {} · {}", search.name, output_path);
+    }
+    Ok(())
+}
+
+fn import_saved_sql_search_cli(
+    case_path: &str,
+    input_path: &str,
+    name_override: Option<&str>,
+    database_path_override: Option<&str>,
+    series_override: Option<&str>,
+    json_output: bool,
+) -> Result<(), String> {
+    let case_file = Path::new(case_path);
+    let _case_lock = lock_automation_case(case_file)?;
+    let package = read_saved_sql_search_package(input_path)?;
+    let content =
+        fs::read_to_string(case_file).map_err(|error| format!("cannot read case: {error}"))?;
+    let mut case = serde_json::from_str::<CaseFile>(&content)
+        .map_err(|error| format!("cannot parse case: {error}"))?;
+    let search = saved_sql_search_from_package(
+        package.search,
+        package.database_base_path.as_deref(),
+        name_override,
+        database_path_override,
+        series_override,
+    )?;
+    if case
+        .saved_sql_searches
+        .iter()
+        .any(|existing| existing.name.eq_ignore_ascii_case(&search.name))
+    {
+        return Err(format!(
+            "saved SQL search name already exists in case: {}",
+            search.name
+        ));
+    }
+    let search_id = search.id;
+    let search_name = search.name.clone();
+    case.saved_sql_searches.push(search);
+    save_case_atomically(case_file, &case)?;
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "schema_version": 1,
+                "ok": true,
+                "saved": true,
+                "case": case_path,
+                "input": input_path,
+                "search_id": search_id,
+                "search": search_name,
+                "database_path": case.saved_sql_searches.last().map(|search| search.database_path.as_str()),
+                "series": case.saved_sql_searches.last().map(|search| search.series.as_str()),
+                "executed": false,
+            }))
+            .map_err(|error| error.to_string())?
+        );
+    } else {
+        println!("SQL SEARCH IMPORTED · {search_name} · NOT EXECUTED");
+    }
+    Ok(())
+}
+
 fn export_automation_runs_cli(
     case_path: &str,
     output_path: &str,
@@ -45608,7 +45875,7 @@ fn main() -> eframe::Result<()> {
         .is_some_and(|arg| arg == "--help" || arg == "-h")
     {
         println!(
-            "Arch Notebook\n\nUsage:\n  arch-notebook\n  arch-notebook --version [--json]\n  arch-notebook --benchmark-chart-vectors <case.json> [--iterations <count>]\n  arch-notebook --benchmark-community-layout <case.json> [--iterations <count>] [--samples <count>]\n  arch-notebook --inspect-sqlite <database.sqlite> [--json]\n  arch-notebook --import-graphml <case.json> <input.graphml> [--json]\n  arch-notebook --import-kml <case.json> <input.kml> [--json]\n  arch-notebook --import-document-packets <case.json> <packets.jsonl> [--json]\n  arch-notebook --import-delimited <case.json> <input.csv|tsv> [--design <name-or-id>] [--chart <title-or-uuid> | --new-chart] [--source <provenance-key>] [--json]\n  arch-notebook --export-graphml <case.json> <output.graphml> [--chart <title-or-uuid>] [--include-source-catalog | --omit-source-catalog] [--json]\n  arch-notebook --export-anx <case.json> <output.anx> [--chart <title-or-uuid>] [--json]\n  arch-notebook --export-kml <case.json> <output.kml> [--json]\n  arch-notebook --export-sql-snapshot <case.json> <snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --export-sql-series <case.json> <snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --export-sql-comparison <case.json> <baseline-snapshot-id> <current-snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --export-job <case.json> <job-name-or-id> <output.json> [--json]\n  arch-notebook --export-path <case.json> <path-name-or-id> <output.json> [--json]\n  arch-notebook --import-path <case.json> <input.json> [--name <path-name>] [--json]\n  arch-notebook --import-job <case.json> <input.json> [--name <job-name>] [--chart <chart-title-or-uuid>] [--database <path>] [--series <label>] [--param name=value ...] [--json]\n  arch-notebook --export-import-design <case.json> <design-name-or-id> <output.json> [--json]\n  arch-notebook --import-import-design <case.json> <input.json> [--name <design-name>] [--update <design-name-or-id>] [--json]\n  arch-notebook --list-jobs <case.json> [--enabled-only] [--schema-adaptation-needed] [--json]\n  arch-notebook --list-batches <case.json> [--json]\n  arch-notebook --list-runs <case.json> [--json] [--job <name-or-id>] [--batch <batch-uuid>] [--trigger <desktop|scheduled|cli|replay|legacy>] [--schema-adaptation-needed] [--schema-stability-failed] [--offset <count>] [--limit <count>]\n  arch-notebook --export-runs <case.json> <output.csv|tsv> [--job <name-or-id>] [--batch <batch-uuid>] [--trigger <desktop|scheduled|cli|replay|legacy>] [--schema-adaptation-needed] [--schema-stability-failed] [--offset <count>] [--limit <count>] [--json]\n  arch-notebook --explain-job <case.json> <job-name-or-id> [--param name=value ...] [--json]\n  arch-notebook --validate-job <case.json> <job-name-or-id> [--query-only] [--param name=value ...] [--json]\n  arch-notebook --validate-enabled-jobs <case.json> [--json] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --check-enabled-job-queries <case.json> [--json] [--require-usable] [--require-unchanged-schema] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --validate-run <case.json> <run-id> [--json]\n  arch-notebook --run-enabled-jobs <case.json> [--json] [--resume-batch <batch-id>] [--export-chart-csv-dir <absolute-directory>] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --run-job <case.json> <job-name-or-id> [--param name=value ...] [--resume-batch <batch-id>] [--export-chart-csv <output.csv|tsv>] [--json]\n  arch-notebook --rerun-run <case.json> <run-id> [--export-chart-csv <output.csv|tsv>] [--json]\n\nJob and import design packages contain portable configuration, not case data or run history. Batch runs save snapshots and run history to the case file. JSON output is available for scheduler integration. Additional commands:"
+            "Arch Notebook\n\nUsage:\n  arch-notebook\n  arch-notebook --version [--json]\n  arch-notebook --benchmark-chart-vectors <case.json> [--iterations <count>]\n  arch-notebook --benchmark-community-layout <case.json> [--iterations <count>] [--samples <count>]\n  arch-notebook --inspect-sqlite <database.sqlite> [--json]\n  arch-notebook --import-graphml <case.json> <input.graphml> [--json]\n  arch-notebook --import-kml <case.json> <input.kml> [--json]\n  arch-notebook --import-document-packets <case.json> <packets.jsonl> [--json]\n  arch-notebook --import-delimited <case.json> <input.csv|tsv> [--design <name-or-id>] [--chart <title-or-uuid> | --new-chart] [--source <provenance-key>] [--json]\n  arch-notebook --export-graphml <case.json> <output.graphml> [--chart <title-or-uuid>] [--include-source-catalog | --omit-source-catalog] [--json]\n  arch-notebook --export-anx <case.json> <output.anx> [--chart <title-or-uuid>] [--json]\n  arch-notebook --export-kml <case.json> <output.kml> [--json]\n  arch-notebook --export-sql-snapshot <case.json> <snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --export-sql-series <case.json> <snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --export-sql-comparison <case.json> <baseline-snapshot-id> <current-snapshot-id> <output.csv|tsv> [--json]\n  arch-notebook --export-job <case.json> <job-name-or-id> <output.json> [--json]\n  arch-notebook --export-sql-search <case.json> <search-name-or-id> <output.json> [--json]\n  arch-notebook --import-sql-search <case.json> <input.json> [--name <name>] [--database <path>] [--series <label>] [--json]\n  arch-notebook --export-path <case.json> <path-name-or-id> <output.json> [--json]\n  arch-notebook --import-path <case.json> <input.json> [--name <path-name>] [--json]\n  arch-notebook --import-job <case.json> <input.json> [--name <job-name>] [--chart <chart-title-or-uuid>] [--database <path>] [--series <label>] [--param name=value ...] [--json]\n  arch-notebook --export-import-design <case.json> <design-name-or-id> <output.json> [--json]\n  arch-notebook --import-import-design <case.json> <input.json> [--name <design-name>] [--update <design-name-or-id>] [--json]\n  arch-notebook --list-jobs <case.json> [--enabled-only] [--schema-adaptation-needed] [--json]\n  arch-notebook --list-batches <case.json> [--json]\n  arch-notebook --list-runs <case.json> [--json] [--job <name-or-id>] [--batch <batch-uuid>] [--trigger <desktop|scheduled|cli|replay|legacy>] [--schema-adaptation-needed] [--schema-stability-failed] [--offset <count>] [--limit <count>]\n  arch-notebook --export-runs <case.json> <output.csv|tsv> [--job <name-or-id>] [--batch <batch-uuid>] [--trigger <desktop|scheduled|cli|replay|legacy>] [--schema-adaptation-needed] [--schema-stability-failed] [--offset <count>] [--limit <count>] [--json]\n  arch-notebook --explain-job <case.json> <job-name-or-id> [--param name=value ...] [--json]\n  arch-notebook --validate-job <case.json> <job-name-or-id> [--query-only] [--param name=value ...] [--json]\n  arch-notebook --validate-enabled-jobs <case.json> [--json] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --check-enabled-job-queries <case.json> [--json] [--require-usable] [--require-unchanged-schema] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --validate-run <case.json> <run-id> [--json]\n  arch-notebook --run-enabled-jobs <case.json> [--json] [--resume-batch <batch-id>] [--export-chart-csv-dir <absolute-directory>] [--job <name-or-id> ...] [--param name=value ...] [--job-param <name-or-id> <name=value> ...]\n  arch-notebook --run-job <case.json> <job-name-or-id> [--param name=value ...] [--resume-batch <batch-id>] [--export-chart-csv <output.csv|tsv>] [--json]\n  arch-notebook --rerun-run <case.json> <run-id> [--export-chart-csv <output.csv|tsv>] [--json]\n\nJob, saved SQL search, and import design packages contain portable configuration, not case data or run history. Saved search import only adds a query definition and never executes it. Batch runs save snapshots and run history to the case file. JSON output is available for scheduler integration. Additional commands:"
         );
         println!("  GraphML and ANX export accept --chart <title-or-uuid> to choose a chart.");
         println!(
@@ -45988,6 +46255,24 @@ fn main() -> eframe::Result<()> {
         }
         return Ok(());
     }
+    if args.first().is_some_and(|arg| arg == "--export-sql-search") {
+        let json_output = args.iter().any(|arg| arg == "--json");
+        let usage = "usage: arch-notebook --export-sql-search <case.json> <search-name-or-id> <output.json> [--json]";
+        let (Some(case_path), Some(selector), Some(output_path)) =
+            (args.get(1), args.get(2), args.get(3))
+        else {
+            report_cli_usage_error(usage, json_output);
+        };
+        if args.len() > 5 || args.get(4).is_some_and(|arg| arg != "--json") {
+            report_cli_usage_error(usage, json_output);
+        }
+        if let Err(error) =
+            export_saved_sql_search_cli(case_path, selector, output_path, json_output)
+        {
+            report_cli_error("saved SQL search export failed", error, json_output);
+        }
+        return Ok(());
+    }
     if args.first().is_some_and(|arg| arg == "--export-job") {
         let json_output = args.iter().any(|arg| arg == "--json");
         let usage =
@@ -46053,6 +46338,72 @@ fn main() -> eframe::Result<()> {
         if let Err(error) = import_saved_path_cli(case_path, input_path, name_override, json_output)
         {
             report_cli_error("saved path import failed", error, json_output);
+        }
+        return Ok(());
+    }
+    if args.first().is_some_and(|arg| arg == "--import-sql-search") {
+        let json_output = args.iter().any(|arg| arg == "--json");
+        let usage = "usage: arch-notebook --import-sql-search <case.json> <input.json> [--name <name>] [--database <path>] [--series <label>] [--json]";
+        let (Some(case_path), Some(input_path)) = (args.get(1), args.get(2)) else {
+            report_cli_usage_error(usage, json_output);
+        };
+        let mut name_override = None;
+        let mut database_path_override = None;
+        let mut series_override = None;
+        let mut seen_name = false;
+        let mut seen_database = false;
+        let mut seen_series = false;
+        let mut seen_json = false;
+        let mut index = 3;
+        while index < args.len() {
+            match args[index].as_str() {
+                "--json" if !seen_json => seen_json = true,
+                "--name" if !seen_name => {
+                    index += 1;
+                    let Some(value) = args
+                        .get(index)
+                        .filter(|value| !value.trim().is_empty() && !value.starts_with("--"))
+                    else {
+                        report_cli_usage_error("--name requires a saved search name", json_output);
+                    };
+                    name_override = Some(value.as_str());
+                    seen_name = true;
+                }
+                "--database" if !seen_database => {
+                    index += 1;
+                    let Some(value) = args
+                        .get(index)
+                        .filter(|value| !value.trim().is_empty() && !value.starts_with("--"))
+                    else {
+                        report_cli_usage_error("--database requires a path", json_output);
+                    };
+                    database_path_override = Some(value.as_str());
+                    seen_database = true;
+                }
+                "--series" if !seen_series => {
+                    index += 1;
+                    let Some(value) = args
+                        .get(index)
+                        .filter(|value| !value.trim().is_empty() && !value.starts_with("--"))
+                    else {
+                        report_cli_usage_error("--series requires a label", json_output);
+                    };
+                    series_override = Some(value.as_str());
+                    seen_series = true;
+                }
+                _ => report_cli_usage_error(usage, json_output),
+            }
+            index += 1;
+        }
+        if let Err(error) = import_saved_sql_search_cli(
+            case_path,
+            input_path,
+            name_override,
+            database_path_override,
+            series_override,
+            json_output,
+        ) {
+            report_cli_error("saved SQL search import failed", error, json_output);
         }
         return Ok(());
     }
@@ -47221,6 +47572,137 @@ mod tests {
                 ("minimum".into(), "int:2".into())
             ]
         );
+    }
+
+    #[test]
+    fn saved_sql_search_package_round_trips_rebased_path_without_case_data() {
+        let root = std::env::temp_dir().join(format!(
+            "arch-notebook-sql-search-package-{}",
+            Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).expect("create package test directory");
+        let case_path = root.join("investigation.case.json");
+        let search = super::SavedSqlSearch {
+            id: Uuid::from_u128(8101),
+            name: "Seeded contacts".into(),
+            database_path: "sources/contacts.sqlite".into(),
+            series: "contact review".into(),
+            query:
+                "SELECT source, target FROM contacts WHERE owner_id = :entity_id AND state = :state"
+                    .into(),
+            parameters: vec![("state".into(), "text:active".into())],
+            seed_parameter_name: Some("entity_id".into()),
+        };
+        let package = super::saved_sql_search_package(&search, &case_path.to_string_lossy());
+        assert_eq!(package.schema_version, 1);
+        assert_eq!(package.format, "arch-notebook-sql-search");
+        assert_eq!(
+            package.database_base_path.as_deref(),
+            Some(root.to_string_lossy().as_ref())
+        );
+        assert_eq!(package.search.parameters, search.parameters);
+        assert_eq!(
+            package.search.seed_parameter_name,
+            search.seed_parameter_name
+        );
+
+        let package_path = root.join("search.json");
+        let contents = serde_json::to_vec(&package).expect("serialize package");
+        std::fs::write(&package_path, &contents).expect("write package fixture");
+        let decoded = super::read_saved_sql_search_package(&package_path.to_string_lossy())
+            .expect("read valid package");
+        let imported = super::saved_sql_search_from_package(
+            decoded.search,
+            decoded.database_base_path.as_deref(),
+            None,
+            None,
+            None,
+        )
+        .expect("rebase and validate imported search");
+        assert_ne!(imported.id, search.id);
+        assert_eq!(
+            imported.database_path,
+            root.join("sources/contacts.sqlite").to_string_lossy()
+        );
+        assert_eq!(imported.name, search.name);
+        assert_eq!(imported.series, search.series);
+        assert_eq!(imported.query, search.query);
+        assert_eq!(imported.parameters, search.parameters);
+        assert_eq!(imported.seed_parameter_name, search.seed_parameter_name);
+        assert!(
+            !String::from_utf8(contents)
+                .expect("JSON is UTF-8")
+                .contains("previous-chart-id")
+        );
+        std::fs::remove_dir_all(root).expect("remove package test directory");
+    }
+
+    #[test]
+    fn saved_sql_search_package_rejects_bound_seed_values_and_source_overwrite() {
+        let root = std::env::temp_dir().join(format!(
+            "arch-notebook-sql-search-package-safety-{}",
+            Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).expect("create package test directory");
+        let package_path = root.join("bound.json");
+        let package = super::SavedSqlSearchPackage {
+            format: "arch-notebook-sql-search".into(),
+            schema_version: 1,
+            database_base_path: None,
+            search: super::SavedSqlSearchPackageDefinition {
+                name: "Seeded contacts".into(),
+                database_path: "contacts.sqlite".into(),
+                series: "review".into(),
+                query: "SELECT source, target FROM contacts WHERE owner_id = :entity_id".into(),
+                parameters: vec![("entity_id".into(), "text:previous-chart-id".into())],
+                seed_parameter_name: Some("entity_id".into()),
+            },
+        };
+        std::fs::write(
+            &package_path,
+            serde_json::to_vec(&package).expect("serialize bound package"),
+        )
+        .expect("write bound package");
+        assert!(
+            super::read_saved_sql_search_package(&package_path.to_string_lossy())
+                .err()
+                .expect("bound seed value rejected")
+                .contains("bound chart seed value")
+        );
+
+        let case_path = root.join("investigation.case.json");
+        let source_path = root.join("contacts.sqlite");
+        let source_bytes = b"SQLite source must be preserved";
+        std::fs::write(&source_path, source_bytes).expect("write source sentinel");
+        let case: CaseFile =
+            serde_json::from_str(include_str!("../fixtures/chart/correctness.case.json"))
+                .expect("correctness fixture is a valid case");
+        let source_search = super::SavedSqlSearch {
+            id: Uuid::from_u128(8102),
+            name: "Source-bound search".into(),
+            database_path: "contacts.sqlite".into(),
+            series: "review".into(),
+            query: "SELECT source, target FROM contacts".into(),
+            parameters: Vec::new(),
+            seed_parameter_name: None,
+        };
+        let mut case = case;
+        case.saved_sql_searches.push(source_search.clone());
+        assert!(
+            super::write_saved_sql_search_package(
+                &case,
+                &case_path.to_string_lossy(),
+                &source_search,
+                &source_path.to_string_lossy(),
+            )
+            .expect_err("export cannot replace source database")
+            .contains("saved SQLite source")
+        );
+        assert_eq!(
+            std::fs::read(&source_path).expect("source remains readable"),
+            source_bytes
+        );
+        std::fs::remove_dir_all(root).expect("remove package test directory");
     }
 
     #[test]
